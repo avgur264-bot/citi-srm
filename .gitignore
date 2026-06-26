@@ -1,0 +1,9 @@
+# База данных (создаётся при запуске)
+srm.db
+srm.db-wal
+srm.db-shm
+
+# Node
+node_modules/
+npm-debug.log*
+.DS_Store
