@@ -281,7 +281,7 @@ http.createServer(async (req,res)=>{
     console.error(err);
     send(res,500,{error:'Внутренняя ошибка сервера'});
   }
-}).listen(PORT, ()=>{
+}).listen(PORT, '0.0.0.0', ()=>{
   console.log(`\n  СИТИ SRM (серверная версия) — http://localhost:${PORT}\n`);
   console.log('  Демо-аккаунты (email / пароль):');
   console.log('   admin@citisrm.ru / admin123   — Администратор (полный доступ)');
