@@ -31,6 +31,7 @@ const LOGO_SVG = `<svg viewBox="0 0 256 256" xmlns="http://www.w3.org/2000/svg" 
   <rect width="256" height="256" fill="url(#lg)"/>
   <g fill="#fff"><rect x="40" y="100" width="24" height="90"/><rect x="72" y="70" width="30" height="120"/><rect x="108" y="40" width="40" height="150"/><rect x="154" y="80" width="28" height="110"/><rect x="188" y="110" width="20" height="80"/></g>
   <rect x="36" y="190" width="176" height="7" rx="3.5" fill="#fff" opacity=".9"/></svg>`;
+const LOGO_FULL='logo.jpg'; // полный логотип (здания + СИТИ SRM + подпись) — на экране входа
 
 /* ---------- Состояние ---------- */
 let ME=null, ROLES={}, DB=null, TASKS=[], USERS=[];
@@ -145,7 +146,7 @@ function showAuth(mode='login'){
   document.getElementById('root').innerHTML = `
     <div class="theme-fab" onclick="toggleTheme()"><span data-theme-ic></span></div>
     <div class="auth"><div class="auth-card">
-      <div class="auth-brand"><div class="logo">${LOGO_SVG}</div><div><b>СИТИ SRM</b><small>Коммерческая недвижимость</small></div></div>
+      <div style="text-align:center;margin-bottom:18px"><img src="${LOGO_FULL}" alt="СИТИ SRM" style="width:230px;max-width:78%;height:auto;border-radius:16px;background:#fff;padding:12px;box-shadow:var(--shadow)"></div>
       ${mode==='login'?login:register}
     </div></div>`;
   updateThemeBtns();

@@ -26,6 +26,10 @@ async function api(path, method='GET', body){
 if(!appJs.includes(API_BLOCK)) { console.error('ОШИБКА: блок API в app.js не найден — проверьте app.js'); process.exit(1); }
 appJs = appJs.replace(API_BLOCK, mock.trim());
 
+// встраиваем логотип (logo.jpg) как data-URI, чтобы файл был самодостаточным
+const logoB64 = (await readFile(P('public/logo.jpg'))).toString('base64');
+appJs = appJs.replace("const LOGO_FULL='logo.jpg';", `const LOGO_FULL='data:image/jpeg;base64,${logoB64}';`);
+
 // вклеиваем всё в один HTML
 const out = indexHtml.replace('<script src="app.js"></script>', `<script>\n${appJs}\n</script>`);
 await writeFile(P('srm-demo.html'), out, 'utf8');
