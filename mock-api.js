@@ -161,6 +161,8 @@ async function api(path, method='GET', body){
   const join=t=>{const a=db.users.find(u=>u.id===t.assignee_id),c=db.users.find(u=>u.id===t.created_by);
     return {...t,assignee_name:a?a.full_name:null,assignee_position:a?a.position:null,creator_name:c?c.full_name:null};};
 
+  // В автономном демо регистрация и демо-доступ остаются открытыми.
+  if(path==='/api/config') return {allowRegistration:true};
   if(path==='/api/auth/register'&&method==='POST'){
     const email=(body.email||'').toLowerCase().trim();
     if(!email||!body.password||!body.full_name) E('Заполните email, пароль и ФИО');

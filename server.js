@@ -73,6 +73,9 @@ const liteUser = u => u && ({
 });
 // роли, которые можно выбрать при самостоятельной регистрации (без привилегированных)
 const SELF_ROLES = ['leasing','accountant','maintenance'];
+// Самостоятельная регистрация по умолчанию ВЫКЛЮЧЕНА (безопасность боевого режима).
+// Включить можно переменной окружения ALLOW_REGISTRATION=1 (для теста/демо).
+const ALLOW_REGISTRATION = process.env.ALLOW_REGISTRATION === '1';
 
 // простой лимит попыток входа (анти-брутфорс)
 const loginFails = new Map();
@@ -117,7 +120,12 @@ async function api(req, res, url){
   const seg = path.split('/').filter(Boolean); // ['api', ...]
 
   // ---- AUTH (без токена) ----
+  // Публичный флаг: разрешена ли самостоятельная регистрация (по умолчанию — нет).
+  if(path==='/api/config' && method==='GET'){
+    return send(res,200,{ allowRegistration: ALLOW_REGISTRATION });
+  }
   if(path==='/api/auth/register' && method==='POST'){
+    if(!ALLOW_REGISTRATION) return send(res,403,{error:'Регистрация закрыта. Учётную запись создаёт администратор.'});
     const b = await readBody(req);
     const email=(b.email||'').trim().toLowerCase();
     if(!email || !b.password || !b.full_name) return send(res,400,{error:'Заполните email, пароль и ФИО'});

@@ -88,6 +88,9 @@ function seedUsers(){
   const now = new Date().toISOString();
   const ins = db.prepare(`INSERT INTO users(email,password,full_name,position,role,phone,active,created_at)
                           VALUES(?,?,?,?,?,?,1,?)`);
+  // Боевой режим: если задан SEED_PASSWORD, все стартовые учётки получают этот
+  // сильный пароль (его выдаёт new-client.sh). Иначе — простые демо-пароли (для теста/демо).
+  const SEED_PW = process.env.SEED_PASSWORD;
   const demo = [
     ['admin@citisrm.ru','admin123','Минин Сергей','Управляющий объектом','admin','+7 901 770-88-07'],
     ['owner@citisrm.ru','owner123','Иванов Иван','Собственник','owner','+7 916 700-80-90'],
@@ -97,7 +100,7 @@ function seedUsers(){
     ['exp@citisrm.ru','exp123','Сидоров Павел','Инженер эксплуатации','maintenance','+7 909 660-77-06'],
   ];
   for(const [email,pw,name,pos,role,phone] of demo)
-    ins.run(email, hashPassword(pw), name, pos, role, phone, now);
+    ins.run(email, hashPassword(SEED_PW || pw), name, pos, role, phone, now);
 }
 
 function seedState(){

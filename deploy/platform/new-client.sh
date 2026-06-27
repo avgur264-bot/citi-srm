@@ -33,8 +33,12 @@ docker build -t citi-srm:latest "$SRC" >/dev/null
 
 echo "→ Создаю изолированное приложение и базу для клиента '$NAME'…"
 mkdir -p "$CDIR/data"
+# Сильный стартовый пароль для всех учёток клиента (задаётся при первом создании базы).
+SEED_PW="$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 14)"
 cat > "$CDIR/docker-compose.yml" <<EOF
 # Приложение клиента «$NAME». База — в ./data/srm.db (только для этого клиента).
+# SEED_PASSWORD — стартовый пароль учёток (применяется один раз при создании базы).
+# Регистрация закрыта (ALLOW_REGISTRATION не задан): новых сотрудников заводит админ.
 services:
   app:
     image: citi-srm:latest
@@ -42,6 +46,7 @@ services:
     environment:
       - PORT=4000
       - DB_PATH=/app/data/srm.db
+      - SEED_PASSWORD=$SEED_PW
     volumes:
       - ./data:/app/data
     networks: [srmnet]
@@ -70,5 +75,13 @@ docker exec srm-proxy caddy reload --config /etc/caddy/Caddyfile 2>/dev/null \
 
 echo
 echo "✓ Клиент '$NAME' готов:  https://$DOMAIN"
-echo "  (первый вход — демо-аккаунты из системы; смените пароли для боевой работы)"
+echo "  ┌─────────────────────────────────────────────────────────"
+echo "  │ Вход администратора:"
+echo "  │   Логин:  admin@citisrm.ru"
+echo "  │   Пароль: $SEED_PW"
+echo "  ├─────────────────────────────────────────────────────────"
+echo "  │ Этот пароль показан ОДИН раз — сохраните и передайте клиенту."
+echo "  │ Регистрация закрыта; сотрудников заводит админ в разделе «Сотрудники»."
+echo "  │ После первого входа пароль лучше сменить."
+echo "  └─────────────────────────────────────────────────────────"
 echo "  База клиента: $CDIR/data/srm.db"
