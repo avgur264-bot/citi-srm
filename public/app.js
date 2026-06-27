@@ -278,33 +278,52 @@ async function silentRefresh(){
 /* ============================================================
    ДАШБОРД
    ============================================================ */
+/* ---------- настройка дашборда (персональная, per-user) ---------- */
+const DASH_KEYS=['occ','billed','collected','debt','net','chIncome','chOcc','overdue','tasks'];
+const DASH_DEFAULT={occ:1,billed:1,collected:1,debt:1,net:1,chIncome:1,chOcc:1,overdue:1,tasks:1};
+const dashStoreKey=()=>'citi_srm_dash_'+(ME?ME.id:'x');
+function dashCfg(){ try{const s=JSON.parse(localStorage.getItem(dashStoreKey())); if(s) return {...DASH_DEFAULT,...s};}catch{} return {...DASH_DEFAULT}; }
+function saveDashCfg(c){ localStorage.setItem(dashStoreKey(), JSON.stringify(c)); }
+
 function dashboard(){
-  const m=metrics();
+  const m=metrics(); const cfg=dashCfg();
   const overdue=sPayments().filter(p=>p.status==='overdue').map(p=>{const c=contractOf(p.contract);return{name:tenantOf(c.tenant).name,unit:c.unit,amount:p.amount-p.paid};});
   const tasksOpen=TASKS.filter(t=>t.status!=='done').sort((a,b)=>daysLeft(a.due)-daysLeft(b.due)).slice(0,5);
+  const KPI={
+    occ:kpi('Заполняемость','#4f8cff','📐',m.occPct+'%','+3% за месяц','up'),
+    billed:kpi('Начислено (мес.)','#a78bfa','🧾',fmt(m.billed/1000)+' тыс','план аренды',''),
+    collected:kpi('Собрано (мес.)','#37d39b','💰',fmt(m.collected/1000)+' тыс',pct(m.collected,m.billed)+'% от плана','up'),
+    debt:kpi('Задолженность','#ff5d6c','⚠️',fmt(m.debt/1000)+' тыс',DB.payments.filter(p=>p.amount-p.paid>0).length+' счёта','down'),
+    net:kpi('Чистый доход','#39d0d8','📈',fmt(m.net/1000)+' тыс','собрано − расходы',''),
+  };
+  const kpiHtml=['occ','billed','collected','debt','net'].filter(k=>cfg[k]).map(k=>KPI[k]).join('');
+  const chIncomeCard=`<div class="card"><div class="panel-title"><h3>Доходы и расходы</h3><span class="muted">тыс ₽ · 6 мес</span></div><canvas id="chIncome" height="120"></canvas></div>`;
+  const chOccCard=`<div class="card"><div class="panel-title"><h3>Структура площадей</h3><span class="muted">м²</span></div><canvas id="chOcc" height="120"></canvas></div>`;
+  const overdueCard=`<div class="card"><div class="panel-title"><h3>⚠️ Просроченные платежи</h3><span class="muted">${overdue.length}</span></div>
+      <table><tbody>${overdue.length?overdue.map(o=>`<tr><td><div class="t-strong">${esc(o.name)}</div><div class="t-sub">Помещение ${o.unit}</div></td><td style="text-align:right"><span class="pill red">${money(o.amount)}</span></td></tr>`).join(''):'<tr><td class="empty">Нет просрочек</td></tr>'}</tbody></table></div>`;
+  const tasksCard=`<div class="card"><div class="panel-title"><h3>Ближайшие задачи</h3><span class="muted">${tasksOpen.length}</span></div>
+      <table><tbody>${tasksOpen.length?tasksOpen.map(t=>`<tr><td><div class="t-strong">${esc(t.title)}</div><div class="t-sub">${esc(t.assignee_name||'—')} · ${esc(t.unit)}</div></td><td style="text-align:right">${prioPill(t.priority)}<div class="t-sub" style="margin-top:4px">${dueLabel(t.due)}</div></td></tr>`).join(''):'<tr><td class="empty">Нет задач</td></tr>'}</tbody></table></div>`;
+  const chartsRow = (cfg.chIncome||cfg.chOcc) ? `<div class="grid" style="grid-template-columns:${cfg.chIncome&&cfg.chOcc?'1.6fr 1fr':'1fr'};margin-bottom:18px">${cfg.chIncome?chIncomeCard:''}${cfg.chOcc?chOccCard:''}</div>` : '';
+  const widgetsRow = (cfg.overdue||cfg.tasks) ? `<div class="grid" style="grid-template-columns:${cfg.overdue&&cfg.tasks?'1fr 1fr':'1fr'}">${cfg.overdue?overdueCard:''}${cfg.tasks?tasksCard:''}</div>` : '';
+  const empty = !(kpiHtml||chartsRow||widgetsRow) ? '<div class="card"><div class="empty">Все блоки скрыты. Нажмите «⚙ Настроить», чтобы включить нужные.</div></div>' : '';
   el(head('Дашборд', `${scopeSub()} · ${TODAY.toLocaleDateString('ru-RU',{day:'numeric',month:'long',year:'numeric'})}`,
-    (ME.role==='admin'||ME.role==='owner')?`<button class="btn ghost sm" onclick="resetDemo()">↺ Демо-данные</button>`:'')+
-  `<div class="grid kpis" style="margin-bottom:18px">
-    ${kpi('Заполняемость','#4f8cff','📐',m.occPct+'%','+3% за месяц','up')}
-    ${kpi('Начислено (мес.)','#a78bfa','🧾',fmt(m.billed/1000)+' тыс','план аренды','')}
-    ${kpi('Собрано (мес.)','#37d39b','💰',fmt(m.collected/1000)+' тыс',pct(m.collected,m.billed)+'% от плана','up')}
-    ${kpi('Задолженность','#ff5d6c','⚠️',fmt(m.debt/1000)+' тыс',DB.payments.filter(p=>p.amount-p.paid>0).length+' счёта','down')}
-    ${kpi('Чистый доход','#39d0d8','📈',fmt(m.net/1000)+' тыс','собрано − расходы','')}
-  </div>
-  <div class="grid" style="grid-template-columns:1.6fr 1fr;margin-bottom:18px">
-    <div class="card"><div class="panel-title"><h3>Доходы и расходы</h3><span class="muted">тыс ₽ · 6 мес</span></div><canvas id="chIncome" height="120"></canvas></div>
-    <div class="card"><div class="panel-title"><h3>Структура площадей</h3><span class="muted">м²</span></div><canvas id="chOcc" height="120"></canvas></div>
-  </div>
-  <div class="grid" style="grid-template-columns:1fr 1fr">
-    <div class="card"><div class="panel-title"><h3>⚠️ Просроченные платежи</h3><span class="muted">${overdue.length}</span></div>
-      <table><tbody>${overdue.length?overdue.map(o=>`<tr><td><div class="t-strong">${esc(o.name)}</div><div class="t-sub">Помещение ${o.unit}</div></td><td style="text-align:right"><span class="pill red">${money(o.amount)}</span></td></tr>`).join(''):'<tr><td class="empty">Нет просрочек</td></tr>'}</tbody></table>
-    </div>
-    <div class="card"><div class="panel-title"><h3>Ближайшие задачи</h3><span class="muted">${tasksOpen.length}</span></div>
-      <table><tbody>${tasksOpen.length?tasksOpen.map(t=>`<tr><td><div class="t-strong">${esc(t.title)}</div><div class="t-sub">${esc(t.assignee_name||'—')} · ${esc(t.unit)}</div></td><td style="text-align:right">${prioPill(t.priority)}<div class="t-sub" style="margin-top:4px">${dueLabel(t.due)}</div></td></tr>`).join(''):'<tr><td class="empty">Нет задач</td></tr>'}</tbody></table>
-    </div>
-  </div>`);
-  drawIncome(); drawOcc();
+    `<button class="btn ghost sm" onclick="dashSettings()">⚙ Настроить</button>${(ME.role==='admin'||ME.role==='owner')?` <button class="btn ghost sm" onclick="resetDemo()">↺ Демо-данные</button>`:''}`)+
+  (kpiHtml?`<div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(165px,1fr));margin-bottom:18px">${kpiHtml}</div>`:'')+
+  chartsRow+widgetsRow+empty);
+  if(cfg.chIncome)drawIncome(); if(cfg.chOcc)drawOcc();
 }
+function dashSettings(){
+  const cfg=dashCfg();
+  const items=[['occ','KPI · Заполняемость'],['billed','KPI · Начислено'],['collected','KPI · Собрано'],['debt','KPI · Задолженность'],['net','KPI · Чистый доход'],
+    ['chIncome','График · Доходы и расходы'],['chOcc','График · Структура площадей'],['overdue','Виджет · Просроченные платежи'],['tasks','Виджет · Ближайшие задачи']];
+  openM(`<div class="modal-h"><h3>Настройка дашборда</h3><span class="x" onclick="closeM()">×</span></div>
+  <div class="modal-b"><div class="t-sub" style="margin-bottom:10px">Выберите блоки для показа. Настройка сохраняется лично для вашего аккаунта.</div>
+  ${items.map(([k,label])=>`<label style="display:flex;align-items:center;gap:11px;padding:10px 0;border-bottom:1px solid var(--line);cursor:pointer">
+    <input type="checkbox" id="dc-${k}" ${cfg[k]?'checked':''} style="width:18px;height:18px;accent-color:var(--accent)"><span>${label}</span></label>`).join('')}
+  </div>
+  <div class="modal-f"><button class="btn ghost" onclick="resetDash()">Сбросить</button><button class="btn" onclick="applyDash()">Применить</button></div>`);}
+function applyDash(){ const cfg={}; DASH_KEYS.forEach(k=>cfg[k]=document.getElementById('dc-'+k).checked?1:0); saveDashCfg(cfg); closeM(); render(); }
+function resetDash(){ saveDashCfg({...DASH_DEFAULT}); closeM(); render(); }
 function kpi(label,color,ic,v,delta,dir){
   return `<div class="card kpi"><div class="kpi-top"><span class="label">${label}</span><span class="kpi-ic" style="background:${color}22;color:${color}">${ic}</span></div>
   <div class="val">${v}</div><div class="delta ${dir}">${dir==='up'?'▲ ':dir==='down'?'▼ ':''}${delta}</div></div>`;
