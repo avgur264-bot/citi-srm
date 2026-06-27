@@ -5,11 +5,10 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"          # …/deploy/platform
-SRC="$(cd "$ROOT/../.." && pwd)"                # …/server-app
-REPO="$(cd "$SRC/.." && pwd)"                   # корень git-репозитория
+SRC="$(cd "$ROOT/../.." && pwd)"                # корень репозитория (там Dockerfile)
 
 echo "→ Забираю свежий код из GitHub…"
-git -C "$REPO" pull --ff-only || echo "  (git pull пропущен — проверьте вручную)"
+git -C "$SRC" pull --ff-only || echo "  (git pull пропущен — проверьте вручную)"
 
 echo "→ Пересобираю образ citi-srm:latest…"
 docker build -t citi-srm:latest "$SRC"
