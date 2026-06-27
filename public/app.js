@@ -953,15 +953,33 @@ function docsBlock(type,id,docs){
     <button class="btn ghost sm" onclick="openDoc('${type}','${id}',${i})">Открыть</button>
     ${canEditDocs(type)?`<span class="trash" onclick="delDoc('${type}','${id}',${i})" title="Удалить">🗑</span>`:''}</div>`).join(''):'<div class="empty" style="padding:16px">Документы не прикреплены</div>'}`;
 }
-function openDoc(type,id,i){const e=docEntity(type,id);const d=e.documents[i];if(d.url){window.open(d.url,'_blank');}else{alert('Документ: '+d.name+'\nТип: '+(d.kind||DOC_TYPES[d.type]||d.type)+'\n\nВ рабочей версии откроется прикреплённый файл. В демо можно указать ссылку/путь при добавлении документа.');}}
-function addDocModal(type,id){openM(`<div class="modal-h"><h3>Добавить документ</h3><span class="x" onclick="${backToInfo(type,id)}">×</span></div>
-  <div class="modal-b"><div class="field"><label>Название файла</label><input id="d-name" placeholder="Договор_аренды.pdf"></div>
+function openDoc(type,id,i){const e=docEntity(type,id);const d=e.documents[i];
+  if(d.url&&d.url.startsWith('data:')){ // загруженный файл — открываем через blob (просмотр в новой вкладке)
+    fetch(d.url).then(r=>r.blob()).then(b=>{const u=URL.createObjectURL(b);window.open(u,'_blank');})
+      .catch(()=>{const a=document.createElement('a');a.href=d.url;a.download=d.name||'file';document.body.appendChild(a);a.click();a.remove();}); return; }
+  if(d.url){ window.open(d.url,'_blank'); return; }
+  alert('Документ «'+d.name+'»: файл не прикреплён и ссылка не указана. Откройте документ через «Редактировать» и приложите файл.');
+}
+let _docFile=null;
+function onDocFile(input){ _docFile=null; const f=input.files&&input.files[0]; if(!f)return;
+  if(f.size>3*1024*1024){ alert('Файл больше 3 МБ — для демо это много. Выберите файл поменьше или укажите ссылку.'); input.value=''; return; }
+  const nm=document.getElementById('d-name'); if(nm&&!nm.value) nm.value=f.name;
+  const r=new FileReader(); r.onload=()=>{ _docFile={name:f.name,data:r.result}; }; r.readAsDataURL(f);
+}
+function addDocModal(type,id){_docFile=null;openM(`<div class="modal-h"><h3>Добавить документ</h3><span class="x" onclick="${backToInfo(type,id)}">×</span></div>
+  <div class="modal-b">
+  <div class="field"><label>Файл с компьютера</label><input type="file" id="d-file" onchange="onDocFile(this)" style="width:100%;font-size:13px;padding:8px;border:1px dashed var(--line2);border-radius:9px;background:var(--bg2)"></div>
+  <div class="field"><label>Название</label><input id="d-name" placeholder="Договор_аренды.pdf"></div>
   <div class="row2"><div class="field"><label>Тип документа</label><select id="d-type">${Object.entries(DOC_TYPES).map(([k,v])=>`<option value="${k}">${v}</option>`).join('')}</select></div><div class="field"><label>Дата</label><input id="d-date" type="date"></div></div>
-  <div class="field"><label>Ссылка / путь к файлу (необязательно)</label><input id="d-url" placeholder="https://… или /путь/к/файлу"></div></div>
+  <div class="field"><label>Или ссылка на файл (если он уже где-то хранится)</label><input id="d-url" placeholder="https://…"></div>
+  <div class="t-sub">Выберите файл с компьютера — он сохранится и будет открываться по кнопке «Открыть». Либо укажите ссылку. До 3 МБ.</div></div>
   <div class="modal-f"><button class="btn ghost" onclick="${backToInfo(type,id)}">Отмена</button><button class="btn" onclick="saveDoc('${type}','${id}')">Прикрепить</button></div>`);}
 async function saveDoc(type,id){const e=docEntity(type,id);if(!e)return;if(!e.documents)e.documents=[];
-  e.documents.push({name:val('d-name')||'Документ.pdf',type:val('d-type'),kind:DOC_TYPES[val('d-type')],date:val('d-date')||null,url:val('d-url')||null});
-  await saveState(); render(); (type==='unit'?unitInfo:tenantInfo)(id);}
+  const url=_docFile?_docFile.data:(val('d-url')||null);
+  const name=val('d-name')||(_docFile&&_docFile.name)||'Документ.pdf';
+  if(!_docFile && !val('d-url')){ if(!confirm('Файл не выбран и ссылка не указана — прикрепить только запись о документе?'))return; }
+  e.documents.push({name,type:val('d-type'),kind:DOC_TYPES[val('d-type')],date:val('d-date')||null,url,uploaded:!!_docFile});
+  _docFile=null; await saveState(); render(); (type==='unit'?unitInfo:tenantInfo)(id);}
 async function delDoc(type,id,i){const e=docEntity(type,id);if(!e||!e.documents)return;if(!confirm('Удалить документ «'+e.documents[i].name+'»?'))return;
   e.documents.splice(i,1); await saveState(); render(); (type==='unit'?unitInfo:tenantInfo)(id);}
 function unitInfo(id){const u=unitOf(id);const c=DB.contracts.find(c=>c.unit===id);const t=u.tenant?tenantOf(u.tenant):null;const r=u.responsible||{};
