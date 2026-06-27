@@ -372,6 +372,31 @@ function toggleBuilding(id){
   const chev=document.getElementById('chev-'+id); if(chev) chev.style.transform=`rotate(${open?0:90}deg)`;
   if(open) expandedBuildings.delete(id); else expandedBuildings.add(id);
 }
+
+/* ---------- универсальная сворачиваемая секция (для арендаторов/договоров по объектам) ---------- */
+const expandedSections = new Set();
+function toggleSection(id){
+  const el=document.getElementById('sect-'+id); if(!el)return;
+  const open = el.style.display!=='none';
+  el.style.display = open?'none':'block';
+  const chev=document.getElementById('chev-'+id); if(chev) chev.style.transform=`rotate(${open?0:90}deg)`;
+  if(open) expandedSections.delete(id); else expandedSections.add(id);
+}
+function collapseCard(id, headerInner, body, forceExpanded){
+  const expanded = forceExpanded || SCOPE!=='all' || expandedSections.has(id);
+  return `<div class="card" style="margin-bottom:16px">
+    <div class="panel-title" style="margin-bottom:0">
+      <div style="display:flex;align-items:center;gap:11px;cursor:pointer;flex:1;min-width:0" onclick="toggleSection('${id}')">
+        <span id="chev-${id}" style="color:var(--muted2);font-size:12px;flex-shrink:0;transition:transform .2s;transform:rotate(${expanded?90:0}deg)">▶</span>
+        <div style="min-width:0">${headerInner}</div>
+      </div>
+    </div>
+    <div id="sect-${id}" style="display:${expanded?'block':'none'};margin-top:14px">${body}</div>
+  </div>`;
+}
+function buildingHeader(b, count){
+  return `<h3>🏢 ${esc(b.name)}</h3><div class="t-sub" style="margin-top:3px">${esc(b.address)} · ${count}</div>`;
+}
 function unitTile(u){
   const st=unitStatus(u); const cls={occupied:'u-occ',free:'u-free',reserved:'u-res',debt:'u-debt'}[st];
   const ten=u.tenant?tenantOf(u.tenant).name:(st==='reserved'?'Бронь':'Свободно');
@@ -387,35 +412,59 @@ function miniStat(label,v,color){return `<div class="card"><div class="label" st
 function tenants(){
   el(head('Арендаторы',`${sTenants().length} компаний · ${scopeSub()}`, canEdit('tenants')?`<button class="btn" onclick="tenantModal()">+ Арендатор</button>`:'')+
   `<div class="toolbar"><input class="search" id="tsearch" placeholder="Поиск по названию, ИНН..." oninput="renderTenants()"></div>
-  <div class="card" style="padding:0"><table><thead><tr><th>Арендатор</th><th>Контакт</th><th>Отрасль</th><th>Помещение</th><th>Аренда/мес</th><th>Статус оплат</th></tr></thead><tbody id="tbody"></tbody></table></div>`);
+  <div id="tbcards"></div>`);
   renderTenants();
+}
+function tenantBuilding(t){const c=DB.contracts.find(c=>c.tenant===t.id);return c?(unitOf(c.unit)?.building||null):null;}
+function tenantTable(list){
+  return `<div style="overflow-x:auto"><table><thead><tr><th>Арендатор</th><th>Контакт</th><th>Отрасль</th><th>Помещение</th><th>Аренда/мес</th><th>Статус оплат</th></tr></thead><tbody>${list.map(tenantRow).join('')}</tbody></table></div>`;
+}
+function tenantRow(t){
+  const c=DB.contracts.find(c=>c.tenant===t.id);
+  const pay=c?DB.payments.find(p=>p.contract===c.id):null;
+  const stp=pay?payPill(pay):'<span class="pill gray">—</span>';
+  return `<tr onclick="tenantInfo('${t.id}')" style="cursor:pointer"><td><div class="t-strong">${esc(t.name)}</div><div class="t-sub">ИНН ${t.inn}</div></td>
+    <td><div>${esc(t.contact)}</div><div class="t-sub">${t.phone}</div></td><td><span class="pill blue">${esc(t.industry)}</span></td>
+    <td>${c?c.unit:'—'}</td><td class="t-strong">${c?money(monthlyRent(c)):'—'}</td><td>${stp}</td></tr>`;
 }
 function renderTenants(){
   const q=(document.getElementById('tsearch')?.value||'').toLowerCase();
-  const sc=sContracts();
-  const rows=sTenants().filter(t=>!q||t.name.toLowerCase().includes(q)||t.inn.includes(q)||t.contact.toLowerCase().includes(q)).map(t=>{
-    const c=sc.find(c=>c.tenant===t.id)||DB.contracts.find(c=>c.tenant===t.id);
-    const pay=c?DB.payments.find(p=>p.contract===c.id):null;
-    const stp=pay?payPill(pay):'<span class="pill gray">—</span>';
-    return `<tr onclick="tenantInfo('${t.id}')" style="cursor:pointer"><td><div class="t-strong">${esc(t.name)}</div><div class="t-sub">ИНН ${t.inn}</div></td>
-    <td><div>${esc(t.contact)}</div><div class="t-sub">${t.phone}</div></td><td><span class="pill blue">${esc(t.industry)}</span></td>
-    <td>${c?c.unit:'—'}</td><td class="t-strong">${c?money(monthlyRent(c)):'—'}</td><td>${stp}</td></tr>`;
+  const match=t=>!q||t.name.toLowerCase().includes(q)||(t.inn||'').includes(q)||(t.contact||'').toLowerCase().includes(q);
+  const bs = SCOPE==='all'? buildingsList() : [buildingOf(SCOPE)].filter(Boolean);
+  let html = bs.map(b=>{
+    const list=DB.tenants.filter(t=>tenantBuilding(t)===b.id && match(t));
+    const body = list.length? tenantTable(list) : '<div class="empty" style="padding:20px">Нет арендаторов в объекте</div>';
+    return collapseCard('ten-'+b.id, buildingHeader(b, list.length+' аренд.'), body, !!q);
   }).join('');
-  document.getElementById('tbody').innerHTML=rows||'<tr><td colspan="6" class="empty">Ничего не найдено</td></tr>';
+  if(SCOPE==='all'){
+    const noplace=DB.tenants.filter(t=>!tenantBuilding(t) && match(t));
+    if(noplace.length) html += collapseCard('ten-none',
+      `<h3>📭 Без размещения</h3><div class="t-sub" style="margin-top:3px">Арендаторы без договора · ${noplace.length}</div>`,
+      tenantTable(noplace), !!q);
+  }
+  document.getElementById('tbcards').innerHTML = html || '<div class="card"><div class="empty">Ничего не найдено</div></div>';
 }
 
 /* ============================================================
    ДОГОВОРЫ
    ============================================================ */
 function contracts(){
+  const bs = SCOPE==='all'? buildingsList() : [buildingOf(SCOPE)].filter(Boolean);
   el(head('Договоры аренды',`${sContracts().length} договоров · ${scopeSub()}`, canEdit('contracts')?`<button class="btn" onclick="contractModal()">+ Договор</button>`:'')+
-  `<div class="card" style="padding:0"><table><thead><tr><th>№ / Арендатор</th><th>Помещение</th><th>Ставка ₽/м²</th><th>Аренда/мес</th><th>Срок</th><th>Индексация</th><th>Статус</th></tr></thead><tbody>
-  ${sContracts().map(c=>{const t=tenantOf(c.tenant);const dl=daysLeft(c.end);
-    const stPill=c.status==='expiring'||dl<90?`<span class="pill amber">Истекает (${dl} дн)</span>`:`<span class="pill green">Активен</span>`;
-    return `<tr style="cursor:pointer" onclick="contractInfo('${c.id}')"><td><div class="t-strong">${c.id.toUpperCase()}</div><div class="t-sub">${esc(t.name)}</div></td>
+  `<div id="cbcards"></div>`);
+  document.getElementById('cbcards').innerHTML = bs.map(b=>{
+    const cs=DB.contracts.filter(c=>unitOf(c.unit)?.building===b.id);
+    const body = cs.length
+      ? `<div style="overflow-x:auto"><table><thead><tr><th>№ / Арендатор</th><th>Помещение</th><th>Ставка ₽/м²</th><th>Аренда/мес</th><th>Срок</th><th>Индексация</th><th>Статус</th></tr></thead><tbody>${cs.map(contractRow).join('')}</tbody></table></div>`
+      : '<div class="empty" style="padding:20px">Нет договоров в объекте</div>';
+    return collapseCard('con-'+b.id, buildingHeader(b, cs.length+' догов.'), body, false);
+  }).join('') || '<div class="card"><div class="empty">Объекты не найдены</div></div>';
+}
+function contractRow(c){const t=tenantOf(c.tenant);const dl=daysLeft(c.end);
+  const stPill=c.status==='expiring'||dl<90?`<span class="pill amber">Истекает (${dl} дн)</span>`:`<span class="pill green">Активен</span>`;
+  return `<tr style="cursor:pointer" onclick="contractInfo('${c.id}')"><td><div class="t-strong">${c.id.toUpperCase()}</div><div class="t-sub">${esc(t.name)}</div></td>
     <td>${c.unit}</td><td>${fmt(c.rate)}</td><td class="t-strong">${money(monthlyRent(c))}</td>
-    <td><div>${fmtD(c.start)} —</div><div class="t-sub">${fmtD(c.end)}</div></td><td>${c.indexation}%/год</td><td>${stPill}</td></tr>`;}).join('')}
-  </tbody></table></div>`);
+    <td><div>${fmtD(c.start)} —</div><div class="t-sub">${fmtD(c.end)}</div></td><td>${c.indexation}%/год</td><td>${stPill}</td></tr>`;
 }
 function fmtD(d){return new Date(d).toLocaleDateString('ru-RU',{day:'2-digit',month:'2-digit',year:'2-digit'});}
 
