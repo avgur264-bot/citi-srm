@@ -341,21 +341,36 @@ function objects(){
   const addCard = (canEdit('objects')&&SCOPE==='all') ? `<div class="card" style="border-style:dashed;text-align:center;cursor:pointer" onclick="buildingModal()"><div style="padding:16px;color:var(--accent2);font-weight:650;font-size:14px">＋ Добавить новый объект</div></div>` : '';
   document.getElementById('bcards').innerHTML = (bs.map(buildingCard).join('') || '<div class="card"><div class="empty">Объекты не найдены</div></div>') + addCard;
 }
+const expandedBuildings = new Set(); // какие объекты развёрнуты в режиме «Все объекты»
 function buildingCard(b){
   const us=DB.units.filter(u=>u.building===b.id);
   const totA=us.reduce((s,u)=>s+u.area,0), occA=us.filter(u=>u.tenant).reduce((s,u)=>s+u.area,0);
   const floors=[...new Set(us.map(u=>u.floor))].sort((a,b)=>a-b);
+  const expanded = SCOPE!=='all' || expandedBuildings.has(b.id); // конкретный объект — сразу развёрнут
+  const body = floors.length?floors.map(f=>{const fu=us.filter(u=>u.floor===f);
+      return `<div class="floor"><div class="floor-h"><b>Этаж ${f}</b> · ${fu.length} помещ. · ${fmt(fu.reduce((s,u)=>s+u.area,0))} м²</div>
+      <div class="units">${fu.map(unitTile).join('')}</div></div>`;}).join(''):'<div class="empty" style="padding:24px">В объекте пока нет помещений</div>';
   return `<div class="card" style="margin-bottom:16px">
-    <div class="panel-title"><div><h3>🏢 ${esc(b.name)}</h3><div class="t-sub" style="margin-top:3px">${esc(b.address)} · ${us.length} помещ. · ${fmt(totA)} м² · заполнено ${pct(occA,totA)}%</div></div>
+    <div class="panel-title" style="margin-bottom:0">
+      <div style="display:flex;align-items:center;gap:11px;cursor:pointer;flex:1;min-width:0" onclick="toggleBuilding('${b.id}')" title="${expanded?'Свернуть':'Развернуть'}">
+        <span id="chev-${b.id}" style="color:var(--muted2);font-size:12px;flex-shrink:0;transition:transform .2s;transform:rotate(${expanded?90:0}deg)">▶</span>
+        <div style="min-width:0"><h3>🏢 ${esc(b.name)}</h3><div class="t-sub" style="margin-top:3px">${esc(b.address)} · ${us.length} помещ. · ${fmt(totA)} м² · заполнено ${pct(occA,totA)}%</div></div>
+      </div>
       <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end">
         ${canEdit('objects')?`<button class="btn ghost sm" onclick="unitModal('${b.id}')">+ Помещение</button>`:''}
         ${canEdit('tenants')?`<button class="btn ghost sm" onclick="tenantModal('${b.id}')">+ Арендатор</button>`:''}
         ${canEdit('objects')?`<button class="btn ghost sm" onclick="editBuildingModal('${b.id}')" title="Редактировать объект">✎</button><button class="btn ghost sm" onclick="delBuilding('${b.id}')" title="Удалить объект">🗑</button>`:''}
-        <div class="legend" style="margin-left:6px"><span><i style="background:var(--green)"></i>Занято</span><span><i style="background:var(--red)"></i>Долг</span><span><i style="background:var(--amber)"></i>Резерв</span><span><i style="background:var(--muted2)"></i>Свободно</span></div></div></div>
-    ${floors.length?floors.map(f=>{const fu=us.filter(u=>u.floor===f);
-      return `<div class="floor"><div class="floor-h"><b>Этаж ${f}</b> · ${fu.length} помещ. · ${fmt(fu.reduce((s,u)=>s+u.area,0))} м²</div>
-      <div class="units">${fu.map(unitTile).join('')}</div></div>`;}).join(''):'<div class="empty" style="padding:24px">В объекте пока нет помещений</div>'}
+        <div class="legend" style="margin-left:6px"><span><i style="background:var(--green)"></i>Занято</span><span><i style="background:var(--red)"></i>Долг</span><span><i style="background:var(--amber)"></i>Резерв</span><span><i style="background:var(--muted2)"></i>Свободно</span></div></div>
+    </div>
+    <div id="floors-${b.id}" style="display:${expanded?'block':'none'};margin-top:14px">${body}</div>
   </div>`;
+}
+function toggleBuilding(id){
+  const el=document.getElementById('floors-'+id); if(!el)return;
+  const open = el.style.display!=='none';
+  el.style.display = open?'none':'block';
+  const chev=document.getElementById('chev-'+id); if(chev) chev.style.transform=`rotate(${open?0:90}deg)`;
+  if(open) expandedBuildings.delete(id); else expandedBuildings.add(id);
 }
 function unitTile(u){
   const st=unitStatus(u); const cls={occupied:'u-occ',free:'u-free',reserved:'u-res',debt:'u-debt'}[st];
