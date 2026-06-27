@@ -1,0 +1,32 @@
+
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 500"><rect width="1200" height="500" fill="#13233F"/>
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#6F86A8"/>
+      <stop offset="100%" stop-color="#F2F5FA"/>
+    </linearGradient>
+    <style>
+      .title{font-family:Arial,Helvetica,sans-serif;font-weight:700;letter-spacing:6px;fill:#F2F5FA}
+      .sub{font-family:Arial,Helvetica,sans-serif;font-size:34px;letter-spacing:12px;fill:#C5D0E0}
+      .tag{font-family:Arial,Helvetica,sans-serif;font-size:20px;letter-spacing:2px;fill:#5F6D82}
+    </style>
+  </defs>
+
+  <!-- skyline -->
+  <rect x="430" y="110" width="55" height="120" fill="url(#g)"/>
+  <rect x="495" y="70" width="70" height="160" fill="url(#g)"/>
+  <rect x="575" y="40" width="90" height="190" fill="url(#g)"/>
+  <rect x="675" y="80" width="65" height="150" fill="url(#g)"/>
+  <rect x="750" y="125" width="45" height="105" fill="url(#g)"/>
+  <line x1="380" y1="230" x2="820" y2="230" stroke="#F2F5FA" stroke-width="2"/>
+
+  <text x="600" y="355" text-anchor="middle" class="title" font-size="118">СИТИ</text>
+
+  <line x1="300" y1="390" x2="430" y2="390" stroke="#C5D0E0" stroke-width="2"/>
+  <text x="600" y="405" text-anchor="middle" class="sub">SRM</text>
+  <line x1="770" y1="390" x2="900" y2="390" stroke="#C5D0E0" stroke-width="2"/>
+
+  <text x="600" y="455" text-anchor="middle" class="tag">
+    СИСТЕМА УПРАВЛЕНИЯ КОММЕРЧЕСКОЙ НЕДВИЖИМОСТЬЮ
+  </text>
+</svg>

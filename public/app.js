@@ -26,13 +26,11 @@ function updateThemeBtns(){
 }
 applyTheme(localStorage.getItem(TKEY)||'light');
 
-const LOGO_SVG = `<svg viewBox="0 0 84 84" xmlns="http://www.w3.org/2000/svg" aria-label="СИТИ SRM">
-  <defs><linearGradient id="lg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#4f8cff"/><stop offset="1" stop-color="#a78bfa"/></linearGradient>
-  <mask id="lb"><rect x="30" y="26" width="20" height="52" fill="#fff"/><rect x="53" y="42" width="18" height="36" fill="#fff"/>
-  <rect x="34.5" y="33" width="4.5" height="4.5"/><rect x="41.5" y="33" width="4.5" height="4.5"/><rect x="34.5" y="42" width="4.5" height="4.5"/><rect x="41.5" y="42" width="4.5" height="4.5"/>
-  <rect x="34.5" y="51" width="4.5" height="4.5"/><rect x="41.5" y="51" width="4.5" height="4.5"/><rect x="34.5" y="60" width="4.5" height="4.5"/><rect x="41.5" y="60" width="4.5" height="4.5"/>
-  <rect x="57.5" y="49" width="4.5" height="4.5"/><rect x="63.5" y="49" width="4.5" height="4.5"/><rect x="57.5" y="58" width="4.5" height="4.5"/><rect x="63.5" y="58" width="4.5" height="4.5"/></mask></defs>
-  <rect width="84" height="84" rx="22" fill="url(#lg)"/><rect width="84" height="84" fill="#fff" mask="url(#lb)"/></svg>`;
+const LOGO_SVG = `<svg viewBox="0 0 256 256" xmlns="http://www.w3.org/2000/svg" aria-label="СИТИ SRM">
+  <defs><linearGradient id="lg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#6F86A8"/><stop offset="1" stop-color="#13233F"/></linearGradient></defs>
+  <rect width="256" height="256" fill="url(#lg)"/>
+  <g fill="#fff"><rect x="40" y="100" width="24" height="90"/><rect x="72" y="70" width="30" height="120"/><rect x="108" y="40" width="40" height="150"/><rect x="154" y="80" width="28" height="110"/><rect x="188" y="110" width="20" height="80"/></g>
+  <rect x="36" y="190" width="176" height="7" rx="3.5" fill="#fff" opacity=".9"/></svg>`;
 
 /* ---------- Состояние ---------- */
 let ME=null, ROLES={}, DB=null, TASKS=[], USERS=[];
