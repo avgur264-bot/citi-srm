@@ -113,7 +113,24 @@ function ensureState(){
   if(!I.water) I.water={connected:false,lastSync:null};
   if(!I.onec) I.onec={connected:false,base:'',lastSync:null};
   if(!Array.isArray(I.log)) I.log=[];
+  // Настройки клиента (брендинг, модули, справочники) — у каждого своя база.
+  if(!DB.settings || typeof DB.settings!=='object') DB.settings={};
+  const S=DB.settings;
+  if(typeof S.company!=='string') S.company='СИТИ SRM';
+  if(typeof S.subtitle!=='string') S.subtitle='Коммерческая недвижимость';
+  if(typeof S.accent!=='string') S.accent='';
+  if(typeof S.logo!=='string') S.logo='';
+  if(!S.modules || typeof S.modules!=='object') S.modules={};
+  if(!Array.isArray(S.expenseCats)) S.expenseCats=['Клининг','Охрана','Электроэнергия','Водоснабжение','Отопление','Текущий ремонт','Вывоз мусора','Обслуживание лифтов'];
 }
+/* ---- брендинг и модули из настроек клиента ---- */
+const isAdmin = ()=> ME && (ME.role==='admin'||ME.role==='owner');
+const stg = ()=> (DB&&DB.settings)||{};
+const modOn = k => { const m=stg().modules||{}; return m[k]!==false; };
+function brandLogoHtml(){ const s=stg(); return s.logo?`<img src="${s.logo}" alt="" style="width:100%;height:100%;object-fit:contain;border-radius:8px">`:LOGO_SVG; }
+function applyAccent(){ const a=stg().accent; const r=document.documentElement;
+  if(a && /^#[0-9a-fA-F]{6}$/.test(a)){ r.style.setProperty('--accent',a); r.style.setProperty('--accent2',a); }
+  else { r.style.removeProperty('--accent'); r.style.removeProperty('--accent2'); } }
 async function loadData(){
   const b = await api('/api/bootstrap');
   ME=b.user; ROLES=b.roles; DB=b.state; TASKS=b.tasks; USERS=b.users;
@@ -196,20 +213,25 @@ const NAV=[
   {group:'Финансы',items:[['payments','💳','Платежи аренды'],['utilities','⚡','Коммуналка и расходы'],['salaries','💼','Зарплата (ФОТ)']]},
   {group:'Операции',items:[['tasks','✓','Задачи'],['employees','🧑‍💼','Сотрудники'],['reports','📊','Отчёты']]},
   {group:'Интеграции',items:[['integrations','🔗','Синхронизация']]},
+  {group:'Администрирование',items:[['settings','⚙','Настройки']]},
 ];
+// модули, которые можно включать/выключать в настройках (без dashboard и settings)
+const TOGGLEABLE=[['objects','Объекты и занятость'],['tenants','Арендаторы'],['contracts','Договоры'],['payments','Платежи аренды'],['utilities','Коммуналка и расходы'],['salaries','Зарплата (ФОТ)'],['tasks','Задачи'],['employees','Сотрудники'],['reports','Отчёты'],['integrations','Синхронизация']];
+const navVisible = k => (k==='settings') ? isAdmin() : (canView(k) && modOn(k));
 const PAGE_TITLES={dashboard:'Дашборд',objects:'Объекты',tenants:'Арендаторы',contracts:'Договоры',payments:'Платежи',utilities:'Коммуналка',tasks:'Задачи',employees:'Сотрудники',reports:'Отчёты'};
 
 function showApp(){
-  if(!canView(current)) current = NAV.flatMap(g=>g.items).map(i=>i[0]).find(canView) || 'dashboard';
+  if(!navVisible(current)) current = NAV.flatMap(g=>g.items).map(i=>i[0]).find(navVisible) || 'dashboard';
   if(SCOPE!=='all' && !buildingOf(SCOPE)) SCOPE='all';
+  applyAccent();
   const initials=(ME.full_name||'?').split(' ').map(s=>s[0]).slice(0,2).join('').toUpperCase();
   document.getElementById('root').innerHTML=`
   <div class="app">
     <aside class="sidebar" id="sidebar">
-      <div class="brand"><div class="logo">${LOGO_SVG}</div><div><b>СИТИ SRM</b><small>Коммерческая недвижимость</small></div></div>
+      <div class="brand"><div class="logo">${brandLogoHtml()}</div><div><b>${esc(stg().company)}</b><small>${esc(stg().subtitle)}</small></div></div>
       <div id="scopeWrap" style="padding:0 4px 8px"></div>
       ${NAV.map(g=>{
-        const items=g.items.filter(i=>canView(i[0])); if(!items.length) return '';
+        const items=g.items.filter(i=>navVisible(i[0])); if(!items.length) return '';
         return `<div class="nav-group">${g.group}</div>`+items.map(([k,ic,label])=>
           `<div class="nav-item" data-page="${k}"><span class="ic">${ic}</span> ${label} <span class="badge hidden" id="badge-${k}">0</span></div>`).join('');
       }).join('')}
@@ -222,7 +244,7 @@ function showApp(){
       </div>
     </aside>
     <div class="scrim" id="scrim" onclick="closeNav()"></div>
-    <div class="mtopbar"><span class="burger" onclick="toggleNav()">☰</span><div class="logo">${LOGO_SVG}</div><b>СИТИ SRM</b></div>
+    <div class="mtopbar"><span class="burger" onclick="toggleNav()">☰</span><div class="logo">${brandLogoHtml()}</div><b>${esc(stg().company)}</b></div>
     <main class="main" id="main"></main>
   </div>`;
   document.querySelectorAll('.nav-item[data-page]').forEach(n=>n.onclick=()=>{ current=n.dataset.page; markActive(); render(); closeNav(); });
@@ -239,7 +261,7 @@ function renderScopeSelector(){
   </select>`;
 }
 
-const PAGES={dashboard,objects,tenants,contracts,payments,utilities,salaries,tasks,employees,reports,integrations};
+const PAGES={dashboard,objects,tenants,contracts,payments,utilities,salaries,tasks,employees,reports,integrations,settings:settingsPage};
 function render(){ updateBadges(); const m=document.getElementById('main'); if(!m)return; m.innerHTML=''; (PAGES[current]||dashboard)(); }
 function el(html){ const d=document.createElement('div'); d.className='page'; d.innerHTML=html; document.getElementById('main').appendChild(d); return d; }
 function head(title,sub,actions=''){ return `<div class="topbar"><div><h1>${title}</h1><div class="sub">${sub}</div></div><div class="spacer"></div>${actions}${bellHTML()}</div>`; }
@@ -829,6 +851,61 @@ async function bulkAccrue(){if(!confirm('Начислить зарплату в�
    ИНТЕГРАЦИИ / СИНХРОНИЗАЦИЯ
    ============================================================ */
 function fmtDateTime(iso){ try{ return new Date(iso).toLocaleString('ru-RU',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}); }catch{ return iso; } }
+/* ============================================================
+   НАСТРОЙКИ КЛИЕНТА (брендинг, модули, справочники)
+   ============================================================ */
+let _logoData='';
+function settingsPage(){
+  if(!isAdmin()){ el('<div class="card"><div class="t-sub">Раздел доступен только администратору/собственнику.</div></div>'); return; }
+  const s=stg(); _logoData=s.logo||'';
+  el(head('Настройки системы','Брендинг, модули и справочники — применяются только к этому клиенту','')+
+  `<div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(330px,1fr))">
+    <div class="card">
+      <div class="sec-h">Брендинг</div>
+      <div class="field"><label>Название компании</label><input id="s-company" value="${esc(s.company)}" placeholder="СИТИ SRM"></div>
+      <div class="field"><label>Подпись под названием</label><input id="s-subtitle" value="${esc(s.subtitle)}" placeholder="Коммерческая недвижимость"></div>
+      <div class="field"><label>Фирменный цвет интерфейса</label>
+        <label style="display:flex;align-items:center;gap:8px;margin-bottom:6px;cursor:pointer"><input type="checkbox" id="s-accent-on" ${s.accent?'checked':''}> Использовать свой цвет</label>
+        <input id="s-accent" type="color" value="${/^#[0-9a-fA-F]{6}$/.test(s.accent)?s.accent:'#4f8cff'}" style="width:54px;height:38px;padding:2px;border:1px solid var(--line2);border-radius:8px;cursor:pointer"></div>
+      <div class="field"><label>Логотип (PNG/JPG, до 500 КБ)</label>
+        <input id="s-logo" type="file" accept="image/png,image/jpeg" onchange="onLogoFile(this)">
+        <div id="logoPrev" style="margin-top:8px">${_logoData?`<img src="${_logoData}" style="max-height:64px;border-radius:8px;background:#fff;padding:6px;box-shadow:var(--shadow)">`:'<span class="t-sub">Логотип по умолчанию (городской силуэт)</span>'}</div>
+        ${_logoData?`<button class="btn ghost sm" style="margin-top:6px" onclick="clearLogo()">Убрать логотип</button>`:''}</div>
+    </div>
+    <div class="card">
+      <div class="sec-h">Модули (показывать в меню)</div>
+      ${TOGGLEABLE.map(([k,label])=>`<label style="display:flex;align-items:center;gap:10px;padding:7px 2px;cursor:pointer;border-bottom:1px solid var(--line)">
+        <input type="checkbox" class="s-mod" data-k="${k}" ${modOn(k)?'checked':''}> <span>${label}</span></label>`).join('')}
+      <div class="t-sub" style="margin-top:10px">«Дашборд» и «Настройки» скрыть нельзя. Права ролей действуют поверх этих настроек.</div>
+    </div>
+    <div class="card">
+      <div class="sec-h">Справочник: категории расходов</div>
+      <div class="t-sub" style="margin-bottom:8px">По одной категории в строке. Подсказываются при добавлении расхода.</div>
+      <textarea id="s-expcats" rows="9" class="search" style="width:100%;resize:vertical;font-family:inherit">${esc((s.expenseCats||[]).join('\n'))}</textarea>
+    </div>
+  </div>
+  <div style="margin-top:16px;display:flex;gap:10px"><button class="btn" onclick="saveSettings()">💾 Сохранить настройки</button>
+    <span class="t-sub" style="align-self:center">Изменения видят все пользователи этого клиента.</span></div>`);
+}
+function onLogoFile(input){ const f=input.files&&input.files[0]; if(!f)return;
+  if(!/^image\/(png|jpeg)$/.test(f.type)){ alert('Только PNG или JPG.'); input.value=''; return; }
+  if(f.size>500*1024){ alert('Файл больше 500 КБ — выберите меньше.'); input.value=''; return; }
+  const r=new FileReader(); r.onload=()=>{ _logoData=String(r.result||'');
+    const p=document.getElementById('logoPrev'); if(p)p.innerHTML=`<img src="${_logoData}" style="max-height:64px;border-radius:8px;background:#fff;padding:6px;box-shadow:var(--shadow)">`; };
+  r.readAsDataURL(f); }
+function clearLogo(){ _logoData=''; settingsPage(); }
+async function saveSettings(){
+  ensureState(); const S=DB.settings;
+  S.company=(val('s-company')||'').trim()||'СИТИ SRM';
+  S.subtitle=(val('s-subtitle')||'').trim();
+  const useAccent=document.getElementById('s-accent-on').checked; const ac=val('s-accent');
+  S.accent=(useAccent && /^#[0-9a-fA-F]{6}$/.test(ac))?ac:'';
+  S.logo=_logoData||'';
+  const mods={}; document.querySelectorAll('.s-mod').forEach(c=>{ mods[c.dataset.k]=c.checked; }); S.modules=mods;
+  S.expenseCats=(val('s-expcats')||'').split('\n').map(x=>x.trim()).filter(Boolean);
+  await afterStateChange();
+  applyAccent(); showApp();
+}
 function integrations(){
   const I=DB.integrations||{};
   const unpaid=DB.payments.filter(p=>p.amount-p.paid>0); const unpaidSum=unpaid.reduce((s,p)=>s+(p.amount-p.paid),0);
@@ -1069,7 +1146,7 @@ async function savePayment(){const per=val('f-period')||'2026-07';const due=per+
 function expenseModal(){const def=SCOPE!=='all'?SCOPE:(buildingsList()[0]||{}).id;
   openM(`<div class="modal-h"><h3>Новый расход</h3><span class="x" onclick="closeM()">×</span></div>
   <div class="modal-b"><div class="field"><label>Объект</label><select id="f-ebuilding">${buildingsList().map(b=>`<option value="${b.id}"${b.id===def?' selected':''}>${esc(b.name)}</option>`).join('')}</select></div>
-  <div class="row2"><div class="field"><label>Категория</label><input id="f-cat" placeholder="Клининг"></div><div class="field"><label>Сумма</label><input id="f-amt" type="number"></div></div>
+  <div class="row2"><div class="field"><label>Категория</label><input id="f-cat" list="catList" placeholder="Клининг"><datalist id="catList">${(stg().expenseCats||[]).map(c=>`<option value="${esc(c)}">`).join('')}</datalist></div><div class="field"><label>Сумма</label><input id="f-amt" type="number"></div></div>
   <div class="row2"><div class="field"><label>Подрядчик</label><input id="f-vendor"></div><div class="field"><label>Период</label><input id="f-eperiod" type="month" value="${utilPeriod||'2026-06'}"></div></div></div>
   <div class="modal-f"><button class="btn ghost" onclick="closeM()">Отмена</button><button class="btn" onclick="saveExpense()">Добавить</button></div>`);}
 async function saveExpense(){DB.expenses.push({id:'e'+Date.now(),building:val('f-ebuilding'),category:val('f-cat'),vendor:val('f-vendor'),period:val('f-eperiod')||'2026-06',amount:+val('f-amt'),status:'planned'});closeM();await afterStateChange();}
