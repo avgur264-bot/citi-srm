@@ -476,20 +476,43 @@ function fmtD(d){return new Date(d).toLocaleDateString('ru-RU',{day:'2-digit',mo
    ============================================================ */
 function payments(){
   const m=metrics();
-  el(head('Платежи аренды',`Период: Июнь 2026 · ${scopeSub()}`, canEdit('payments')?`<button class="btn" onclick="paymentModal()">+ Платёж</button>`:'')+
+  const bs = SCOPE==='all'? buildingsList() : [buildingOf(SCOPE)].filter(Boolean);
+  el(head('Платежи аренды',`Период: Июнь 2026 · ${scopeSub()}`, canEdit('payments')?`<button class="btn" onclick="paymentModal()">+ Начисление</button>`:'')+
   `<div class="grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:18px">
     ${miniStat('Начислено',money(m.billed))}${miniStat('Собрано',money(m.collected),'green')}
     ${miniStat('Задолженность',money(m.debt),'red')}${miniStat('Собираемость',pct(m.collected,m.billed)+'%','blue')}
-  </div>
-  <div class="card" style="padding:0"><table><thead><tr><th>Арендатор</th><th>Помещение</th><th>Период</th><th>Начислено</th><th>Оплачено</th><th>Срок</th><th>Статус</th><th></th></tr></thead><tbody>
-  ${sPayments().map(p=>{const c=contractOf(p.contract);const t=tenantOf(c.tenant);
-    return `<tr><td class="t-strong">${esc(t.name)}</td><td>${c.unit}</td><td>${p.period}</td><td>${money(p.amount)}</td>
+  </div><div id="pbcards"></div>`);
+  document.getElementById('pbcards').innerHTML = bs.map(b=>{
+    const ps=DB.payments.filter(p=>{const c=contractOf(p.contract);return c&&unitOf(c.unit)?.building===b.id;});
+    const body = ps.length
+      ? `<div style="overflow-x:auto"><table><thead><tr><th>Арендатор</th><th>Помещение</th><th>Период</th><th>Начислено</th><th>Оплачено</th><th>Срок</th><th>Статус</th><th></th></tr></thead><tbody>${ps.map(paymentRow).join('')}</tbody></table></div>`
+      : '<div class="empty" style="padding:20px">Нет платежей в объекте</div>';
+    const bd=ps.reduce((s,p)=>s+(p.amount-p.paid),0);
+    return collapseCard('pay-'+b.id, buildingHeader(b, `${ps.length} плат.${bd>0?' · долг '+money(bd):''}`), body, false);
+  }).join('') || '<div class="card"><div class="empty">Объекты не найдены</div></div>';
+}
+function paymentRow(p){const c=contractOf(p.contract);const t=tenantOf(c.tenant);
+  return `<tr><td class="t-strong">${esc(t.name)}</td><td>${c.unit}</td><td>${p.period}</td><td>${money(p.amount)}</td>
     <td>${p.paid?money(p.paid):'—'}</td><td class="t-sub">${fmtD(p.due)}</td><td>${payPill(p)}</td>
-    <td style="text-align:right">${(p.amount-p.paid>0&&canEdit('payments'))?`<button class="btn sm" onclick="markPaid('${p.id}')">Оплачен</button>`:''}</td></tr>`;}).join('')}
-  </tbody></table></div>`);
+    <td style="text-align:right">${(p.amount-p.paid>0&&canEdit('payments'))?`<button class="btn sm" onclick="payModal('${p.id}')">Внести оплату</button>`:'<span class="t-sub">оплачен</span>'}</td></tr>`;
 }
 function payPill(p){const m={paid:['green','Оплачен'],overdue:['red','Просрочен'],partial:['amber','Частично'],pending:['blue','Ожидание']};const x=m[p.status]||['gray','—'];return `<span class="pill ${x[0]}">${x[1]}</span>`;}
-async function markPaid(id){const p=DB.payments.find(p=>p.id===id);p.paid=p.amount;p.status='paid';p.paidDate=TODAY.toISOString().slice(0,10);await afterStateChange();}
+function payModal(id){const p=DB.payments.find(x=>x.id===id);if(!p)return;const c=contractOf(p.contract);const t=tenantOf(c.tenant);const rem=p.amount-p.paid;
+  openM(`<div class="modal-h"><h3>Внести оплату</h3><span class="x" onclick="closeM()">×</span></div>
+  <div class="modal-b">
+    ${infoRow('Арендатор',esc(t.name))}${infoRow('Помещение',c.unit)}${infoRow('Период',p.period)}
+    ${infoRow('Начислено',money(p.amount))}${infoRow('Уже оплачено',money(p.paid))}${infoRow('Остаток к оплате',`<span style="color:var(--red)">${money(rem)}</span>`)}
+    <div class="row2" style="margin-top:14px"><div class="field"><label>Сумма оплаты, ₽</label><input id="pay-amt" type="number" value="${rem}"></div>
+      <div class="field"><label>Дата оплаты</label><input id="pay-date" type="date" value="${TODAY.toISOString().slice(0,10)}"></div></div>
+    <div class="t-sub">Можно внести частично — статус обновится автоматически (Частично / Оплачен).</div>
+  </div>
+  <div class="modal-f"><button class="btn ghost" onclick="closeM()">Отмена</button><button class="btn" onclick="savePay('${id}')">Зачесть оплату</button></div>`);}
+async function savePay(id){const p=DB.payments.find(x=>x.id===id);if(!p)return;
+  const add=+val('pay-amt')||0; if(add<=0)return alert('Укажите сумму оплаты');
+  p.paid=Math.min(p.amount,(p.paid||0)+add);
+  p.paidDate=val('pay-date')||TODAY.toISOString().slice(0,10);
+  p.status = p.paid>=p.amount?'paid':(p.paid>0?'partial':(daysLeft(p.due)<0?'overdue':'pending'));
+  closeM(); await afterStateChange();}
 
 /* ============================================================
    КОММУНАЛКА И РАСХОДЫ
@@ -502,19 +525,31 @@ function utilities(){
   `<div class="grid" style="grid-template-columns:repeat(3,1fr);margin-bottom:18px">
     ${miniStat('Коммунальные начисления',money(ut),'violet')}${miniStat('Расходы на содержание',money(ex),'amber')}${miniStat('Итого затраты',money(ut+ex),'red')}
   </div>
-  <div class="grid" style="grid-template-columns:1.2fr 1fr">
-    <div class="card" style="padding:0"><div class="panel-title" style="padding:16px 18px 0"><h3>Коммунальные начисления</h3></div>
-      <table><thead><tr><th>Помещение</th><th>Эл-во</th><th>Вода</th><th>Отопл.</th><th>Итого</th><th>Статус</th></tr></thead><tbody>
-      ${UT.length?UT.map(u=>{const tot=u.electricity+u.water+u.heating;return `<tr><td class="t-strong">${u.unit}</td><td>${fmt(u.electricity)}</td><td>${fmt(u.water)}</td><td>${fmt(u.heating)}</td><td class="t-strong">${money(tot)}</td><td>${utilPill(u.status)}</td></tr>`;}).join(''):'<tr><td colspan="6" class="empty">Нет начислений</td></tr>'}
-      </tbody></table></div>
-    <div class="card" style="padding:0"><div class="panel-title" style="padding:16px 18px 0"><h3>Эксплуатационные расходы</h3></div>
-      <table><thead><tr><th>Категория</th><th>Подрядчик</th><th>Сумма</th><th>Статус</th></tr></thead><tbody>
-      ${EX.length?EX.map(e=>`<tr><td class="t-strong">${esc(e.category)}</td><td class="t-sub">${esc(e.vendor)}</td><td class="t-strong">${money(e.amount)}</td><td>${utilPill(e.status)}</td></tr>`).join(''):'<tr><td colspan="4" class="empty">Нет расходов</td></tr>'}
-      </tbody></table></div>
-  </div>
-  <div class="card" style="margin-top:18px"><div class="panel-title"><h3>Структура расходов на содержание</h3></div><canvas id="chExp" height="80"></canvas></div>`);
+  <div id="ubcards"></div>
+  <div class="card" style="margin-top:18px"><div class="panel-title"><h3>Структура расходов на содержание</h3><span class="muted">${scopeSub()}</span></div><canvas id="chExp" height="80"></canvas></div>`);
+  const bs = SCOPE==='all'? buildingsList() : [buildingOf(SCOPE)].filter(Boolean);
+  document.getElementById('ubcards').innerHTML = bs.map(b=>{
+    const bu=DB.utilities.filter(u=>unitOf(u.unit)?.building===b.id);
+    const be=DB.expenses.filter(e=>(e.building||'b1')===b.id);
+    const tot=bu.reduce((s,u)=>s+u.electricity+u.water+u.heating,0)+be.reduce((s,e)=>s+e.amount,0);
+    const body=`<div class="grid" style="grid-template-columns:1.2fr 1fr">
+      <div><div class="sec-h" style="margin-top:0">Коммунальные начисления</div>${utilTable(bu)}</div>
+      <div><div class="sec-h" style="margin-top:0">Эксплуатационные расходы</div>${expenseTable(be)}</div>
+    </div>`;
+    return collapseCard('util-'+b.id, buildingHeader(b, `затраты ${money(tot)}`), body, false);
+  }).join('') || '<div class="card"><div class="empty">Объекты не найдены</div></div>';
   new Chart(document.getElementById('chExp'),{type:'bar',data:{labels:EX.map(e=>e.category),datasets:[{data:EX.map(e=>e.amount),backgroundColor:cssVar('--violet'),borderRadius:6}]},
     options:{indexAxis:'y',plugins:{legend:{display:false}},scales:{x:{grid:{color:cssVar('--chart-grid')},ticks:{color:cssVar('--muted')}},y:{grid:{display:false},ticks:{color:cssVar('--muted')}}}}});
+}
+function utilTable(list){
+  return `<div style="overflow-x:auto"><table><thead><tr><th>Помещение</th><th>Эл-во</th><th>Вода</th><th>Отопл.</th><th>Итого</th><th>Статус</th></tr></thead><tbody>
+    ${list.length?list.map(u=>{const tot=u.electricity+u.water+u.heating;return `<tr><td class="t-strong">${u.unit}</td><td>${fmt(u.electricity)}</td><td>${fmt(u.water)}</td><td>${fmt(u.heating)}</td><td class="t-strong">${money(tot)}</td><td>${utilPill(u.status)}</td></tr>`;}).join(''):'<tr><td colspan="6" class="empty">Нет начислений</td></tr>'}
+    </tbody></table></div>`;
+}
+function expenseTable(list){
+  return `<div style="overflow-x:auto"><table><thead><tr><th>Категория</th><th>Подрядчик</th><th>Сумма</th><th>Статус</th></tr></thead><tbody>
+    ${list.length?list.map(e=>`<tr><td class="t-strong">${esc(e.category)}</td><td class="t-sub">${esc(e.vendor)}</td><td class="t-strong">${money(e.amount)}</td><td>${utilPill(e.status)}</td></tr>`).join(''):'<tr><td colspan="4" class="empty">Нет расходов</td></tr>'}
+    </tbody></table></div>`;
 }
 function utilPill(s){const m={paid:['green','Оплачено'],invoiced:['blue','Выставлен'],overdue:['red','Просрочен'],planned:['gray','План']};const x=m[s]||['gray',s];return `<span class="pill ${x[0]}">${x[1]}</span>`;}
 
