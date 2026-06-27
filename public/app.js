@@ -597,19 +597,26 @@ function printReceipt(pid, txIndex){
 /* ============================================================
    КОММУНАЛКА И РАСХОДЫ
    ============================================================ */
+let utilPeriod=''; // '' = все периоды
+function periodsList(){ return [...new Set([...DB.utilities,...DB.expenses].map(x=>x.period).filter(Boolean))].sort().reverse(); }
+function fmtPeriod(p){ if(!p)return 'все периоды'; const [y,mo]=p.split('-'); const mn=['','январь','февраль','март','апрель','май','июнь','июль','август','сентябрь','октябрь','ноябрь','декабрь']; return (mn[+mo]||mo)+' '+y; }
+function setUtilPeriod(v){ utilPeriod=v; render(); }
 function utilities(){
-  const UT=sUtilities(), EX=sExpenses();
+  const inPer = x => !utilPeriod || x.period===utilPeriod;
+  const UT=sUtilities().filter(inPer), EX=sExpenses().filter(inPer);
   const ut=UT.reduce((s,u)=>s+u.electricity+u.water+u.heating,0);
   const ex=EX.reduce((s,e)=>s+e.amount,0);
-  el(head('Коммуналка и расходы на содержание',`Период: Июнь 2026 · ${scopeSub()}`,canEdit('utilities')?`<button class="btn" onclick="expenseModal()">+ Расход</button>`:'')+
-  `<div class="grid" style="grid-template-columns:repeat(3,1fr);margin-bottom:18px">
+  const pers=periodsList();
+  el(head('Коммуналка и расходы на содержание',`${utilPeriod?'Период: '+fmtPeriod(utilPeriod):'Все периоды'} · ${scopeSub()}`,canEdit('utilities')?`<button class="btn" onclick="expenseModal()">+ Расход</button>`:'')+
+  `<div class="toolbar"><span class="t-sub">Период:</span><select class="search" style="width:auto;min-width:160px" onchange="setUtilPeriod(this.value)"><option value="">Все периоды</option>${pers.map(p=>`<option value="${p}"${utilPeriod===p?' selected':''}>${fmtPeriod(p)}</option>`).join('')}</select></div>
+  <div class="grid" style="grid-template-columns:repeat(3,1fr);margin-bottom:18px">
     ${miniStat('Коммунальные начисления',money(ut),'violet')}${miniStat('Расходы на содержание',money(ex),'amber')}${miniStat('Итого затраты',money(ut+ex),'red')}
   </div>
   <div id="ubcards"></div>`);
   const bs = SCOPE==='all'? buildingsList() : [buildingOf(SCOPE)].filter(Boolean);
   document.getElementById('ubcards').innerHTML = bs.map(b=>{
-    const bu=DB.utilities.filter(u=>unitOf(u.unit)?.building===b.id);
-    const be=DB.expenses.filter(e=>(e.building||'b1')===b.id);
+    const bu=DB.utilities.filter(u=>unitOf(u.unit)?.building===b.id && inPer(u));
+    const be=DB.expenses.filter(e=>(e.building||'b1')===b.id && inPer(e));
     const tot=bu.reduce((s,u)=>s+u.electricity+u.water+u.heating,0)+be.reduce((s,e)=>s+e.amount,0);
     const body=`<div class="grid" style="grid-template-columns:1.2fr 1fr">
       <div><div class="sec-h" style="margin-top:0">Коммунальные начисления</div>${utilTable(bu)}</div>
@@ -618,7 +625,7 @@ function utilities(){
     ${be.length?`<div class="sec-h">Структура расходов на содержание</div><canvas id="chExp-${b.id}" height="${Math.max(80,be.length*28)}"></canvas>`:''}`;
     return collapseCard('util-'+b.id, buildingHeader(b, `затраты ${money(tot)}`), body, false);
   }).join('') || '<div class="card"><div class="empty">Объекты не найдены</div></div>';
-  bs.forEach(b=>{const be=DB.expenses.filter(e=>(e.building||'b1')===b.id);const cv=document.getElementById('chExp-'+b.id);
+  bs.forEach(b=>{const be=DB.expenses.filter(e=>(e.building||'b1')===b.id && inPer(e));const cv=document.getElementById('chExp-'+b.id);
     if(cv&&be.length){ chartFactories['chExp-'+b.id]=()=>new Chart(cv,{type:'bar',data:{labels:be.map(e=>e.category),datasets:[{data:be.map(e=>e.amount),backgroundColor:cssVar('--violet'),borderRadius:6}]},
       options:{indexAxis:'y',plugins:{legend:{display:false}},scales:{x:{grid:{color:cssVar('--chart-grid')},ticks:{color:cssVar('--muted')}},y:{grid:{display:false},ticks:{color:cssVar('--muted')}}}}});
       if(cv.offsetParent!==null) chartFactories['chExp-'+b.id](); }});
@@ -859,9 +866,9 @@ function expenseModal(){const def=SCOPE!=='all'?SCOPE:(buildingsList()[0]||{}).i
   openM(`<div class="modal-h"><h3>Новый расход</h3><span class="x" onclick="closeM()">×</span></div>
   <div class="modal-b"><div class="field"><label>Объект</label><select id="f-ebuilding">${buildingsList().map(b=>`<option value="${b.id}"${b.id===def?' selected':''}>${esc(b.name)}</option>`).join('')}</select></div>
   <div class="row2"><div class="field"><label>Категория</label><input id="f-cat" placeholder="Клининг"></div><div class="field"><label>Сумма</label><input id="f-amt" type="number"></div></div>
-  <div class="field"><label>Подрядчик</label><input id="f-vendor"></div></div>
+  <div class="row2"><div class="field"><label>Подрядчик</label><input id="f-vendor"></div><div class="field"><label>Период</label><input id="f-eperiod" type="month" value="${utilPeriod||'2026-06'}"></div></div></div>
   <div class="modal-f"><button class="btn ghost" onclick="closeM()">Отмена</button><button class="btn" onclick="saveExpense()">Добавить</button></div>`);}
-async function saveExpense(){DB.expenses.push({id:'e'+Date.now(),building:val('f-ebuilding'),category:val('f-cat'),vendor:val('f-vendor'),period:'2026-06',amount:+val('f-amt'),status:'planned'});closeM();await afterStateChange();}
+async function saveExpense(){DB.expenses.push({id:'e'+Date.now(),building:val('f-ebuilding'),category:val('f-cat'),vendor:val('f-vendor'),period:val('f-eperiod')||'2026-06',amount:+val('f-amt'),status:'planned'});closeM();await afterStateChange();}
 
 /* задача */
 function taskModal(id){
@@ -926,7 +933,29 @@ async function saveUser(id){
 }
 
 /* info-модалки */
-function docIcon(t){return {plan:'📐',contract:'📄',ownership:'🏷️',owner:'👥',act:'🧾',other:'📎'}[t]||'📎';}
+const DOC_TYPES={plan:'План помещения',contract:'Договор аренды',ownership:'Право собственности / ЕГРН',act:'Акт приёма-передачи',sale:'Договор купли-продажи',owner:'Документы собственника',req:'Реквизиты / уставные',other:'Прочее'};
+function docIcon(t){return {plan:'📐',contract:'📄',ownership:'🏷️',act:'🧾',sale:'📑',owner:'👥',req:'📋',other:'📎'}[t]||'📎';}
+function docEntity(type,id){return type==='unit'?unitOf(id):tenantOf(id);}
+function backToInfo(type,id){return type==='unit'?`unitInfo('${id}')`:`tenantInfo('${id}')`;}
+function canEditDocs(type){return type==='unit'?canEdit('objects'):canEdit('tenants');}
+function docsBlock(type,id,docs){
+  return `<div class="sec-h">Связанные документы ${canEditDocs(type)?`<button class="btn sm" onclick="addDocModal('${type}','${id}')">+ Документ</button>`:''}</div>
+  ${(docs&&docs.length)?docs.map((d,i)=>`<div class="doc"><div class="di">${docIcon(d.type)}</div>
+    <div style="flex:1;min-width:0"><div class="t-strong" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(d.name)}</div><div class="t-sub">${esc(d.kind||DOC_TYPES[d.type]||'')}${d.date?' · '+fmtD(d.date):''}</div></div>
+    <button class="btn ghost sm" onclick="openDoc('${type}','${id}',${i})">Открыть</button>
+    ${canEditDocs(type)?`<span class="trash" onclick="delDoc('${type}','${id}',${i})" title="Удалить">🗑</span>`:''}</div>`).join(''):'<div class="empty" style="padding:16px">Документы не прикреплены</div>'}`;
+}
+function openDoc(type,id,i){const e=docEntity(type,id);const d=e.documents[i];if(d.url){window.open(d.url,'_blank');}else{alert('Документ: '+d.name+'\nТип: '+(d.kind||DOC_TYPES[d.type]||d.type)+'\n\nВ рабочей версии откроется прикреплённый файл. В демо можно указать ссылку/путь при добавлении документа.');}}
+function addDocModal(type,id){openM(`<div class="modal-h"><h3>Добавить документ</h3><span class="x" onclick="${backToInfo(type,id)}">×</span></div>
+  <div class="modal-b"><div class="field"><label>Название файла</label><input id="d-name" placeholder="Договор_аренды.pdf"></div>
+  <div class="row2"><div class="field"><label>Тип документа</label><select id="d-type">${Object.entries(DOC_TYPES).map(([k,v])=>`<option value="${k}">${v}</option>`).join('')}</select></div><div class="field"><label>Дата</label><input id="d-date" type="date"></div></div>
+  <div class="field"><label>Ссылка / путь к файлу (необязательно)</label><input id="d-url" placeholder="https://… или /путь/к/файлу"></div></div>
+  <div class="modal-f"><button class="btn ghost" onclick="${backToInfo(type,id)}">Отмена</button><button class="btn" onclick="saveDoc('${type}','${id}')">Прикрепить</button></div>`);}
+async function saveDoc(type,id){const e=docEntity(type,id);if(!e)return;if(!e.documents)e.documents=[];
+  e.documents.push({name:val('d-name')||'Документ.pdf',type:val('d-type'),kind:DOC_TYPES[val('d-type')],date:val('d-date')||null,url:val('d-url')||null});
+  await saveState(); render(); (type==='unit'?unitInfo:tenantInfo)(id);}
+async function delDoc(type,id,i){const e=docEntity(type,id);if(!e||!e.documents)return;if(!confirm('Удалить документ «'+e.documents[i].name+'»?'))return;
+  e.documents.splice(i,1); await saveState(); render(); (type==='unit'?unitInfo:tenantInfo)(id);}
 function unitInfo(id){const u=unitOf(id);const c=DB.contracts.find(c=>c.unit===id);const t=u.tenant?tenantOf(u.tenant):null;const r=u.responsible||{};
   openM(`<div class="modal-h"><h3>Помещение ${u.id}</h3><span class="x" onclick="closeM()">×</span></div>
   <div class="modal-b">
@@ -937,8 +966,7 @@ function unitInfo(id){const u=unitOf(id);const c=DB.contracts.find(c=>c.unit===i
     ${u.ownership==='sold'&&u.owner?`<div class="sec-h">Собственник помещения</div>${infoRow('Собственник',esc(u.owner.name))}${infoRow('ИНН / реквизиты',u.owner.inn||'—')}${infoRow('Контакт',esc(u.owner.contact||'—'))}`:''}
     <div class="sec-h">Ответственное лицо</div>
     ${infoRow('ФИО',esc(r.name||'—'))}${r.role?infoRow('Должность',esc(r.role)):''}${infoRow('Телефон',r.phone||'—')}${infoRow('Email',esc(r.email||'—'))}
-    <div class="sec-h">Связанные документы</div>
-    ${(u.documents&&u.documents.length)?u.documents.map(d=>`<div class="doc"><div class="di">${docIcon(d.type)}</div><div style="flex:1;min-width:0"><div class="t-strong" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(d.name)}</div><div class="t-sub">${esc(d.kind||'')}</div></div></div>`).join(''):'<div class="empty" style="padding:16px">Документы не прикреплены</div>'}
+    ${docsBlock('unit',u.id,u.documents)}
   </div>
   <div class="modal-f">${canEdit('objects')?`<button class="btn ghost" onclick="editUnitModal('${u.id}')">✎ Редактировать</button><button class="btn danger" onclick="delUnit('${u.id}')">Удалить</button>`:''}<button class="btn" onclick="closeM()">Закрыть</button></div>`);}
 
@@ -981,7 +1009,8 @@ async function delUnit(id){const u=unitOf(id);if(!u)return;
 function tenantInfo(id){const t=tenantOf(id);const c=DB.contracts.find(c=>c.tenant===id);const u=c?unitOf(c.unit):null;
   openM(`<div class="modal-h"><h3>${esc(t.name)}</h3><span class="x" onclick="closeM()">×</span></div>
   <div class="modal-b">${infoRow('Контакт',esc(t.contact))}${infoRow('Телефон',t.phone)}${infoRow('Email',esc(t.email))}${infoRow('ИНН',t.inn)}${infoRow('Отрасль',esc(t.industry))}
-  ${c?infoRow('Объект',esc(buildingOf(u?.building)?.name||'—'))+infoRow('Помещение',c.unit)+infoRow('Аренда/мес',money(monthlyRent(c)))+infoRow('Договор',fmtD(c.start)+' — '+fmtD(c.end)):infoRow('Размещение','не размещён в помещении')}</div>
+  ${c?infoRow('Объект',esc(buildingOf(u?.building)?.name||'—'))+infoRow('Помещение',c.unit)+infoRow('Аренда/мес',money(monthlyRent(c)))+infoRow('Договор',fmtD(c.start)+' — '+fmtD(c.end)):infoRow('Размещение','не размещён в помещении')}
+  ${docsBlock('tenant',id,t.documents)}</div>
   <div class="modal-f">${canEdit('tenants')?`<button class="btn ghost" onclick="editTenantModal('${id}')">✎ Редактировать</button><button class="btn danger" onclick="delTenant('${id}')">Удалить</button>`:''}<button class="btn" onclick="closeM()">Закрыть</button></div>`);}
 function editTenantModal(id){const t=tenantOf(id);if(!t)return;
   openM(`<div class="modal-h"><h3>Редактировать арендатора</h3><span class="x" onclick="closeM()">×</span></div>
