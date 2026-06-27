@@ -101,9 +101,15 @@ function myReminders(){
   }catch{ showAuth('login'); }
 })();
 
+function ensureState(){
+  if(!DB) return;
+  if(!Array.isArray(DB.salaries)) DB.salaries=[];
+  if(!DB.integrations) DB.integrations={bank:{connected:false,name:'',lastSync:null},energy:{connected:false,lastSync:null},water:{connected:false,lastSync:null}};
+}
 async function loadData(){
   const b = await api('/api/bootstrap');
   ME=b.user; ROLES=b.roles; DB=b.state; TASKS=b.tasks; USERS=b.users;
+  ensureState();
 }
 
 /* ============================================================
@@ -178,8 +184,9 @@ async function logout(){ try{await api('/api/auth/logout','POST');}catch{} stopP
 const NAV=[
   {group:'Обзор',items:[['dashboard','▦','Дашборд']]},
   {group:'Управление',items:[['objects','🏢','Объекты и занятость'],['tenants','👥','Арендаторы'],['contracts','📄','Договоры']]},
-  {group:'Финансы',items:[['payments','💳','Платежи аренды'],['utilities','⚡','Коммуналка и расходы']]},
+  {group:'Финансы',items:[['payments','💳','Платежи аренды'],['utilities','⚡','Коммуналка и расходы'],['salaries','💼','Зарплата (ФОТ)']]},
   {group:'Операции',items:[['tasks','✓','Задачи'],['employees','🧑‍💼','Сотрудники'],['reports','📊','Отчёты']]},
+  {group:'Интеграции',items:[['integrations','🔗','Синхронизация']]},
 ];
 const PAGE_TITLES={dashboard:'Дашборд',objects:'Объекты',tenants:'Арендаторы',contracts:'Договоры',payments:'Платежи',utilities:'Коммуналка',tasks:'Задачи',employees:'Сотрудники',reports:'Отчёты'};
 
@@ -223,7 +230,7 @@ function renderScopeSelector(){
   </select>`;
 }
 
-const PAGES={dashboard,objects,tenants,contracts,payments,utilities,tasks,employees,reports};
+const PAGES={dashboard,objects,tenants,contracts,payments,utilities,salaries,tasks,employees,reports,integrations};
 function render(){ updateBadges(); const m=document.getElementById('main'); if(!m)return; m.innerHTML=''; (PAGES[current]||dashboard)(); }
 function el(html){ const d=document.createElement('div'); d.className='page'; d.innerHTML=html; document.getElementById('main').appendChild(d); return d; }
 function head(title,sub,actions=''){ return `<div class="topbar"><div><h1>${title}</h1><div class="sub">${sub}</div></div><div class="spacer"></div>${actions}${bellHTML()}</div>`; }
@@ -267,9 +274,9 @@ async function silentRefresh(){
   if(!ME) return;
   if(document.getElementById('modalBg').classList.contains('show')) return; // не мешаем вводу
   try{
-    const b=await api('/api/bootstrap'); DB=b.state; TASKS=b.tasks; USERS=b.users; ROLES=b.roles;
+    const b=await api('/api/bootstrap'); DB=b.state; TASKS=b.tasks; USERS=b.users; ROLES=b.roles; ensureState();
     updateBadges();
-    if(['dashboard','tasks','employees','payments'].includes(current)) render();
+    if(['dashboard','tasks','employees','payments','salaries','integrations'].includes(current)) render();
     else { const bell=document.querySelector('.topbar .bell'); /* обновим только бейдж колокольчика */ }
   }catch{}
 }
@@ -762,6 +769,103 @@ function exportCSV(){
 }
 async function resetDemo(){ if(!confirm('Сбросить все данные (помещения, договоры, платежи, задачи) к демо? Пользователи сохранятся.'))return;
   try{ await api('/api/reset','POST'); await loadData(); render(); }catch(e){alert(e.message);} }
+
+/* ============================================================
+   ЗАРПЛАТА (ФОТ)
+   ============================================================ */
+let salPeriod='2026-06';
+function salPill(r){ return r.paid>=r.amount?'<span class="pill green">Выплачено</span>':(r.paid>0?'<span class="pill amber">Частично</span>':'<span class="pill blue">Начислено</span>'); }
+function salaries(){
+  const recs=(DB.salaries||[]).filter(s=>s.period===salPeriod);
+  const accrued=recs.reduce((s,x)=>s+x.amount,0), paid=recs.reduce((s,x)=>s+x.paid,0);
+  const pers=[...new Set((DB.salaries||[]).map(s=>s.period))].sort().reverse(); if(!pers.includes(salPeriod))pers.unshift(salPeriod);
+  el(head('Зарплата (ФОТ)',`${fmtPeriod(salPeriod)} · ${USERS.length} сотрудников`, canEdit('salaries')?`<button class="btn" onclick="bulkAccrue()">Начислить всем</button>`:'')+
+   `<div class="toolbar"><span class="t-sub">Период:</span><select class="search" style="width:auto;min-width:160px" onchange="salPeriod=this.value;render()">${pers.map(p=>`<option value="${p}"${p===salPeriod?' selected':''}>${fmtPeriod(p)}</option>`).join('')}</select></div>
+   <div class="grid" style="grid-template-columns:repeat(3,1fr);margin-bottom:18px">
+     ${miniStat('ФОТ начислено',money(accrued),'violet')}${miniStat('Выплачено',money(paid),'green')}${miniStat('К выплате',money(accrued-paid),'red')}
+   </div>
+   <div class="card" style="padding:0"><div style="overflow-x:auto"><table><thead><tr><th>Сотрудник</th><th>Должность</th><th>Начислено</th><th>Выплачено</th><th>Статус</th>${canEdit('salaries')?'<th></th>':''}</tr></thead><tbody>
+   ${USERS.map(u=>{const rec=recs.find(s=>s.user_id===u.id);
+     return `<tr><td class="t-strong">${esc(u.full_name)}</td><td class="t-sub">${esc(u.position||'—')}</td>
+     <td>${rec?money(rec.amount):'<span class="t-sub">не начислено</span>'}</td>
+     <td>${rec&&rec.paid?money(rec.paid):'—'}</td><td>${rec?salPill(rec):'<span class="pill gray">—</span>'}</td>
+     ${canEdit('salaries')?`<td style="text-align:right;white-space:nowrap">${rec?(rec.paid<rec.amount?`<button class="btn sm" onclick="salPayModal('${rec.id}')">Выплатить</button>`:'<span class="t-sub">выплачено</span>'):`<button class="btn ghost sm" onclick="salaryModal(${u.id})">Начислить</button>`}</td>`:''}</tr>`;}).join('')}
+   </tbody></table></div></div>`);
+}
+function salaryModal(uid){const u=userOf(uid);if(!u)return;
+  openM(`<div class="modal-h"><h3>Начислить зарплату</h3><span class="x" onclick="closeM()">×</span></div>
+  <div class="modal-b">${infoRow('Сотрудник',esc(u.full_name))}${infoRow('Должность',esc(u.position||'—'))}
+  <div class="row2" style="margin-top:12px"><div class="field"><label>Сумма, ₽</label><input id="s-amt" type="number" value="100000"></div><div class="field"><label>Период</label><input id="s-per" type="month" value="${salPeriod}"></div></div></div>
+  <div class="modal-f"><button class="btn ghost" onclick="closeM()">Отмена</button><button class="btn" onclick="saveSalary(${uid})">Начислить</button></div>`);}
+async function saveSalary(uid){const amt=+val('s-amt')||0;const per=val('s-per')||salPeriod;if(amt<=0)return alert('Укажите сумму');
+  if(!DB.salaries)DB.salaries=[];
+  if(DB.salaries.some(s=>s.user_id===uid&&s.period===per))return alert('За этот период сотруднику уже начислено');
+  DB.salaries.push({id:'sal'+Date.now(),user_id:uid,period:per,amount:amt,paid:0,status:'accrued',paidDate:null,method:null});
+  salPeriod=per; closeM(); await afterStateChange();}
+function salPayModal(id){const r=(DB.salaries||[]).find(s=>s.id===id);if(!r)return;const u=userOf(r.user_id);const rem=r.amount-r.paid;
+  openM(`<div class="modal-h"><h3>Выплата зарплаты</h3><span class="x" onclick="closeM()">×</span></div>
+  <div class="modal-b">${infoRow('Сотрудник',esc(u?u.full_name:''))}${infoRow('Период',fmtPeriod(r.period))}${infoRow('Начислено',money(r.amount))}${infoRow('Выплачено',money(r.paid))}${infoRow('Остаток',money(rem))}
+  <div class="row2" style="margin-top:12px"><div class="field"><label>Сумма выплаты, ₽</label><input id="sp-amt" type="number" value="${rem}"></div><div class="field"><label>Способ</label><select id="sp-method">${Object.entries(PAY_METHODS).map(([k,v])=>`<option value="${k}"${k==='bank'?' selected':''}>${v}</option>`).join('')}</select></div></div></div>
+  <div class="modal-f"><button class="btn ghost" onclick="closeM()">Отмена</button><button class="btn" onclick="saveSalPay('${id}')">Выплатить</button></div>`);}
+async function saveSalPay(id){const r=(DB.salaries||[]).find(s=>s.id===id);if(!r)return;const add=+val('sp-amt')||0;if(add<=0)return alert('Укажите сумму');
+  r.paid=Math.min(r.amount,r.paid+add);r.paidDate=TODAY.toISOString().slice(0,10);r.method=val('sp-method');r.status=r.paid>=r.amount?'paid':'partial';
+  closeM(); await afterStateChange();}
+async function bulkAccrue(){if(!confirm('Начислить зарплату всем сотрудникам за '+fmtPeriod(salPeriod)+'? (тем, у кого ещё не начислено за этот период)'))return;
+  if(!DB.salaries)DB.salaries=[];
+  USERS.forEach(u=>{ if(!DB.salaries.some(s=>s.user_id===u.id&&s.period===salPeriod)){ const last=[...DB.salaries].reverse().find(s=>s.user_id===u.id);
+    DB.salaries.push({id:'sal'+Date.now()+'_'+u.id,user_id:u.id,period:salPeriod,amount:last?last.amount:100000,paid:0,status:'accrued',paidDate:null,method:null}); }});
+  await afterStateChange();}
+
+/* ============================================================
+   ИНТЕГРАЦИИ / СИНХРОНИЗАЦИЯ
+   ============================================================ */
+function fmtDateTime(iso){ try{ return new Date(iso).toLocaleString('ru-RU',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}); }catch{ return iso; } }
+function integrations(){
+  const I=DB.integrations||{};
+  const unpaid=DB.payments.filter(p=>p.amount-p.paid>0); const unpaidSum=unpaid.reduce((s,p)=>s+(p.amount-p.paid),0);
+  el(head('Синхронизация и интеграции','Банк и поставщики коммунальных услуг','')+
+   `<div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(300px,1fr))">
+     ${intCard('bank','🏦','Банк','Автосверка платежей, импорт выписки',I.bank,`Непогашенных начислений аренды: <b>${unpaid.length}</b> на ${money(unpaidSum)}`)}
+     ${intCard('energy','⚡','Мособлэнергосбыт','Электроэнергия — приём начислений',I.energy,'Передача показаний и приём начислений за свет')}
+     ${intCard('water','💧','Водоканал','Вода и водоотведение — приём начислений',I.water,'Передача показаний и приём начислений за воду')}
+   </div>
+   <div class="card" style="margin-top:16px"><div class="t-sub">⚠️ Демонстрационные интеграции: подключение и синхронизация имитируются на тестовых данных приложения. В боевой версии подключаются реальные API банка и поставщиков (договор, ключи доступа, передача показаний счётчиков).</div></div>`);
+}
+function intCard(key,icon,title,desc,st,extra){ st=st||{};
+  return `<div class="card"><div style="display:flex;align-items:center;gap:12px;margin-bottom:10px">
+    <div class="kpi-ic" style="width:42px;height:42px;font-size:21px;background:rgba(79,140,255,.14);color:var(--accent2)">${icon}</div>
+    <div style="flex:1;min-width:0"><h3 style="font-size:15px">${title}</h3><div class="t-sub">${desc}</div></div>
+    ${st.connected?'<span class="pill green">Подключено</span>':'<span class="pill gray">Не подключено</span>'}</div>
+    <div class="t-sub" style="margin-bottom:12px">${extra}${st.name?` · ${esc(st.name)}`:''}${st.lastSync?`<br>Последняя синхронизация: ${fmtDateTime(st.lastSync)}`:''}</div>
+    ${canEdit('integrations')?`<div style="display:flex;gap:8px;flex-wrap:wrap">
+      ${st.connected?`<button class="btn" onclick="intSync('${key}')">↻ Синхронизировать</button><button class="btn ghost sm" onclick="intDisconnect('${key}')">Отключить</button>`
+        :`<button class="btn" onclick="intConnect('${key}')">Подключить</button>`}</div>`:'<div class="t-sub">Нет прав на управление интеграциями</div>'}
+  </div>`;
+}
+async function intConnect(key){ if(!DB.integrations)ensureState();
+  if(key==='bank'){ const name=prompt('Название банка (демо-подключение):','Сбер Бизнес'); if(name===null)return; DB.integrations.bank={connected:true,name,lastSync:null}; }
+  else { DB.integrations[key]={connected:true,lastSync:null}; }
+  await afterStateChange();
+}
+async function intDisconnect(key){ if(!confirm('Отключить интеграцию?'))return; DB.integrations[key]={...(DB.integrations[key]||{}),connected:false}; await afterStateChange(); }
+async function intSync(key){
+  const now=new Date().toISOString();
+  if(key==='bank'){
+    const unpaid=DB.payments.filter(p=>p.amount-p.paid>0); const sum=unpaid.reduce((s,p)=>s+(p.amount-p.paid),0);
+    if(!unpaid.length){ DB.integrations.bank={...DB.integrations.bank,lastSync:now}; await afterStateChange(); return alert('Синхронизация завершена. Новых поступлений для сверки нет.'); }
+    if(!confirm(`Из банковской выписки найдено ${unpaid.length} поступлений, совпадающих с начислениями аренды, на сумму ${money(sum)}.\n\nЗачесть их как оплаченные?`))return;
+    unpaid.forEach(p=>{ const add=p.amount-p.paid; p.paid=p.amount; p.status='paid'; p.paidDate=TODAY.toISOString().slice(0,10);
+      (p.transactions=p.transactions||[]).push({amount:add,date:p.paidDate,method:'bank',bank:true}); });
+    DB.integrations.bank={...DB.integrations.bank,lastSync:now};
+    await afterStateChange(); return alert(`Готово. Зачтено ${unpaid.length} поступлений на ${money(sum)}.`);
+  }
+  if(key==='energy'||key==='water'){
+    const field=key==='energy'?'electricity':'water'; let n=0;
+    DB.utilities.forEach(u=>{ if(u[field]){ if(u.status!=='paid') u.status='invoiced'; n++; } });
+    DB.integrations[key]={...DB.integrations[key],lastSync:now};
+    await afterStateChange(); return alert(`Синхронизация с ${key==='energy'?'Мособлэнергосбыт':'Водоканал'} завершена.\nПолучено/обновлено начислений: ${n}.`);
+  }
+}
 
 /* ============================================================
    МОДАЛКИ

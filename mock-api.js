@@ -1,11 +1,11 @@
 /* ---------- ВСТРОЕННЫЙ «БЭКЕНД» (автономный демо-режим, данные в localStorage браузера) ---------- */
 const SRM_KEY='srm_demo_db';
-const _ALL=['dashboard','objects','tenants','contracts','payments','utilities','tasks','reports','employees'];
+const _ALL=['dashboard','objects','tenants','contracts','payments','utilities','tasks','reports','employees','salaries','integrations'];
 const SRM_ROLES={
   admin:{title:'Администратор',view:_ALL,edit:_ALL},
   owner:{title:'Собственник / Руководитель',view:_ALL,edit:_ALL},
-  manager:{title:'Управляющий объектом',view:_ALL,edit:['dashboard','objects','tenants','contracts','payments','utilities','tasks','reports']},
-  accountant:{title:'Бухгалтер / Финансист',view:['dashboard','objects','tenants','contracts','payments','utilities','tasks','reports'],edit:['payments','utilities']},
+  manager:{title:'Управляющий объектом',view:_ALL,edit:['dashboard','objects','tenants','contracts','payments','utilities','tasks','reports','salaries','integrations']},
+  accountant:{title:'Бухгалтер / Финансист',view:['dashboard','objects','tenants','contracts','payments','utilities','tasks','reports','salaries','integrations'],edit:['payments','utilities','salaries','integrations']},
   leasing:{title:'Отдел аренды',view:['dashboard','objects','tenants','contracts','payments','tasks'],edit:['objects','tenants','contracts','tasks']},
   maintenance:{title:'Эксплуатация',view:['dashboard','objects','utilities','tasks'],edit:['utilities','tasks']},
 };
@@ -74,6 +74,15 @@ function srmBuildState(){
       {m:'Янв',income:3680,expense:1240},{m:'Фев',income:3720,expense:1180},{m:'Мар',income:3850,expense:1310},
       {m:'Апр',income:3910,expense:1260},{m:'Май',income:3980,expense:1290},{m:'Июн',income:4025,expense:1340},
     ],
+    salaries:[
+      {id:'sal1',user_id:1,period:'2026-06',amount:180000,paid:180000,status:'paid',paidDate:'2026-06-05',method:'bank'},
+      {id:'sal2',user_id:2,period:'2026-06',amount:250000,paid:250000,status:'paid',paidDate:'2026-06-05',method:'bank'},
+      {id:'sal3',user_id:3,period:'2026-06',amount:160000,paid:160000,status:'paid',paidDate:'2026-06-05',method:'bank'},
+      {id:'sal4',user_id:4,period:'2026-06',amount:120000,paid:0,status:'accrued',paidDate:null,method:null},
+      {id:'sal5',user_id:5,period:'2026-06',amount:140000,paid:140000,status:'paid',paidDate:'2026-06-05',method:'bank'},
+      {id:'sal6',user_id:6,period:'2026-06',amount:110000,paid:0,status:'accrued',paidDate:null,method:null},
+    ],
+    integrations:{ bank:{connected:false,name:'',lastSync:null}, energy:{connected:false,lastSync:null}, water:{connected:false,lastSync:null} },
   };
   const D2={
     building:{id:'b2',name:'Бизнес-парк «Север»',address:'г. Москва, ул. Складочная, 7',floors:3,totalArea:3200},

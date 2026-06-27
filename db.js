@@ -16,13 +16,13 @@ db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;');
 // view  — какие модули видны (read)
 // edit  — какие модули можно изменять (write)
 // Модули: dashboard, objects, tenants, contracts, payments, utilities, tasks, reports, employees
-const ALL = ['dashboard','objects','tenants','contracts','payments','utilities','tasks','reports','employees'];
+const ALL = ['dashboard','objects','tenants','contracts','payments','utilities','tasks','reports','employees','salaries','integrations'];
 
 export const ROLES = {
   admin:       { title:'Администратор',             view: ALL, edit: ALL },
   owner:       { title:'Собственник / Руководитель', view: ALL, edit: ALL },
-  manager:     { title:'Управляющий объектом',       view: ALL, edit: ['dashboard','objects','tenants','contracts','payments','utilities','tasks','reports'] },
-  accountant:  { title:'Бухгалтер / Финансист',      view: ['dashboard','objects','tenants','contracts','payments','utilities','tasks','reports'], edit: ['payments','utilities'] },
+  manager:     { title:'Управляющий объектом',       view: ALL, edit: ['dashboard','objects','tenants','contracts','payments','utilities','tasks','reports','salaries','integrations'] },
+  accountant:  { title:'Бухгалтер / Финансист',      view: ['dashboard','objects','tenants','contracts','payments','utilities','tasks','reports','salaries','integrations'], edit: ['payments','utilities','salaries','integrations'] },
   leasing:     { title:'Отдел аренды',               view: ['dashboard','objects','tenants','contracts','payments','tasks'], edit: ['objects','tenants','contracts','tasks'] },
   maintenance: { title:'Эксплуатация',               view: ['dashboard','objects','utilities','tasks'], edit: ['utilities','tasks'] },
 };
@@ -256,6 +256,15 @@ function buildSeedState(){
       {m:'Мар',income:3850,expense:1310},{m:'Апр',income:3910,expense:1260},
       {m:'Май',income:3980,expense:1290},{m:'Июн',income:4025,expense:1340},
     ],
+    salaries:[
+      {id:'sal1',user_id:1,period:'2026-06',amount:180000,paid:180000,status:'paid',paidDate:'2026-06-05',method:'bank'},
+      {id:'sal2',user_id:2,period:'2026-06',amount:250000,paid:250000,status:'paid',paidDate:'2026-06-05',method:'bank'},
+      {id:'sal3',user_id:3,period:'2026-06',amount:160000,paid:160000,status:'paid',paidDate:'2026-06-05',method:'bank'},
+      {id:'sal4',user_id:4,period:'2026-06',amount:120000,paid:0,status:'accrued',paidDate:null,method:null},
+      {id:'sal5',user_id:5,period:'2026-06',amount:140000,paid:140000,status:'paid',paidDate:'2026-06-05',method:'bank'},
+      {id:'sal6',user_id:6,period:'2026-06',amount:110000,paid:0,status:'accrued',paidDate:null,method:null},
+    ],
+    integrations:{ bank:{connected:false,name:'',lastSync:null}, energy:{connected:false,lastSync:null}, water:{connected:false,lastSync:null} },
   };
   // обогащение помещений: документы, форма владения, ответственное лицо
   const defaultDocs = u => {
