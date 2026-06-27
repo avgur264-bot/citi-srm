@@ -5,7 +5,7 @@
 // ============================================================
 import http from 'node:http';
 import { readFile } from 'node:fs/promises';
-import { createHmac, randomBytes } from 'node:crypto';
+import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, extname, normalize } from 'node:path';
 import {
@@ -42,7 +42,8 @@ function verifyToken(token){
   if(!token || !token.includes('.')) return null;
   const [body, sig] = token.split('.');
   const expect = createHmac('sha256', SECRET).update(body).digest('base64url');
-  if(sig !== expect) return null;
+  const a=Buffer.from(sig), e=Buffer.from(expect);
+  if(a.length!==e.length || !timingSafeEqual(a,e)) return null;
   try{
     const p = unb64(body);
     if(p.exp && Date.now() > p.exp) return null;
@@ -64,6 +65,20 @@ const publicUser = u => u && ({
   active:!!u.active, created_at:u.created_at,
   permissions: perms(u.role)
 });
+// проекция без контактов — для пользователей без доступа к разделу «Сотрудники»
+const liteUser = u => u && ({
+  id:u.id, full_name:u.full_name, position:u.position,
+  role:u.role, roleTitle:(ROLES[u.role]||{}).title, active:!!u.active,
+  permissions: perms(u.role)
+});
+// роли, которые можно выбрать при самостоятельной регистрации (без привилегированных)
+const SELF_ROLES = ['leasing','accountant','maintenance'];
+
+// простой лимит попыток входа (анти-брутфорс)
+const loginFails = new Map();
+function loginKey(req, email){ return (req.headers['x-forwarded-for']||req.socket.remoteAddress||'')+'|'+email; }
+function isLocked(key){ const r=loginFails.get(key); if(!r) return false; if(Date.now()-r.ts > 15*60*1000){ loginFails.delete(key); return false; } return r.count>=8; }
+function noteFail(key){ const r=loginFails.get(key)||{count:0,ts:0}; r.count++; r.ts=Date.now(); loginFails.set(key,r); }
 
 function parseCookies(req){
   const out={}; const h=req.headers.cookie; if(!h) return out;
@@ -87,9 +102,10 @@ function authUser(req){
   if(!p) return null;
   return db.prepare('SELECT * FROM users WHERE id=? AND active=1').get(p.uid) || null;
 }
-function setAuthCookie(res, uid){
+function setAuthCookie(req, res, uid){
   const token = signToken({ uid, exp: Date.now() + 7*864e5 });
-  res.setHeader('Set-Cookie', `srm_token=${token}; HttpOnly; Path=/; Max-Age=${7*86400}; SameSite=Lax`);
+  const secure = (req.headers['x-forwarded-proto']==='https') ? ' Secure;' : '';
+  res.setHeader('Set-Cookie', `srm_token=${token}; HttpOnly;${secure} Path=/; Max-Age=${7*86400}; SameSite=Lax`);
 }
 
 // ============================================================
@@ -106,19 +122,24 @@ async function api(req, res, url){
     const email=(b.email||'').trim().toLowerCase();
     if(!email || !b.password || !b.full_name) return send(res,400,{error:'Заполните email, пароль и ФИО'});
     if(db.prepare('SELECT 1 FROM users WHERE email=?').get(email)) return send(res,409,{error:'Пользователь с таким email уже существует'});
-    const role = ROLE_KEYS.includes(b.role) ? b.role : 'maintenance';
+    if(String(b.password).length < 6) return send(res,400,{error:'Пароль не короче 6 символов'});
+    // самостоятельно нельзя получить привилегированную роль — только админ назначает
+    const role = SELF_ROLES.includes(b.role) ? b.role : 'maintenance';
     const info = db.prepare(`INSERT INTO users(email,password,full_name,position,role,phone,active,created_at)
                              VALUES(?,?,?,?,?,?,1,?)`)
       .run(email, hashPassword(b.password), b.full_name.trim(), (b.position||'').trim(), role, (b.phone||'').trim(), new Date().toISOString());
-    setAuthCookie(res, info.lastInsertRowid);
+    setAuthCookie(req, res, info.lastInsertRowid);
     return send(res,200,{ user: publicUser(db.prepare('SELECT * FROM users WHERE id=?').get(info.lastInsertRowid)) });
   }
   if(path==='/api/auth/login' && method==='POST'){
     const b = await readBody(req);
     const email=(b.email||'').trim().toLowerCase();
+    const key = loginKey(req, email);
+    if(isLocked(key)) return send(res,429,{error:'Слишком много попыток. Попробуйте через 15 минут.'});
     const u = db.prepare('SELECT * FROM users WHERE email=?').get(email);
-    if(!u || !u.active || !verifyPassword(b.password||'', u.password)) return send(res,401,{error:'Неверный email или пароль'});
-    setAuthCookie(res, u.id);
+    if(!u || !u.active || !verifyPassword(b.password||'', u.password)){ noteFail(key); return send(res,401,{error:'Неверный email или пароль'}); }
+    loginFails.delete(key);
+    setAuthCookie(req, res, u.id);
     return send(res,200,{ user: publicUser(u) });
   }
   if(path==='/api/auth/logout' && method==='POST'){
@@ -135,7 +156,8 @@ async function api(req, res, url){
   if(path==='/api/bootstrap' && method==='GET'){
     const state = JSON.parse(db.prepare(`SELECT json FROM state WHERE key='main'`).get().json);
     const tasks = db.prepare(TASK_SELECT + ' ORDER BY t.id').all();
-    const users = db.prepare('SELECT * FROM users ORDER BY full_name').all().map(publicUser);
+    const proj = canView(me.role,'employees') ? publicUser : liteUser; // контакты — только кадровым ролям
+    const users = db.prepare('SELECT * FROM users ORDER BY full_name').all().map(proj);
     return send(res,200,{
       user: publicUser(me),
       roles: ROLES,

@@ -112,8 +112,7 @@ async function loadData(){
 function showAuth(mode='login'){
   ME=null;
   const roleOpts = Object.entries({
-    leasing:'Отдел аренды', accountant:'Бухгалтер / Финансист', maintenance:'Эксплуатация',
-    manager:'Управляющий объектом', owner:'Собственник / Руководитель', admin:'Администратор'
+    leasing:'Отдел аренды', accountant:'Бухгалтер / Финансист', maintenance:'Эксплуатация'
   }).map(([k,v])=>`<option value="${k}">${v}</option>`).join('');
 
   const login = `
@@ -449,9 +448,9 @@ function tenantRow(t){
   const c=DB.contracts.find(c=>c.tenant===t.id);
   const pay=c?DB.payments.find(p=>p.contract===c.id):null;
   const stp=pay?payPill(pay):'<span class="pill gray">—</span>';
-  return `<tr onclick="tenantInfo('${t.id}')" style="cursor:pointer"><td><div class="t-strong">${esc(t.name)}</div><div class="t-sub">ИНН ${t.inn}</div></td>
-    <td><div>${esc(t.contact)}</div><div class="t-sub">${t.phone}</div></td><td><span class="pill blue">${esc(t.industry)}</span></td>
-    <td>${c?c.unit:'—'}</td><td class="t-strong">${c?money(monthlyRent(c)):'—'}</td><td>${stp}</td></tr>`;
+  return `<tr onclick="tenantInfo('${t.id}')" style="cursor:pointer"><td><div class="t-strong">${esc(t.name)}</div><div class="t-sub">ИНН ${esc(t.inn)}</div></td>
+    <td><div>${esc(t.contact)}</div><div class="t-sub">${esc(t.phone)}</div></td><td><span class="pill blue">${esc(t.industry)}</span></td>
+    <td>${esc(c?c.unit:'—')}</td><td class="t-strong">${c?money(monthlyRent(c)):'—'}</td><td>${stp}</td></tr>`;
 }
 function renderTenants(){
   const q=(document.getElementById('tsearch')?.value||'').toLowerCase();
@@ -779,7 +778,7 @@ function unitModal(presetBuilding){const def=presetBuilding||(SCOPE!=='all'?SCOP
   <div class="row2"><div class="field"><label>Номер</label><input id="f-id" placeholder="3-03"></div><div class="field"><label>Этаж</label><input id="f-floor" type="number" value="1"></div></div>
   <div class="row2"><div class="field"><label>Площадь, м²</label><input id="f-area" type="number" value="100"></div><div class="field"><label>Тип</label><select id="f-type"><option>Офис</option><option>Ритейл</option><option>Кафе</option><option>Коворкинг</option><option>Склад</option></select></div></div></div>
   <div class="modal-f"><button class="btn ghost" onclick="closeM()">Отмена</button><button class="btn" onclick="saveUnit()">Добавить</button></div>`);}
-async function saveUnit(){const id=val('f-id').trim(); if(!id)return alert('Укажите номер');
+async function saveUnit(){const id=val('f-id').trim().replace(/[<>"'`&]/g,''); if(!id)return alert('Укажите номер');
   if(unitOf(id))return alert('Помещение с номером '+id+' уже существует');
   const u={id,building:val('f-building'),floor:+val('f-floor'),area:+val('f-area'),type:val('f-type'),tenant:null,status:'free',ownership:'own',owner:null,
     responsible:{name:ME.full_name,role:ME.position,phone:ME.phone,email:ME.email},
@@ -953,16 +952,22 @@ function docsBlock(type,id,docs){
     <button class="btn ghost sm" onclick="openDoc('${type}','${id}',${i})">Открыть</button>
     ${canEditDocs(type)?`<span class="trash" onclick="delDoc('${type}','${id}',${i})" title="Удалить">🗑</span>`:''}</div>`).join(''):'<div class="empty" style="padding:16px">Документы не прикреплены</div>'}`;
 }
+function downloadDoc(d){const a=document.createElement('a');a.href=d.url;a.download=d.name||'file';document.body.appendChild(a);a.click();a.remove();}
 function openDoc(type,id,i){const e=docEntity(type,id);const d=e.documents[i];
-  if(d.url&&d.url.startsWith('data:')){ // загруженный файл — открываем через blob (просмотр в новой вкладке)
-    fetch(d.url).then(r=>r.blob()).then(b=>{const u=URL.createObjectURL(b);window.open(u,'_blank');})
-      .catch(()=>{const a=document.createElement('a');a.href=d.url;a.download=d.name||'file';document.body.appendChild(a);a.click();a.remove();}); return; }
-  if(d.url){ window.open(d.url,'_blank'); return; }
+  if(d.url&&d.url.startsWith('data:')){ // загруженный файл
+    const mime=d.url.slice(5).split(/[;,]/)[0];
+    if(/^(application\/pdf|image\/(png|jpe?g|gif|webp))$/i.test(mime)){ // безопасно показать в новой вкладке
+      fetch(d.url).then(r=>r.blob()).then(b=>window.open(URL.createObjectURL(b),'_blank')).catch(()=>downloadDoc(d));
+    } else { downloadDoc(d); } // прочие типы — только скачивание (не выполняем в браузере)
+    return; }
+  if(d.url){ window.open(d.url,'_blank','noopener,noreferrer'); return; }
   alert('Документ «'+d.name+'»: файл не прикреплён и ссылка не указана. Откройте документ через «Редактировать» и приложите файл.');
 }
 let _docFile=null;
 function onDocFile(input){ _docFile=null; const f=input.files&&input.files[0]; if(!f)return;
   if(f.size>3*1024*1024){ alert('Файл больше 3 МБ — для демо это много. Выберите файл поменьше или укажите ссылку.'); input.value=''; return; }
+  if(/(html|svg|xml|xhtml|javascript)/i.test(f.type) || /\.(html?|svg|xml|xhtml|js|mjs)$/i.test(f.name)){
+    alert('Файлы HTML/SVG/скрипты загружать нельзя из соображений безопасности. Используйте PDF, изображение или офисный документ.'); input.value=''; return; }
   const nm=document.getElementById('d-name'); if(nm&&!nm.value) nm.value=f.name;
   const r=new FileReader(); r.onload=()=>{ _docFile={name:f.name,data:r.result}; }; r.readAsDataURL(f);
 }
@@ -1034,7 +1039,7 @@ async function delUnit(id){const u=unitOf(id);if(!u)return;
 
 function tenantInfo(id){const t=tenantOf(id);const c=DB.contracts.find(c=>c.tenant===id);const u=c?unitOf(c.unit):null;
   openM(`<div class="modal-h"><h3>${esc(t.name)}</h3><span class="x" onclick="closeM()">×</span></div>
-  <div class="modal-b">${infoRow('Контакт',esc(t.contact))}${infoRow('Телефон',t.phone)}${infoRow('Email',esc(t.email))}${infoRow('ИНН',t.inn)}${infoRow('Отрасль',esc(t.industry))}
+  <div class="modal-b">${infoRow('Контакт',esc(t.contact))}${infoRow('Телефон',esc(t.phone))}${infoRow('Email',esc(t.email))}${infoRow('ИНН',esc(t.inn))}${infoRow('Отрасль',esc(t.industry))}
   ${c?infoRow('Объект',esc(buildingOf(u?.building)?.name||'—'))+infoRow('Помещение',c.unit)+infoRow('Аренда/мес',money(monthlyRent(c)))+infoRow('Договор',fmtD(c.start)+' — '+fmtD(c.end)):infoRow('Размещение','не размещён в помещении')}
   ${docsBlock('tenant',id,t.documents)}</div>
   <div class="modal-f">${canEdit('tenants')?`<button class="btn ghost" onclick="editTenantModal('${id}')">✎ Редактировать</button><button class="btn danger" onclick="delTenant('${id}')">Удалить</button>`:''}<button class="btn" onclick="closeM()">Закрыть</button></div>`);}
