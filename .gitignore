@@ -7,3 +7,6 @@ srm.db-shm
 node_modules/
 npm-debug.log*
 .DS_Store
+
+# автономный демо-билд (генерируется build-standalone.mjs)
+srm-demo.html
