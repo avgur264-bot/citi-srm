@@ -264,7 +264,7 @@ function buildSeedState(){
       {id:'sal5',user_id:5,period:'2026-06',amount:140000,paid:140000,status:'paid',paidDate:'2026-06-05',method:'bank'},
       {id:'sal6',user_id:6,period:'2026-06',amount:110000,paid:0,status:'accrued',paidDate:null,method:null},
     ],
-    integrations:{ bank:{connected:false,name:'',lastSync:null}, energy:{connected:false,lastSync:null}, water:{connected:false,lastSync:null} },
+    integrations:{ bank:{connected:false,name:'',lastSync:null}, energy:{connected:false,lastSync:null}, water:{connected:false,lastSync:null}, onec:{connected:false,base:'',lastSync:null} },
   };
   // обогащение помещений: документы, форма владения, ответственное лицо
   const defaultDocs = u => {
