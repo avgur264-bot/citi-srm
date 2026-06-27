@@ -491,28 +491,85 @@ function payments(){
     return collapseCard('pay-'+b.id, buildingHeader(b, `${ps.length} плат.${bd>0?' · долг '+money(bd):''}`), body, false);
   }).join('') || '<div class="card"><div class="empty">Объекты не найдены</div></div>';
 }
-function paymentRow(p){const c=contractOf(p.contract);const t=tenantOf(c.tenant);
+const PAY_METHODS={cash:'Наличные',bank:'Безналичный',card:'Карта',transfer:'Перевод'};
+function pTx(p){ if(p.transactions&&p.transactions.length) return p.transactions; if(p.paid>0) return [{amount:p.paid,date:p.paidDate||p.due,method:'bank',legacy:true}]; return []; }
+function paymentRow(p){const c=contractOf(p.contract);const t=tenantOf(c.tenant);const bal=p.amount-p.paid;
   return `<tr><td class="t-strong">${esc(t.name)}</td><td>${c.unit}</td><td>${p.period}</td><td>${money(p.amount)}</td>
     <td>${p.paid?money(p.paid):'—'}</td><td class="t-sub">${fmtD(p.due)}</td><td>${payPill(p)}</td>
-    <td style="text-align:right">${(p.amount-p.paid>0&&canEdit('payments'))?`<button class="btn sm" onclick="payModal('${p.id}')">Внести оплату</button>`:'<span class="t-sub">оплачен</span>'}</td></tr>`;
+    <td style="text-align:right;white-space:nowrap">
+      <button class="btn ghost sm" title="Открыть / история" onclick="payModal('${p.id}')">${bal>0?'Оплата':'⋯'}</button>
+      ${p.paid>0?`<button class="btn ghost sm" title="Печать квитанции" onclick="printReceipt('${p.id}')">🖶</button>`:''}
+    </td></tr>`;
 }
 function payPill(p){const m={paid:['green','Оплачен'],overdue:['red','Просрочен'],partial:['amber','Частично'],pending:['blue','Ожидание']};const x=m[p.status]||['gray','—'];return `<span class="pill ${x[0]}">${x[1]}</span>`;}
-function payModal(id){const p=DB.payments.find(x=>x.id===id);if(!p)return;const c=contractOf(p.contract);const t=tenantOf(c.tenant);const rem=p.amount-p.paid;
-  openM(`<div class="modal-h"><h3>Внести оплату</h3><span class="x" onclick="closeM()">×</span></div>
+function payModal(id){const p=DB.payments.find(x=>x.id===id);if(!p)return;const c=contractOf(p.contract);const t=tenantOf(c.tenant);const rem=p.amount-p.paid;const tx=pTx(p);const editable=rem>0&&canEdit('payments');
+  openM(`<div class="modal-h"><h3>Оплата · ${p.period}</h3><span class="x" onclick="closeM()">×</span></div>
   <div class="modal-b">
-    ${infoRow('Арендатор',esc(t.name))}${infoRow('Помещение',c.unit)}${infoRow('Период',p.period)}
-    ${infoRow('Начислено',money(p.amount))}${infoRow('Уже оплачено',money(p.paid))}${infoRow('Остаток к оплате',`<span style="color:var(--red)">${money(rem)}</span>`)}
-    <div class="row2" style="margin-top:14px"><div class="field"><label>Сумма оплаты, ₽</label><input id="pay-amt" type="number" value="${rem}"></div>
-      <div class="field"><label>Дата оплаты</label><input id="pay-date" type="date" value="${TODAY.toISOString().slice(0,10)}"></div></div>
-    <div class="t-sub">Можно внести частично — статус обновится автоматически (Частично / Оплачен).</div>
+    ${infoRow('Арендатор',esc(t.name))}${infoRow('Помещение',c.unit)}
+    ${infoRow('Начислено',money(p.amount))}${infoRow('Оплачено',money(p.paid))}${infoRow('Остаток',rem>0?`<span style="color:var(--red)">${money(rem)}</span>`:'<span style="color:var(--green)">0 ₽</span>')}
+    <div class="sec-h">История платежей <button class="btn ghost sm" ${p.paid>0?'':'disabled'} onclick="printReceipt('${p.id}')">🖶 Квитанция (итог)</button></div>
+    ${tx.length?tx.map((x,i)=>`<div class="doc"><div class="di">💳</div><div style="flex:1;min-width:0"><div class="t-strong">${money(x.amount)} · ${PAY_METHODS[x.method]||x.method}</div><div class="t-sub">${x.date?fmtD(x.date):'—'}</div></div><button class="btn ghost sm" onclick="printReceipt('${p.id}',${i})">🖶</button></div>`).join(''):'<div class="empty" style="padding:14px">Оплат ещё не было</div>'}
+    ${editable?`<div class="sec-h">Внести оплату</div>
+    <div class="row2"><div class="field"><label>Сумма, ₽</label><input id="pay-amt" type="number" value="${rem}"></div>
+      <div class="field"><label>Дата</label><input id="pay-date" type="date" value="${TODAY.toISOString().slice(0,10)}"></div></div>
+    <div class="field"><label>Способ оплаты</label><select id="pay-method">${Object.entries(PAY_METHODS).map(([k,v])=>`<option value="${k}"${k==='bank'?' selected':''}>${v}</option>`).join('')}</select></div>
+    <div class="t-sub">Можно внести частично — статус обновится автоматически (Частично / Оплачен).</div>`:''}
   </div>
-  <div class="modal-f"><button class="btn ghost" onclick="closeM()">Отмена</button><button class="btn" onclick="savePay('${id}')">Зачесть оплату</button></div>`);}
+  <div class="modal-f">${editable?`<button class="btn ghost" onclick="closeM()">Отмена</button><button class="btn" onclick="savePay('${id}')">Зачесть оплату</button>`:'<button class="btn" onclick="closeM()">Закрыть</button>'}</div>`);}
 async function savePay(id){const p=DB.payments.find(x=>x.id===id);if(!p)return;
   const add=+val('pay-amt')||0; if(add<=0)return alert('Укажите сумму оплаты');
-  p.paid=Math.min(p.amount,(p.paid||0)+add);
+  if(!p.transactions||!p.transactions.length){ p.transactions = p.paid>0?[{amount:p.paid,date:p.paidDate||p.due,method:'bank'}]:[]; }
+  p.transactions.push({amount:add,date:val('pay-date')||TODAY.toISOString().slice(0,10),method:val('pay-method')||'bank'});
+  p.paid=Math.min(p.amount,p.transactions.reduce((s,x)=>s+x.amount,0));
   p.paidDate=val('pay-date')||TODAY.toISOString().slice(0,10);
   p.status = p.paid>=p.amount?'paid':(p.paid>0?'partial':(daysLeft(p.due)<0?'overdue':'pending'));
   closeM(); await afterStateChange();}
+function printReceipt(pid, txIndex){
+  const p=DB.payments.find(x=>x.id===pid);if(!p)return;
+  const c=contractOf(p.contract);const t=tenantOf(c.tenant);const u=unitOf(c.unit);const b=buildingOf(u&&u.building);
+  const tx=pTx(p); const x=(txIndex!=null&&tx[txIndex])?tx[txIndex]:(tx.length?tx[tx.length-1]:{amount:p.paid,date:p.paidDate,method:'bank'});
+  const rem=Math.max(0,p.amount-p.paid);
+  const num=(''+pid).toUpperCase()+'-'+((txIndex!=null?txIndex:Math.max(0,tx.length-1))+1);
+  const row=(k,v,cls='')=>`<div class="row ${cls}"><span>${k}</span><b>${v}</b></div>`;
+  const html=`<!DOCTYPE html><html lang="ru"><head><meta charset="utf-8"><title>Квитанция ${num}</title>
+  <style>*{font-family:Arial,Helvetica,sans-serif;box-sizing:border-box}body{margin:0;padding:20px;color:#13233F}
+  .rcpt{max-width:380px;margin:0 auto}.logo{width:56px;height:56px;border-radius:13px;overflow:hidden;margin:0 auto 8px}.logo svg{width:100%;height:100%;display:block}
+  .rh{text-align:center;font-weight:800;font-size:18px}.rh small{display:block;font-weight:400;font-size:10px;color:#5F6D82;letter-spacing:.5px;margin-top:2px}
+  h2{text-align:center;font-size:14px;margin:14px 0 12px}
+  .row{display:flex;justify-content:space-between;gap:12px;padding:5px 0;font-size:12.5px}.row span{color:#5F6D82}.row b{text-align:right}
+  .row.big b{font-size:17px;color:#10b07f}hr{border:none;border-top:1px dashed #c5d0e0;margin:10px 0}
+  .sign{margin-top:24px;font-size:12px;display:flex;justify-content:space-between;align-items:flex-end}.sign .nm{color:#5F6D82;font-size:11px}
+  .ft{margin-top:18px;text-align:center;font-size:10px;color:#9099ab}
+  @media print{body{padding:0}.noprint{display:none}}
+  .pbtn{display:block;margin:18px auto 0;padding:9px 16px;border:none;border-radius:8px;background:#3b6fe0;color:#fff;font-weight:600;cursor:pointer}</style></head>
+  <body>
+   <div class="rcpt">
+    <div class="logo">${LOGO_SVG}</div>
+    <div class="rh">СИТИ SRM<small>СИСТЕМА УПРАВЛЕНИЯ КОММЕРЧЕСКОЙ НЕДВИЖИМОСТЬЮ</small></div>
+    <h2>Квитанция об оплате № ${num}</h2>
+    ${row('Дата платежа',x.date?fmtD(x.date):'—')}
+    ${row('Объект',esc(b&&b.name||'—'))}
+    ${row('Адрес',esc(b&&b.address||'—'))}
+    ${row('Помещение',c.unit)}
+    ${row('Арендатор',esc(t.name))}
+    ${row('ИНН',t.inn||'—')}
+    ${row('Назначение','Аренда за '+p.period)}
+    <hr>
+    ${row('Сумма платежа',money(x.amount),'big')}
+    ${row('Способ оплаты',PAY_METHODS[x.method]||x.method)}
+    <hr>
+    ${row('Начислено за период',money(p.amount))}
+    ${row('Оплачено всего',money(p.paid))}
+    ${row('Остаток',money(rem))}
+    <div class="sign"><div>Принял: ____________</div><div class="nm">${esc((ME&&ME.full_name)||'')}</div></div>
+    <div class="ft">Сформировано в СИТИ SRM · ${fmtD(TODAY.toISOString().slice(0,10))}</div>
+    <button class="pbtn noprint" onclick="window.print()">🖶 Печать / Сохранить в PDF</button>
+   </div>
+  </body></html>`;
+  const w=window.open('','_blank','width=440,height=720');
+  if(!w){alert('Разрешите всплывающие окна, чтобы открыть квитанцию');return;}
+  w.document.open(); w.document.write(html); w.document.close();
+}
 
 /* ============================================================
    КОММУНАЛКА И РАСХОДЫ
