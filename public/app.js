@@ -70,7 +70,7 @@ const sPayments=()=>DB.payments.filter(p=>{const c=contractOf(p.contract);return
 const sUtilities=()=>DB.utilities.filter(x=>unitInScope(x.unit));
 const sExpenses=()=>DB.expenses.filter(e=>SCOPE==='all'||e.building===SCOPE);
 const sTenants=()=>SCOPE==='all'?DB.tenants:DB.tenants.filter(t=>DB.contracts.some(c=>c.tenant===t.id&&unitInScope(c.unit)));
-function setScope(v){ SCOPE=v; localStorage.setItem('citi_srm_scope',v); render(); }
+function setScope(v){ SCOPE=v; localStorage.setItem('citi_srm_scope',v); render(); closeNav(); }
 function scopeSub(){ if(SCOPE==='all'){const a=sUnits().reduce((s,u)=>s+u.area,0);return `Все объекты: ${buildingsList().length} · ${fmt(a)} м²`;} const b=buildingOf(SCOPE);return b?`${b.name} · ${b.address}`:'Объект'; }
 
 function metrics(){
@@ -190,7 +190,7 @@ function showApp(){
   const initials=(ME.full_name||'?').split(' ').map(s=>s[0]).slice(0,2).join('').toUpperCase();
   document.getElementById('root').innerHTML=`
   <div class="app">
-    <aside class="sidebar">
+    <aside class="sidebar" id="sidebar">
       <div class="brand"><div class="logo">${LOGO_SVG}</div><div><b>СИТИ SRM</b><small>Коммерческая недвижимость</small></div></div>
       <div id="scopeWrap" style="padding:0 4px 8px"></div>
       ${NAV.map(g=>{
@@ -206,11 +206,15 @@ function showApp(){
         <span class="lo" title="Выйти" onclick="logout()">⎋</span>
       </div>
     </aside>
+    <div class="scrim" id="scrim" onclick="closeNav()"></div>
+    <div class="mtopbar"><span class="burger" onclick="toggleNav()">☰</span><div class="logo">${LOGO_SVG}</div><b>СИТИ SRM</b></div>
     <main class="main" id="main"></main>
   </div>`;
-  document.querySelectorAll('.nav-item[data-page]').forEach(n=>n.onclick=()=>{ current=n.dataset.page; markActive(); render(); });
+  document.querySelectorAll('.nav-item[data-page]').forEach(n=>n.onclick=()=>{ current=n.dataset.page; markActive(); render(); closeNav(); });
   updateThemeBtns(); renderScopeSelector(); markActive(); render(); startPolling();
 }
+function toggleNav(){ document.getElementById('sidebar')?.classList.toggle('open'); document.getElementById('scrim')?.classList.toggle('show'); }
+function closeNav(){ document.getElementById('sidebar')?.classList.remove('open'); document.getElementById('scrim')?.classList.remove('show'); }
 function markActive(){ document.querySelectorAll('.nav-item[data-page]').forEach(x=>x.classList.toggle('active',x.dataset.page===current)); }
 function renderScopeSelector(){
   const w=document.getElementById('scopeWrap'); if(!w)return;
