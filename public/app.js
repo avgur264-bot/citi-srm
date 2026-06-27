@@ -110,6 +110,7 @@ function ensureState(){
   if(!I.energy) I.energy={connected:false,lastSync:null};
   if(!I.water) I.water={connected:false,lastSync:null};
   if(!I.onec) I.onec={connected:false,base:'',lastSync:null};
+  if(!Array.isArray(I.log)) I.log=[];
 }
 async function loadData(){
   const b = await api('/api/bootstrap');
@@ -835,8 +836,27 @@ function integrations(){
      ${intCard('water','💧','Водоканал','Вода и водоотведение — приём начислений',I.water,'Передача показаний и приём начислений за воду')}
      ${intCard('onec','🧾','1С: Бухгалтерия','Обмен документами с 1С',I.onec,'Выгрузка аренды, расходов и ФОТ; приём проводок',`<button class="btn ghost sm" onclick="export1C()">⤓ Выгрузить в 1С (CSV)</button>`)}
    </div>
+   ${syncLogBlock()}
    <div class="card" style="margin-top:16px"><div class="t-sub">⚠️ Демонстрационные интеграции: подключение и синхронизация имитируются на тестовых данных приложения. В боевой версии подключаются реальные API банка и поставщиков (договор, ключи доступа, передача показаний счётчиков).</div></div>`);
 }
+function syncLogBlock(){
+  const log=(DB.integrations&&Array.isArray(DB.integrations.log))?DB.integrations.log:[];
+  const head=`<div style="display:flex;align-items:center;justify-content:space-between;margin:18px 0 10px"><h3 style="font-size:16px">Журнал обмена</h3>${log.length&&canEdit('integrations')?`<button class="btn ghost sm" onclick="clearSyncLog()">Очистить</button>`:''}</div>`;
+  if(!log.length) return head+`<div class="card"><div class="t-sub">Здесь будет история: что и когда выгружено/получено. Нажмите «Синхронизировать» или «Выгрузить в 1С», чтобы появилась первая запись.</div></div>`;
+  const rows=log.map(e=>{
+    const dir=e.dir==='out'?`<span class="pill" style="background:rgba(79,140,255,.14);color:var(--accent2)">⤴ выгрузка</span>`:`<span class="pill green">⤵ приём</span>`;
+    const det=(e.items&&e.items.length)?`<div class="t-sub" style="margin-top:4px">${e.items.map(esc).join(' · ')}</div>`:'';
+    return `<div class="doc" style="border:1px solid var(--line2);border-radius:11px;padding:11px 13px;margin-bottom:9px;align-items:flex-start">
+      <div class="di" style="font-size:17px">${e.icon||'🔗'}</div>
+      <div style="flex:1;min-width:0">
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center"><span class="t-strong">${esc(e.title||'')}</span>${dir}<span class="t-sub">${fmtDateTime(e.ts)}</span></div>
+        <div style="margin-top:2px">${esc(e.text||'')}${e.count?` — <b>${e.count}</b> док.`:''}${e.sum?` · ${money(e.sum)}`:''}</div>
+        ${det}
+      </div></div>`;
+  }).join('');
+  return head+`<div class="card">${rows}</div>`;
+}
+async function clearSyncLog(){ if(!confirm('Очистить журнал обмена?'))return; ensureState(); DB.integrations.log=[]; await afterStateChange(); }
 function intCard(key,icon,title,desc,st,extra,extraActions){ st=st||{};
   return `<div class="card"><div style="display:flex;align-items:center;gap:12px;margin-bottom:10px">
     <div class="kpi-ic" style="width:42px;height:42px;font-size:21px;background:rgba(79,140,255,.14);color:var(--accent2)">${icon}</div>
@@ -891,30 +911,49 @@ function export1C(){
   DB.expenses.forEach(e=>rows.push(['Расход на содержание','',e.period||'',e.vendor||'',(buildingOf(e.building)?.name)||'','',e.category,e.amount,e.status]));
   (DB.salaries||[]).forEach(s=>{const u=userOf(s.user_id);rows.push(['Зарплата',s.paidDate||'',s.period,u?u.full_name:'','','','ФОТ '+s.period,s.amount,s.status]);});
   const csv='﻿'+rows.map(r=>r.map(x=>String(x==null?'':x).replace(/[;\n]/g,' ')).join(';')).join('\n');
-  const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));a.download='1c_export_'+TODAY.toISOString().slice(0,10)+'.csv';a.click();
+  const fname='1c_export_'+TODAY.toISOString().slice(0,10)+'.csv';
+  const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));a.download=fname;a.click();
+  logSync('onec','⤓','Выгрузка в 1С','out',`Сформирован файл ${fname} — строк: ${rows.length-1}`,rows.length-1,0,
+    [`Файл: ${fname}`,`Аренда: ${DB.payments.length}`,`Расходы: ${DB.expenses.length}`,`ФОТ: ${(DB.salaries||[]).length}`]);
+  afterStateChange();
 }
 async function intDisconnect(key){ if(!confirm('Отключить интеграцию?'))return; DB.integrations[key]={...(DB.integrations[key]||{}),connected:false}; await afterStateChange(); }
+function logSync(key,icon,title,dir,text,count,sum,items){
+  ensureState(); if(!Array.isArray(DB.integrations.log)) DB.integrations.log=[];
+  DB.integrations.log.unshift({ts:new Date().toISOString(),key,icon,title,dir,text,count:count||0,sum:sum||0,items:items||[]});
+  DB.integrations.log=DB.integrations.log.slice(0,50);
+}
 async function intSync(key){
   const now=new Date().toISOString();
   if(key==='bank'){
     const unpaid=DB.payments.filter(p=>p.amount-p.paid>0); const sum=unpaid.reduce((s,p)=>s+(p.amount-p.paid),0);
-    if(!unpaid.length){ DB.integrations.bank={...DB.integrations.bank,lastSync:now}; await afterStateChange(); return alert('Синхронизация завершена. Новых поступлений для сверки нет.'); }
+    if(!unpaid.length){ DB.integrations.bank={...DB.integrations.bank,lastSync:now};
+      logSync('bank','🏦','Банк','in','Сверка выписки: новых поступлений нет',0,0,[]);
+      await afterStateChange(); return alert('Синхронизация завершена. Новых поступлений для сверки нет.'); }
     if(!confirm(`Из банковской выписки найдено ${unpaid.length} поступлений, совпадающих с начислениями аренды, на сумму ${money(sum)}.\n\nЗачесть их как оплаченные?`))return;
+    const items=[];
     unpaid.forEach(p=>{ const add=p.amount-p.paid; p.paid=p.amount; p.status='paid'; p.paidDate=TODAY.toISOString().slice(0,10);
-      (p.transactions=p.transactions||[]).push({amount:add,date:p.paidDate,method:'bank',bank:true}); });
+      (p.transactions=p.transactions||[]).push({amount:add,date:p.paidDate,method:'bank',bank:true});
+      const c=contractOf(p.contract); const t=c&&tenantOf(c.tenant);
+      items.push(`${p.period} · ${t?t.name:('Договор '+p.contract)} · +${money(add)}`); });
     DB.integrations.bank={...DB.integrations.bank,lastSync:now};
+    logSync('bank','🏦','Банк','in',`Зачтено ${unpaid.length} поступлений из выписки`,unpaid.length,sum,items);
     await afterStateChange(); return alert(`Готово. Зачтено ${unpaid.length} поступлений на ${money(sum)}.`);
   }
   if(key==='onec'){
     const docs=DB.payments.length+DB.expenses.length+(DB.salaries||[]).length;
     DB.integrations.onec={...DB.integrations.onec,lastSync:now};
+    logSync('onec','🧾','1С: Бухгалтерия','out',`Подготовлено к обмену документов: ${docs} (аренда + расходы + ФОТ)`,docs,0,
+      [`Аренда: ${DB.payments.length}`,`Расходы: ${DB.expenses.length}`,`ФОТ: ${(DB.salaries||[]).length}`]);
     await afterStateChange(); return alert(`Синхронизация с 1С завершена.\nК обмену готово документов: ${docs} (аренда + расходы + ФОТ).\nДля файла выгрузки нажмите «Выгрузить в 1С (CSV)».`);
   }
   if(key==='energy'||key==='water'){
-    const field=key==='energy'?'electricity':'water'; let n=0;
-    DB.utilities.forEach(u=>{ if(u[field]){ if(u.status!=='paid') u.status='invoiced'; n++; } });
+    const field=key==='energy'?'electricity':'water'; let n=0; let sum=0;
+    DB.utilities.forEach(u=>{ if(u[field]){ if(u.status!=='paid') u.status='invoiced'; n++; sum+=Number(u[field])||0; } });
+    const title=key==='energy'?'Мособлэнергосбыт':'Водоканал';
     DB.integrations[key]={...DB.integrations[key],lastSync:now};
-    await afterStateChange(); return alert(`Синхронизация с ${key==='energy'?'Мособлэнергосбыт':'Водоканал'} завершена.\nПолучено/обновлено начислений: ${n}.`);
+    logSync(key,key==='energy'?'⚡':'💧',title,'in',`Получено/обновлено начислений: ${n}`,n,sum,[]);
+    await afterStateChange(); return alert(`Синхронизация с ${title} завершена.\nПолучено/обновлено начислений: ${n}.`);
   }
 }
 
