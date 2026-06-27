@@ -397,12 +397,16 @@ function toggleBuilding(id){
 
 /* ---------- универсальная сворачиваемая секция (для арендаторов/договоров по объектам) ---------- */
 const expandedSections = new Set();
+const chartFactories = {}; // id канваса -> функция создания графика (ленивая инициализация в свёрнутых секциях)
+function activateCharts(root){ if(!root||!window.Chart)return; root.querySelectorAll('canvas').forEach(cv=>{
+  if(cv.offsetParent===null) return; const ex=Chart.getChart(cv); if(ex){ex.resize();} else if(chartFactories[cv.id]){ chartFactories[cv.id](); } }); }
 function toggleSection(id){
   const el=document.getElementById('sect-'+id); if(!el)return;
   const open = el.style.display!=='none';
   el.style.display = open?'none':'block';
   const chev=document.getElementById('chev-'+id); if(chev) chev.style.transform=`rotate(${open?0:90}deg)`;
-  if(open) expandedSections.delete(id); else expandedSections.add(id);
+  if(open) expandedSections.delete(id);
+  else { expandedSections.add(id); setTimeout(()=>activateCharts(el),40); }
 }
 function collapseCard(id, headerInner, body, forceExpanded){
   const expanded = forceExpanded || SCOPE!=='all' || expandedSections.has(id);
@@ -601,8 +605,7 @@ function utilities(){
   `<div class="grid" style="grid-template-columns:repeat(3,1fr);margin-bottom:18px">
     ${miniStat('Коммунальные начисления',money(ut),'violet')}${miniStat('Расходы на содержание',money(ex),'amber')}${miniStat('Итого затраты',money(ut+ex),'red')}
   </div>
-  <div id="ubcards"></div>
-  <div class="card" style="margin-top:18px"><div class="panel-title"><h3>Структура расходов на содержание</h3><span class="muted">${scopeSub()}</span></div><canvas id="chExp" height="80"></canvas></div>`);
+  <div id="ubcards"></div>`);
   const bs = SCOPE==='all'? buildingsList() : [buildingOf(SCOPE)].filter(Boolean);
   document.getElementById('ubcards').innerHTML = bs.map(b=>{
     const bu=DB.utilities.filter(u=>unitOf(u.unit)?.building===b.id);
@@ -611,11 +614,14 @@ function utilities(){
     const body=`<div class="grid" style="grid-template-columns:1.2fr 1fr">
       <div><div class="sec-h" style="margin-top:0">Коммунальные начисления</div>${utilTable(bu)}</div>
       <div><div class="sec-h" style="margin-top:0">Эксплуатационные расходы</div>${expenseTable(be)}</div>
-    </div>`;
+    </div>
+    ${be.length?`<div class="sec-h">Структура расходов на содержание</div><canvas id="chExp-${b.id}" height="${Math.max(80,be.length*28)}"></canvas>`:''}`;
     return collapseCard('util-'+b.id, buildingHeader(b, `затраты ${money(tot)}`), body, false);
   }).join('') || '<div class="card"><div class="empty">Объекты не найдены</div></div>';
-  new Chart(document.getElementById('chExp'),{type:'bar',data:{labels:EX.map(e=>e.category),datasets:[{data:EX.map(e=>e.amount),backgroundColor:cssVar('--violet'),borderRadius:6}]},
-    options:{indexAxis:'y',plugins:{legend:{display:false}},scales:{x:{grid:{color:cssVar('--chart-grid')},ticks:{color:cssVar('--muted')}},y:{grid:{display:false},ticks:{color:cssVar('--muted')}}}}});
+  bs.forEach(b=>{const be=DB.expenses.filter(e=>(e.building||'b1')===b.id);const cv=document.getElementById('chExp-'+b.id);
+    if(cv&&be.length){ chartFactories['chExp-'+b.id]=()=>new Chart(cv,{type:'bar',data:{labels:be.map(e=>e.category),datasets:[{data:be.map(e=>e.amount),backgroundColor:cssVar('--violet'),borderRadius:6}]},
+      options:{indexAxis:'y',plugins:{legend:{display:false}},scales:{x:{grid:{color:cssVar('--chart-grid')},ticks:{color:cssVar('--muted')}},y:{grid:{display:false},ticks:{color:cssVar('--muted')}}}}});
+      if(cv.offsetParent!==null) chartFactories['chExp-'+b.id](); }});
 }
 function utilTable(list){
   return `<div style="overflow-x:auto"><table><thead><tr><th>Помещение</th><th>Эл-во</th><th>Вода</th><th>Отопл.</th><th>Итого</th><th>Статус</th></tr></thead><tbody>
@@ -703,7 +709,7 @@ async function delUser(id){ if(!confirm('Удалить сотрудника? Е
    ============================================================ */
 function reports(){
   const m=metrics();
-  const byTenant=sPayments().map(p=>{const c=contractOf(p.contract);return{name:tenantOf(c.tenant).name,billed:p.amount,paid:p.paid,debt:p.amount-p.paid};}).sort((a,b)=>b.debt-a.debt);
+  const bs = SCOPE==='all'? buildingsList() : [buildingOf(SCOPE)].filter(Boolean);
   el(head('Отчёты и аналитика',`Сводная отчётность · ${scopeSub()}`,`<button class="btn ghost sm" onclick="exportCSV()">⤓ Экспорт CSV</button>`)+
   `<div class="grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:18px">
     ${miniStat('Валовый доход (мес.)',money(m.collected),'green')}${miniStat('Операц. расходы',money(m.exp),'amber')}
@@ -713,11 +719,25 @@ function reports(){
     <div class="card"><div class="panel-title"><h3>Динамика NOI</h3><span class="muted">тыс ₽</span></div><canvas id="chNOI" height="130"></canvas></div>
     <div class="card"><div class="panel-title"><h3>Заполняемость по этажам</h3><span class="muted">%</span></div><canvas id="chFloor" height="130"></canvas></div>
   </div>
-  <div class="card" style="padding:0"><div class="panel-title" style="padding:16px 18px 0"><h3>Отчёт по расчётам с арендаторами</h3></div>
-  <table><thead><tr><th>Арендатор</th><th>Начислено</th><th>Оплачено</th><th>Задолженность</th><th>% оплаты</th></tr></thead><tbody>
-  ${byTenant.map(r=>`<tr><td class="t-strong">${esc(r.name)}</td><td>${money(r.billed)}</td><td>${money(r.paid)}</td><td>${r.debt>0?`<span class="pill red">${money(r.debt)}</span>`:`<span class="pill green">0 ₽</span>`}</td>
-  <td><div class="prog" style="width:90px"><span style="width:${Math.round(r.paid/r.billed*100)}%"></span></div></td></tr>`).join('')}
-  </tbody></table></div>`);
+  <div id="rbcards"></div>`);
+  document.getElementById('rbcards').innerHTML = bs.map(b=>{
+    const ps=DB.payments.filter(p=>{const c=contractOf(p.contract);return c&&unitOf(c.unit)?.building===b.id;});
+    const byTenant=ps.map(p=>{const c=contractOf(p.contract);return{name:tenantOf(c.tenant).name,billed:p.amount,paid:p.paid,debt:p.amount-p.paid};}).sort((a,b)=>b.debt-a.debt);
+    const be=DB.expenses.filter(e=>(e.building||'b1')===b.id);
+    const exTot=be.reduce((s,e)=>s+e.amount,0);
+    const billed=byTenant.reduce((s,r)=>s+r.billed,0), paid=byTenant.reduce((s,r)=>s+r.paid,0);
+    const body=`
+      <div class="sec-h" style="margin-top:0">Расчёты с арендаторами</div>
+      <div style="overflow-x:auto"><table><thead><tr><th>Арендатор</th><th>Начислено</th><th>Оплачено</th><th>Задолженность</th><th>% оплаты</th></tr></thead><tbody>
+      ${byTenant.length?byTenant.map(r=>`<tr><td class="t-strong">${esc(r.name)}</td><td>${money(r.billed)}</td><td>${money(r.paid)}</td><td>${r.debt>0?`<span class="pill red">${money(r.debt)}</span>`:`<span class="pill green">0 ₽</span>`}</td><td><div class="prog" style="width:90px"><span style="width:${pct(r.paid,r.billed)}%"></span></div></td></tr>`).join(''):'<tr><td colspan="5" class="empty">Нет данных</td></tr>'}
+      <tr style="border-top:2px solid var(--line2)"><td class="t-strong">Итого по объекту</td><td class="t-strong">${money(billed)}</td><td class="t-strong">${money(paid)}</td><td class="t-strong">${money(billed-paid)}</td><td class="t-strong">${pct(paid,billed)}%</td></tr>
+      </tbody></table></div>
+      <div class="sec-h">Расходы на содержание · итого ${money(exTot)}</div>
+      <div style="overflow-x:auto"><table><thead><tr><th>Категория</th><th>Подрядчик</th><th>Сумма</th><th>Статус</th></tr></thead><tbody>
+      ${be.length?be.map(e=>`<tr><td class="t-strong">${esc(e.category)}</td><td class="t-sub">${esc(e.vendor)}</td><td class="t-strong">${money(e.amount)}</td><td>${utilPill(e.status)}</td></tr>`).join(''):'<tr><td colspan="4" class="empty">Нет расходов</td></tr>'}
+      </tbody></table></div>`;
+    return collapseCard('rep-'+b.id, buildingHeader(b, `доход ${money(paid)} · расходы ${money(exTot)} · NOI ${money(paid-exTot)}`), body, false);
+  }).join('') || '<div class="card"><div class="empty">Объекты не найдены</div></div>';
   new Chart(document.getElementById('chNOI'),{type:'line',data:{labels:DB.history.map(h=>h.m),datasets:[{label:'NOI',data:DB.history.map(h=>h.income-h.expense),borderColor:cssVar('--green'),backgroundColor:cssVar('--green')+'22',fill:true,tension:.35,pointRadius:3}]},options:chOpts(false)});
   const su=sUnits(); const floors=[...new Set(su.map(u=>u.floor))].sort();
   new Chart(document.getElementById('chFloor'),{type:'bar',data:{labels:floors.map(f=>'Этаж '+f),datasets:[{data:floors.map(f=>{const us=su.filter(u=>u.floor===f);const t=us.reduce((s,u)=>s+u.area,0);const o=us.filter(u=>u.tenant).reduce((s,u)=>s+u.area,0);return pct(o,t);}),backgroundColor:cssVar('--accent'),borderRadius:6}]},options:{plugins:{legend:{display:false}},scales:{y:{max:100,grid:{color:cssVar('--chart-grid')},ticks:{color:cssVar('--muted')}},x:{grid:{display:false},ticks:{color:cssVar('--muted')}}}}});
