@@ -1,0 +1,29 @@
+# Общий «привратник» (reverse proxy) для всех клиентов СИТИ SRM.
+# Один Caddy слушает 80/443, выдаёт бесплатный HTTPS и направляет каждый
+# поддомен (client1.citisrm.ru …) к приложению нужного клиента.
+# Запуск: docker compose up -d   (обычно через ../setup.sh)
+
+services:
+  proxy:
+    image: caddy:2-alpine
+    container_name: srm-proxy
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./sites:/etc/caddy/sites:ro          # маршруты клиентов (по файлу на клиента)
+      - caddy_data:/data                       # сертификаты HTTPS (хранятся между перезапусками)
+      - caddy_config:/config
+    networks:
+      - srmnet
+    restart: unless-stopped
+
+networks:
+  srmnet:
+    name: srmnet
+    external: true        # общая сеть, к ней подключаются приложения клиентов
+
+volumes:
+  caddy_data:
+  caddy_config:

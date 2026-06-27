@@ -1,0 +1,9 @@
+# Глобальные настройки Caddy.
+# email — для бесплатных сертификатов Let's Encrypt (уведомления об их продлении).
+{
+	email avgur264@gmail.com
+}
+
+# Подключаем маршруты всех клиентов. Скрипт new-client.sh кладёт сюда
+# по одному файлу на клиента: sites/<имя>.caddy
+import /etc/caddy/sites/*.caddy
