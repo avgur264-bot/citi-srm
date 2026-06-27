@@ -7,7 +7,9 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-export const db = new DatabaseSync(join(__dirname, 'srm.db'));
+// Путь к базе: в проде задаётся через DB_PATH (постоянный том), иначе — рядом с кодом.
+const DB_PATH = process.env.DB_PATH || join(__dirname, 'srm.db');
+export const db = new DatabaseSync(DB_PATH);
 db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;');
 
 // ---------- Роли и права доступа ----------

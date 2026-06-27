@@ -4,3 +4,9 @@ srm.db-shm
 node_modules
 .git
 .DS_Store
+deploy/data
+deploy/backups
+deploy/.env
+*.db
+*.db-wal
+*.db-shm

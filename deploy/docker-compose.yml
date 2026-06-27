@@ -1,0 +1,37 @@
+# СИТИ SRM — запуск на VPS: приложение + Caddy (обратный прокси с авто-HTTPS).
+# Запуск:  docker compose up -d --build
+# Данные базы хранятся на диске сервера в папке ./data (переживают перезапуск и обновления).
+
+services:
+  app:
+    build:
+      context: ..            # папка server-app (там Dockerfile и код)
+    environment:
+      - PORT=4000
+      - DB_PATH=/app/data/srm.db   # база на постоянном томе
+    volumes:
+      - ./data:/app/data            # ← здесь физически лежит srm.db
+    expose:
+      - "4000"               # порт виден только Caddy, наружу не открыт
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2-alpine
+    environment:
+      # Адрес сайта берётся из файла .env.
+      # :80 — работа по IP (без HTTPS). Домен — авто-HTTPS.
+      - SITE_ADDRESS=${SITE_ADDRESS:-:80}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data      # сертификаты HTTPS (хранятся между перезапусками)
+      - caddy_config:/config
+    depends_on:
+      - app
+    restart: unless-stopped
+
+volumes:
+  caddy_data:
+  caddy_config:
