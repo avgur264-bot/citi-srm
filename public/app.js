@@ -842,9 +842,27 @@ function intCard(key,icon,title,desc,st,extra){ st=st||{};
         :`<button class="btn" onclick="intConnect('${key}')">Подключить</button>`}</div>`:'<div class="t-sub">Нет прав на управление интеграциями</div>'}
   </div>`;
 }
+const BANKS=[
+  {id:'sber',name:'Сбер Бизнес',color:'#21A038'},
+  {id:'vtb',name:'ВТБ',color:'#0A2896'},
+  {id:'tochka',name:'Точка',color:'#1A1A1A'},
+];
+function bankConnectModal(){
+  openM(`<div class="modal-h"><h3>Подключить банк</h3><span class="x" onclick="closeM()">×</span></div>
+  <div class="modal-b"><div class="t-sub" style="margin-bottom:12px">Выберите банк для импорта выписки и автосверки платежей:</div>
+  ${BANKS.map(b=>`<div class="doc" style="cursor:pointer;border:1px solid var(--line2);border-radius:11px;padding:12px;margin-bottom:10px" onclick="connectBank('${b.id}')">
+    <div class="di" style="background:${b.color}22;color:${b.color};font-size:18px">🏦</div>
+    <div style="flex:1;min-width:0"><div class="t-strong">${b.name}</div><div class="t-sub">Импорт выписки · автосверка начислений</div></div>
+    <span class="btn sm">Выбрать</span></div>`).join('')}
+  <div class="t-sub" style="margin-top:6px">Демо-подключение: реальные ключи доступа к банку не требуются.</div></div>
+  <div class="modal-f"><button class="btn ghost" onclick="closeM()">Отмена</button></div>`);
+}
+async function connectBank(id){ const b=BANKS.find(x=>x.id===id); if(!b)return;
+  ensureState(); DB.integrations.bank={connected:true,name:b.name,bankId:id,lastSync:null};
+  closeM(); await afterStateChange(); }
 async function intConnect(key){ if(!DB.integrations)ensureState();
-  if(key==='bank'){ const name=prompt('Название банка (демо-подключение):','Сбер Бизнес'); if(name===null)return; DB.integrations.bank={connected:true,name,lastSync:null}; }
-  else { DB.integrations[key]={connected:true,lastSync:null}; }
+  if(key==='bank'){ bankConnectModal(); return; }
+  DB.integrations[key]={connected:true,lastSync:null};
   await afterStateChange();
 }
 async function intDisconnect(key){ if(!confirm('Отключить интеграцию?'))return; DB.integrations[key]={...(DB.integrations[key]||{}),connected:false}; await afterStateChange(); }
