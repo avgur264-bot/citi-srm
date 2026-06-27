@@ -497,16 +497,22 @@ function fmtD(d){return new Date(d).toLocaleDateString('ru-RU',{day:'2-digit',mo
 /* ============================================================
    ПЛАТЕЖИ
    ============================================================ */
+let payPeriod=''; // '' = все периоды
+function setPayPeriod(v){ payPeriod=v; render(); }
 function payments(){
-  const m=metrics();
+  const inPer = p => !payPeriod || p.period===payPeriod;
   const bs = SCOPE==='all'? buildingsList() : [buildingOf(SCOPE)].filter(Boolean);
-  el(head('Платежи аренды',`Период: Июнь 2026 · ${scopeSub()}`, canEdit('payments')?`<button class="btn" onclick="paymentModal()">+ Начисление</button>`:'')+
-  `<div class="grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:18px">
-    ${miniStat('Начислено',money(m.billed))}${miniStat('Собрано',money(m.collected),'green')}
-    ${miniStat('Задолженность',money(m.debt),'red')}${miniStat('Собираемость',pct(m.collected,m.billed)+'%','blue')}
+  const ps0 = sPayments().filter(inPer);
+  const billed=ps0.reduce((s,p)=>s+p.amount,0), collected=ps0.reduce((s,p)=>s+p.paid,0), debt=billed-collected;
+  const pers=[...new Set(DB.payments.map(p=>p.period).filter(Boolean))].sort().reverse();
+  el(head('Платежи аренды',`${payPeriod?'Период: '+fmtPeriod(payPeriod):'Все периоды'} · ${scopeSub()}`, canEdit('payments')?`<button class="btn" onclick="paymentModal()">+ Начисление</button>`:'')+
+  `<div class="toolbar"><span class="t-sub">Период:</span><select class="search" style="width:auto;min-width:160px" onchange="setPayPeriod(this.value)"><option value="">Все периоды</option>${pers.map(p=>`<option value="${p}"${payPeriod===p?' selected':''}>${fmtPeriod(p)}</option>`).join('')}</select></div>
+  <div class="grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:18px">
+    ${miniStat('Начислено',money(billed))}${miniStat('Собрано',money(collected),'green')}
+    ${miniStat('Задолженность',money(debt),'red')}${miniStat('Собираемость',pct(collected,billed)+'%','blue')}
   </div><div id="pbcards"></div>`);
   document.getElementById('pbcards').innerHTML = bs.map(b=>{
-    const ps=DB.payments.filter(p=>{const c=contractOf(p.contract);return c&&unitOf(c.unit)?.building===b.id;});
+    const ps=DB.payments.filter(p=>{const c=contractOf(p.contract);return c&&unitOf(c.unit)?.building===b.id && inPer(p);});
     const body = ps.length
       ? `<div style="overflow-x:auto"><table><thead><tr><th>Арендатор</th><th>Помещение</th><th>Период</th><th>Начислено</th><th>Оплачено</th><th>Срок</th><th>Статус</th><th></th></tr></thead><tbody>${ps.map(paymentRow).join('')}</tbody></table></div>`
       : '<div class="empty" style="padding:20px">Нет платежей в объекте</div>';
@@ -857,9 +863,11 @@ async function saveContract(){const u=val('f-unit');const rate=+val('f-rate');co
 /* платёж */
 function paymentModal(){openM(`<div class="modal-h"><h3>Новый платёж</h3><span class="x" onclick="closeM()">×</span></div>
   <div class="modal-b"><div class="field"><label>Договор</label><select id="f-c">${sContracts().map(c=>`<option value="${c.id}">${c.id.toUpperCase()} · ${esc(tenantOf(c.tenant).name)} · ${c.unit}</option>`).join('')}</select></div>
-  <div class="row2"><div class="field"><label>Период</label><input id="f-period" value="2026-07"></div><div class="field"><label>Сумма</label><input id="f-amount" type="number"></div></div></div>
+  <div class="row2"><div class="field"><label>Период</label><input id="f-period" type="month" value="${payPeriod||'2026-07'}"></div><div class="field"><label>Сумма</label><input id="f-amount" type="number"></div></div></div>
   <div class="modal-f"><button class="btn ghost" onclick="closeM()">Отмена</button><button class="btn" onclick="savePayment()">Добавить</button></div>`);}
-async function savePayment(){DB.payments.push({id:'p'+Date.now(),contract:val('f-c'),period:val('f-period'),amount:+val('f-amount'),due:'2026-07-05',paid:0,paidDate:null,status:'pending'});closeM();await afterStateChange();}
+async function savePayment(){const per=val('f-period')||'2026-07';const due=per+'-05';
+  DB.payments.push({id:'p'+Date.now(),contract:val('f-c'),period:per,amount:+val('f-amount'),due,paid:0,paidDate:null,status:daysLeft(due)<0?'overdue':'pending'});
+  closeM();await afterStateChange();}
 
 /* расход */
 function expenseModal(){const def=SCOPE!=='all'?SCOPE:(buildingsList()[0]||{}).id;
