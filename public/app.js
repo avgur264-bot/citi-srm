@@ -554,6 +554,7 @@ function buildingCard(b){
         <div style="min-width:0"><h3>🏢 ${esc(b.name)}</h3><div class="t-sub" style="margin-top:3px">${esc(b.address)} · ${us.length} помещ. · ${fmt(totA)} м² · заполнено ${pct(occA,totA)}%</div></div>
       </div>
       <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end">
+        <button class="btn ghost sm" onclick="planModal('${b.id}')" title="План и схема занятости">📐 План</button>
         ${canEdit('objects')?`<button class="btn ghost sm" onclick="unitModal('${b.id}')">+ Помещение</button>`:''}
         ${canEdit('tenants')?`<button class="btn ghost sm" onclick="tenantModal('${b.id}')">+ Арендатор</button>`:''}
         ${canEdit('objects')?`<button class="btn ghost sm" onclick="editBuildingModal('${b.id}')" title="Редактировать объект">✎</button><button class="btn ghost sm" onclick="delBuilding('${b.id}')" title="Удалить объект">🗑</button>`:''}
@@ -569,6 +570,44 @@ function toggleBuilding(id){
   const chev=document.getElementById('chev-'+id); if(chev) chev.style.transform=`rotate(${open?0:90}deg)`;
   if(open) expandedBuildings.delete(id); else expandedBuildings.add(id);
 }
+/* ---------- интерактивный план объекта ---------- */
+const PLAN_COL={occupied:'#37d39b',debt:'#ff5d6c',reserved:'#f5a623',free:'#94a3b8'};
+const PLAN_LBL={occupied:'Занято',debt:'Долг',reserved:'Резерв',free:'Свободно'};
+function planModal(bid){
+  const b=buildingOf(bid); if(!b)return; const ed=canEdit('objects');
+  const us=DB.units.filter(u=>u.building===bid);
+  const floors=[...new Set(us.map(u=>u.floor))].sort((a,b)=>a-b);
+  const tile=u=>{const st=unitStatus(u);const c=PLAN_COL[st]||PLAN_COL.free;
+    return `<div onmouseenter="planHover('${esc(u.id)}')" onclick="closeM();unitInfo('${esc(u.id)}')" title="Помещение ${esc(u.id)} — клик для подробностей" style="background:${c}1f;border:2px solid ${c};border-radius:9px;padding:9px 11px;min-width:92px;cursor:pointer">
+      <div class="t-strong">${esc(u.id)}</div><div class="t-sub">${u.area} м²</div><div style="font-size:11px;color:${c};font-weight:700;margin-top:2px">${PLAN_LBL[st]}</div></div>`;};
+  openM(`<div class="modal-h"><h3>📐 План — ${esc(b.name)}</h3><span class="x" onclick="closeM()">×</span></div>
+  <div class="modal-b">
+    ${b.plan?`<img src="${b.plan}" alt="План объекта" style="width:100%;border-radius:10px;border:1px solid var(--line2);margin-bottom:12px">`:''}
+    ${ed?`<div class="field"><label>${b.plan?'Заменить план':'Загрузить план объекта (PNG/JPG, до 3 МБ)'}</label>
+      <input type="file" accept="image/png,image/jpeg" onchange="onPlanFile('${bid}',this)" style="font-size:13px;padding:8px;border:1px dashed var(--line2);border-radius:9px;background:var(--bg2);width:100%">
+      ${b.plan?`<button class="btn ghost sm" style="margin-top:6px" onclick="delPlan('${bid}')">Убрать план</button>`:''}</div>`:''}
+    <div class="sec-h">Схема занятости</div>
+    <div style="display:flex;gap:14px;flex-wrap:wrap;margin-bottom:12px;font-size:12px">${Object.entries(PLAN_LBL).map(([k,l])=>`<span style="display:inline-flex;align-items:center;gap:5px"><i style="width:12px;height:12px;border-radius:3px;background:${PLAN_COL[k]};display:inline-block"></i>${l}</span>`).join('')}</div>
+    ${floors.length?floors.map(f=>`<div style="margin-bottom:12px"><div class="t-sub" style="margin-bottom:6px">Этаж ${f}</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">${us.filter(u=>u.floor===f).map(tile).join('')}</div></div>`).join(''):'<div class="empty" style="padding:20px">В объекте пока нет помещений</div>'}
+    <div class="card" id="planDetails" style="margin-top:8px;background:var(--bg2)"><div class="t-sub">Наведите курсор на помещение — появится информация. Клик — полная карточка.</div></div>
+  </div>
+  <div class="modal-f"><button class="btn" onclick="closeM()">Закрыть</button></div>`);
+}
+function planHover(id){ const u=unitOf(id); const box=document.getElementById('planDetails'); if(!u||!box)return;
+  const c=DB.contracts.find(x=>x.unit===id&&x.status!=='ended'); const t=u.tenant?tenantOf(u.tenant):null; const st=unitStatus(u); const r=u.responsible||{};
+  box.innerHTML=`<div class="t-strong" style="margin-bottom:6px">Помещение ${esc(u.id)} · ${u.area} м² · ${esc(u.type||'')}</div>
+    <div class="t-sub">Статус: <b style="color:${PLAN_COL[st]}">${PLAN_LBL[st]}</b></div>
+    ${t?`<div class="t-sub">Арендатор: ${esc(t.name)}</div>`:'<div class="t-sub">Помещение свободно</div>'}
+    ${c?`<div class="t-sub">Аренда: ${money(c.rate)}/м² · ${money(monthlyRent(c))}/мес · договор до ${c.end?fmtD(c.end):'—'}</div>`:''}
+    ${r.name?`<div class="t-sub">Ответственный: ${esc(r.name)}${r.phone?' · '+esc(r.phone):''}</div>`:''}
+    <div class="t-sub" style="margin-top:6px;color:var(--accent2)">Клик по помещению — открыть полную карточку →</div>`;
+}
+async function onPlanFile(bid,input){ const f=input.files&&input.files[0]; if(!f)return;
+  if(!/^image\/(png|jpeg)$/.test(f.type)){ alert('Только PNG или JPG.'); input.value=''; return; }
+  if(f.size>3*1024*1024){ alert('Файл больше 3 МБ — выберите меньше.'); input.value=''; return; }
+  const r=new FileReader(); r.onload=async()=>{ const b=buildingOf(bid); if(b){ b.plan=String(r.result||''); await afterStateChange(); planModal(bid); } }; r.readAsDataURL(f); }
+async function delPlan(bid){ if(!confirm('Убрать загруженный план объекта?'))return; const b=buildingOf(bid); if(b){ delete b.plan; await afterStateChange(); planModal(bid); } }
 
 /* ---------- универсальная сворачиваемая секция (для арендаторов/договоров по объектам) ---------- */
 const expandedSections = new Set();
