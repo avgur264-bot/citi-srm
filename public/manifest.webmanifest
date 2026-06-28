@@ -4,8 +4,7 @@
   "description": "Управление коммерческой недвижимостью",
   "start_url": "/",
   "scope": "/",
-  "display": "standalone",
-  "orientation": "portrait",
+  "display": "browser",
   "background_color": "#0f1b2d",
   "theme_color": "#0f1b2d",
   "icons": [
