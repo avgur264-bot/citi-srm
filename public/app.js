@@ -358,52 +358,81 @@ async function silentRefresh(){
 /* ============================================================
    ДАШБОРД
    ============================================================ */
-/* ---------- настройка дашборда (персональная, per-user) ---------- */
-const DASH_KEYS=['occ','billed','collected','debt','net','chIncome','chOcc','overdue','tasks'];
-const DASH_DEFAULT={occ:1,billed:1,collected:1,debt:1,net:1,chIncome:1,chOcc:1,overdue:1,tasks:1};
-const dashStoreKey=()=>'citi_srm_dash_'+(ME?ME.id:'x');
-function dashCfg(){ try{const s=JSON.parse(localStorage.getItem(dashStoreKey())); if(s) return {...DASH_DEFAULT,...s};}catch{} return {...DASH_DEFAULT}; }
+/* ---------- настраиваемый дашборд (персональный, перетаскиваемый) ---------- */
+let _dashM=null;
+const dashStoreKey=()=>'citi_srm_dash2_'+(ME?ME.id:'x');
+const DASH_DEFAULT_ORDER=['occ','billed','collected','debt','net','chIncome','chOcc','overdue','tasks'];
+function dashCard(title,badge,inner){ return `<div class="card"><div class="panel-title"><h3>${title}</h3>${badge!=null?`<span class="muted">${badge}</span>`:''}</div>${inner}</div>`; }
+function dashRows(rows,emptyTxt){ return `<table><tbody>${rows.length?rows.join(''):`<tr><td class="empty">${emptyTxt}</td></tr>`}</tbody></table>`; }
+/* каталог виджетов: id → {label, span (1=малый,2=широкий), build:()=>html, draw?:()=>void} */
+const DASH_CATALOG={
+  occ:{label:'KPI · Заполняемость',span:1,build:()=>kpi('Заполняемость','#4f8cff','📐',_dashM.occPct+'%','+3% за месяц','up')},
+  billed:{label:'KPI · Начислено',span:1,build:()=>kpi('Начислено (мес.)','#a78bfa','🧾',fmt(_dashM.billed/1000)+' тыс','план аренды','')},
+  collected:{label:'KPI · Собрано',span:1,build:()=>kpi('Собрано (мес.)','#37d39b','💰',fmt(_dashM.collected/1000)+' тыс',pct(_dashM.collected,_dashM.billed)+'% от плана','up')},
+  debt:{label:'KPI · Задолженность',span:1,build:()=>kpi('Задолженность','#ff5d6c','⚠️',fmt(_dashM.debt/1000)+' тыс',DB.payments.filter(p=>p.amount-p.paid>0).length+' счёта','down')},
+  net:{label:'KPI · Чистый доход',span:1,build:()=>kpi('Чистый доход','#39d0d8','📈',fmt(_dashM.net/1000)+' тыс','собрано − расходы','')},
+  fot:{label:'KPI · Зарплата (ФОТ)',span:1,build:()=>{const s=(DB.salaries||[]).reduce((a,x)=>a+(x.amount||0),0);return kpi('ФОТ (мес.)','#f59e42','💼',fmt(s/1000)+' тыс','фонд оплаты труда','');}},
+  adsKpi:{label:'KPI · Реклама',span:1,build:()=>{const ls=(DB.listings||[]).filter(a=>SCOPE==='all'||a.building===SCOPE);const act=ls.filter(a=>a.status==='active').length;const v=ls.reduce((s,a)=>s+(a.views||0),0);return kpi('Объявления','#22a7f0','📣',act+' активн.','👁 '+fmt(v)+' просмотров','');}},
+  chIncome:{label:'График · Доходы и расходы',span:2,build:()=>`<div class="card"><div class="panel-title"><h3>Доходы и расходы</h3><span class="muted">тыс ₽ · 6 мес</span></div><canvas id="chIncome" height="120"></canvas></div>`,draw:drawIncome},
+  chOcc:{label:'График · Структура площадей',span:1,build:()=>`<div class="card"><div class="panel-title"><h3>Структура площадей</h3><span class="muted">м²</span></div><canvas id="chOcc" height="120"></canvas></div>`,draw:drawOcc},
+  overdue:{label:'Виджет · Просроченные платежи',span:2,build:()=>{const o=sPayments().filter(p=>p.status==='overdue').map(p=>{const c=contractOf(p.contract);return{name:tenantOf(c.tenant).name,unit:c.unit,amount:p.amount-p.paid};});
+    return dashCard('⚠️ Просроченные платежи',o.length,dashRows(o.map(x=>`<tr><td><div class="t-strong">${esc(x.name)}</div><div class="t-sub">Помещение ${esc(x.unit)}</div></td><td style="text-align:right"><span class="pill red">${money(x.amount)}</span></td></tr>`),'Нет просрочек'));}},
+  tasks:{label:'Виджет · Ближайшие задачи',span:2,build:()=>{const t=TASKS.filter(x=>x.status!=='done').sort((a,b)=>daysLeft(a.due)-daysLeft(b.due)).slice(0,5);
+    return dashCard('Ближайшие задачи',t.length,dashRows(t.map(x=>`<tr><td><div class="t-strong">${esc(x.title)}</div><div class="t-sub">${esc(x.assignee_name||'—')} · ${esc(x.unit)}</div></td><td style="text-align:right">${prioPill(x.priority)}<div class="t-sub" style="margin-top:4px">${dueLabel(x.due)}</div></td></tr>`),'Нет задач'));}},
+  requests:{label:'Виджет · Заявки на обслуживание',span:2,build:()=>{const r=sRequests().filter(reqOpen).sort((a,b)=>daysLeft(a.due)-daysLeft(b.due)).slice(0,5);
+    return dashCard('🛠 Активные заявки',r.length,dashRows(r.map(x=>`<tr><td><div class="t-strong">${esc(x.title)}</div><div class="t-sub">${esc(x.category||'')}</div></td><td style="text-align:right">${prioPill(x.priority)}<div class="t-sub" style="margin-top:4px">${dueLabel(x.due)}</div></td></tr>`),'Нет активных заявок'));}},
+  upkeep:{label:'Виджет · Плановое ТО',span:2,build:()=>{const e=sEquip().filter(x=>daysLeft(x.nextService)<=30).sort((a,b)=>daysLeft(a.nextService)-daysLeft(b.nextService)).slice(0,5);
+    return dashCard('🧰 ТО: скоро / просрочено',e.length,dashRows(e.map(x=>{const st=upkeepStatus(x);return `<tr><td><div class="t-strong">${esc(x.name)}</div><div class="t-sub">${esc(x.type||'')}</div></td><td style="text-align:right"><span class="pill ${st[0]}">${st[1]}</span><div class="t-sub" style="margin-top:4px">${st[2]}</div></td></tr>`;}),'Всё в графике'));}},
+  aging:{label:'Виджет · Задолженность по срокам',span:2,build:()=>{const a=agingBuckets(SCOPE);
+    const rows=[['Текущая',a.cur],['1–30 дн',a.d30],['31–60 дн',a.d60],['61–90 дн',a.d90],['90+ дн',a.d90p]].map(([l,v])=>`<tr><td class="t-sub">${l}</td><td style="text-align:right" class="t-strong">${money(v)}</td></tr>`);
+    rows.push(`<tr><td class="t-strong">Пеня</td><td style="text-align:right;color:var(--amber)"><b>${money(Math.round(a.penalty))}</b></td></tr>`);
+    return dashCard('💳 Старение задолженности',money(a.total),`<table><tbody>${rows.join('')}</tbody></table>`);}},
+  alerts:{label:'Виджет · Центр сроков',span:2,build:()=>{const al=buildAlerts().slice(0,6);
+    return dashCard('🔔 Требует внимания',al.length,al.length?al.map(a=>`<div class="doc" style="border-left:3px solid ${alertColor(a.level)};border-radius:7px;padding:8px 10px;margin-bottom:6px;cursor:pointer" onclick="gotoPage('${a.page}')"><div style="flex:1;min-width:0"><div class="t-strong">${a.icon} ${esc(a.title)}</div><div class="t-sub">${a.cat} · ${a.sub}</div></div></div>`).join(''):'<div class="empty" style="padding:16px">Срочных событий нет 🎉</div>');}},
+  budget:{label:'Виджет · Бюджет план/факт',span:2,build:()=>{const y=String(TODAY.getFullYear());const bs=SCOPE==='all'?buildingsList():buildingsList().filter(b=>b.id===SCOPE);
+    let iP=0,iF=0,eP=0,eF=0;bs.forEach(b=>{const bg=(DB.budgets||{})[b.id]||{};iP+=bg.income||0;eP+=bg.expense||0;iF+=bIncome(b.id,y);eF+=bExpense(b.id,y);});
+    const rows=[['План доход',money(iP)],['Факт доход',money(iF)+' '+pctCell(iF,iP)],['План расход',money(eP)],['Факт расход',money(eF)+' '+pctCell(eF,eP,true)],['NOI (факт)',`<b>${money(iF-eF)}</b>`]].map(([l,v])=>`<tr><td class="t-sub">${l}</td><td style="text-align:right">${v}</td></tr>`);
+    return dashCard('📈 Бюджет '+y,null,`<table><tbody>${rows.join('')}</tbody></table>`);}},
+  expiring:{label:'Виджет · Договоры на исходе',span:2,build:()=>{const cs=DB.contracts.filter(c=>{if(c.status==='ended')return false;const u=unitOf(c.unit);if(!(SCOPE==='all'||(u&&u.building===SCOPE)))return false;const dl=c.end?daysLeft(c.end):9999;return dl<=90;}).sort((a,b)=>daysLeft(a.end)-daysLeft(b.end)).slice(0,5);
+    return dashCard('📄 Договоры на исходе',cs.length,dashRows(cs.map(c=>{const t=tenantOf(c.tenant);return `<tr><td><div class="t-strong">${esc(t?t.name:c.id)}</div><div class="t-sub">${esc(c.unit)} · до ${c.end?fmtD(c.end):'—'}</div></td><td style="text-align:right">${dueLabel(c.end)}</td></tr>`;}),'Нет договоров на исходе'));}},
+};
+function dashCfg(){ try{const s=JSON.parse(localStorage.getItem(dashStoreKey()));
+  if(s&&Array.isArray(s.order)) return {order:s.order.filter(id=>DASH_CATALOG[id])};
+  }catch{} return {order:DASH_DEFAULT_ORDER.slice()}; }
 function saveDashCfg(c){ localStorage.setItem(dashStoreKey(), JSON.stringify(c)); }
-
 function dashboard(){
-  const m=metrics(); const cfg=dashCfg();
-  const overdue=sPayments().filter(p=>p.status==='overdue').map(p=>{const c=contractOf(p.contract);return{name:tenantOf(c.tenant).name,unit:c.unit,amount:p.amount-p.paid};});
-  const tasksOpen=TASKS.filter(t=>t.status!=='done').sort((a,b)=>daysLeft(a.due)-daysLeft(b.due)).slice(0,5);
-  const KPI={
-    occ:kpi('Заполняемость','#4f8cff','📐',m.occPct+'%','+3% за месяц','up'),
-    billed:kpi('Начислено (мес.)','#a78bfa','🧾',fmt(m.billed/1000)+' тыс','план аренды',''),
-    collected:kpi('Собрано (мес.)','#37d39b','💰',fmt(m.collected/1000)+' тыс',pct(m.collected,m.billed)+'% от плана','up'),
-    debt:kpi('Задолженность','#ff5d6c','⚠️',fmt(m.debt/1000)+' тыс',DB.payments.filter(p=>p.amount-p.paid>0).length+' счёта','down'),
-    net:kpi('Чистый доход','#39d0d8','📈',fmt(m.net/1000)+' тыс','собрано − расходы',''),
-  };
-  const kpiHtml=['occ','billed','collected','debt','net'].filter(k=>cfg[k]).map(k=>KPI[k]).join('');
-  const chIncomeCard=`<div class="card"><div class="panel-title"><h3>Доходы и расходы</h3><span class="muted">тыс ₽ · 6 мес</span></div><canvas id="chIncome" height="120"></canvas></div>`;
-  const chOccCard=`<div class="card"><div class="panel-title"><h3>Структура площадей</h3><span class="muted">м²</span></div><canvas id="chOcc" height="120"></canvas></div>`;
-  const overdueCard=`<div class="card"><div class="panel-title"><h3>⚠️ Просроченные платежи</h3><span class="muted">${overdue.length}</span></div>
-      <table><tbody>${overdue.length?overdue.map(o=>`<tr><td><div class="t-strong">${esc(o.name)}</div><div class="t-sub">Помещение ${o.unit}</div></td><td style="text-align:right"><span class="pill red">${money(o.amount)}</span></td></tr>`).join(''):'<tr><td class="empty">Нет просрочек</td></tr>'}</tbody></table></div>`;
-  const tasksCard=`<div class="card"><div class="panel-title"><h3>Ближайшие задачи</h3><span class="muted">${tasksOpen.length}</span></div>
-      <table><tbody>${tasksOpen.length?tasksOpen.map(t=>`<tr><td><div class="t-strong">${esc(t.title)}</div><div class="t-sub">${esc(t.assignee_name||'—')} · ${esc(t.unit)}</div></td><td style="text-align:right">${prioPill(t.priority)}<div class="t-sub" style="margin-top:4px">${dueLabel(t.due)}</div></td></tr>`).join(''):'<tr><td class="empty">Нет задач</td></tr>'}</tbody></table></div>`;
-  const chartsRow = (cfg.chIncome||cfg.chOcc) ? `<div class="grid" style="grid-template-columns:${cfg.chIncome&&cfg.chOcc?'1.6fr 1fr':'1fr'};margin-bottom:18px">${cfg.chIncome?chIncomeCard:''}${cfg.chOcc?chOccCard:''}</div>` : '';
-  const widgetsRow = (cfg.overdue||cfg.tasks) ? `<div class="grid" style="grid-template-columns:${cfg.overdue&&cfg.tasks?'1fr 1fr':'1fr'}">${cfg.overdue?overdueCard:''}${cfg.tasks?tasksCard:''}</div>` : '';
-  const empty = !(kpiHtml||chartsRow||widgetsRow) ? '<div class="card"><div class="empty">Все блоки скрыты. Нажмите «⚙ Настроить», чтобы включить нужные.</div></div>' : '';
+  _dashM=metrics(); const cfg=dashCfg();
+  const tiles=cfg.order.map(id=>{const w=DASH_CATALOG[id];if(!w)return '';
+    return `<div class="dash-tile" data-wid="${id}" draggable="true" style="grid-column:span ${w.span};cursor:grab;align-self:start">${w.build()}</div>`;}).join('');
+  const empty=!cfg.order.length?'<div class="card"><div class="empty">Все блоки скрыты. Нажмите «⚙ Настроить» и добавьте нужные.</div></div>':'';
   el(head('Дашборд', `${scopeSub()} · ${TODAY.toLocaleDateString('ru-RU',{day:'numeric',month:'long',year:'numeric'})}`,
     `<button class="btn ghost sm" onclick="dashSettings()">⚙ Настроить</button>${(ME.role==='admin'||ME.role==='owner')?` <button class="btn ghost sm" onclick="resetDemo()">↺ Демо-данные</button>`:''}`)+
-  (kpiHtml?`<div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(165px,1fr));margin-bottom:18px">${kpiHtml}</div>`:'')+
-  chartsRow+widgetsRow+empty);
-  if(cfg.chIncome)drawIncome(); if(cfg.chOcc)drawOcc();
+  (cfg.order.length?`<div class="t-sub" style="margin-bottom:10px">✋ Перетаскивайте блоки мышью, чтобы расставить по-своему. «⚙ Настроить» — добавить/убрать блоки.</div>`:'')+
+  `<div class="grid" id="dashGrid" style="grid-template-columns:repeat(auto-fill,minmax(220px,1fr));align-items:start">${tiles}</div>${empty}`);
+  cfg.order.forEach(id=>{const w=DASH_CATALOG[id];if(w&&w.draw){try{w.draw();}catch{}}});
+  dashDrag();
 }
-function dashSettings(){
-  const cfg=dashCfg();
-  const items=[['occ','KPI · Заполняемость'],['billed','KPI · Начислено'],['collected','KPI · Собрано'],['debt','KPI · Задолженность'],['net','KPI · Чистый доход'],
-    ['chIncome','График · Доходы и расходы'],['chOcc','График · Структура площадей'],['overdue','Виджет · Просроченные платежи'],['tasks','Виджет · Ближайшие задачи']];
+function dashDrag(){ const grid=document.getElementById('dashGrid'); if(!grid)return; let dragId=null;
+  grid.querySelectorAll('.dash-tile').forEach(elm=>{
+    elm.addEventListener('dragstart',()=>{dragId=elm.dataset.wid;elm.style.opacity='.35';});
+    elm.addEventListener('dragend',()=>{elm.style.opacity='';});
+    elm.addEventListener('dragover',e=>e.preventDefault());
+    elm.addEventListener('drop',e=>{e.preventDefault();const overId=elm.dataset.wid;if(!dragId||dragId===overId)return;
+      const cfg=dashCfg();const o=cfg.order.slice();const from=o.indexOf(dragId),to=o.indexOf(overId);if(from<0||to<0)return;
+      o.splice(from,1);o.splice(to,0,dragId);saveDashCfg({order:o});render();});
+  });
+}
+function dashSettings(){ const cfg=dashCfg(); const cur=new Set(cfg.order);
   openM(`<div class="modal-h"><h3>Настройка дашборда</h3><span class="x" onclick="closeM()">×</span></div>
-  <div class="modal-b"><div class="t-sub" style="margin-bottom:10px">Выберите блоки для показа. Настройка сохраняется лично для вашего аккаунта.</div>
-  ${items.map(([k,label])=>`<label style="display:flex;align-items:center;gap:11px;padding:10px 0;border-bottom:1px solid var(--line);cursor:pointer">
-    <input type="checkbox" id="dc-${k}" ${cfg[k]?'checked':''} style="width:18px;height:18px;accent-color:var(--accent)"><span>${label}</span></label>`).join('')}
+  <div class="modal-b"><div class="t-sub" style="margin-bottom:10px">Отметьте блоки для показа. Порядок меняется перетаскиванием прямо на дашборде. Настройка — лично для вашего аккаунта.</div>
+  ${Object.entries(DASH_CATALOG).map(([k,w])=>`<label style="display:flex;align-items:center;gap:11px;padding:9px 0;border-bottom:1px solid var(--line);cursor:pointer">
+    <input type="checkbox" id="dc-${k}" ${cur.has(k)?'checked':''} style="width:18px;height:18px;accent-color:var(--accent)"><span>${w.label}</span></label>`).join('')}
   </div>
   <div class="modal-f"><button class="btn ghost" onclick="resetDash()">Сбросить</button><button class="btn" onclick="applyDash()">Применить</button></div>`);}
-function applyDash(){ const cfg={}; DASH_KEYS.forEach(k=>cfg[k]=document.getElementById('dc-'+k).checked?1:0); saveDashCfg(cfg); closeM(); render(); }
-function resetDash(){ saveDashCfg({...DASH_DEFAULT}); closeM(); render(); }
+function applyDash(){ const old=dashCfg().order; const enabled=Object.keys(DASH_CATALOG).filter(k=>document.getElementById('dc-'+k)?.checked);
+  const order=old.filter(k=>enabled.includes(k)).concat(enabled.filter(k=>!old.includes(k)));
+  saveDashCfg({order}); closeM(); render(); }
+function resetDash(){ saveDashCfg({order:DASH_DEFAULT_ORDER.slice()}); closeM(); render(); }
 function kpi(label,color,ic,v,delta,dir){
   return `<div class="card kpi"><div class="kpi-top"><span class="label">${label}</span><span class="kpi-ic" style="background:${color}22;color:${color}">${ic}</span></div>
   <div class="val">${v}</div><div class="delta ${dir}">${dir==='up'?'▲ ':dir==='down'?'▼ ':''}${delta}</div></div>`;
