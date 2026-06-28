@@ -3,14 +3,16 @@
 # (полная изоляция данных) на своём поддомене с бесплатным HTTPS.
 #
 # Использование:
-#   ./new-client.sh <имя> <поддомен>
-#   ./new-client.sh demo demo.citisrm.ru
+#   ./new-client.sh <имя> <поддомен> [пароль]
+#   ./new-client.sh client1 client1.citisrm.ru                 # случайный сильный пароль
+#   ./new-client.sh demo demo.citisrm.ru demo2026              # заданный простой пароль (для демо)
 set -euo pipefail
 
 NAME="${1:-}"; DOMAIN="${2:-}"
 if [ -z "$NAME" ] || [ -z "$DOMAIN" ]; then
-  echo "Использование: $0 <имя> <поддомен>"
+  echo "Использование: $0 <имя> <поддомен> [пароль]"
   echo "Пример:        $0 client1 client1.citisrm.ru"
+  echo "Демо с паролем: $0 demo demo.citisrm.ru demo2026"
   exit 1
 fi
 # Имя — только латиница/цифры/дефис (используется в имени контейнера и папке).
@@ -33,10 +35,13 @@ docker build -t citi-srm:latest "$SRC" >/dev/null
 
 echo "→ Создаю изолированное приложение и базу для клиента '$NAME'…"
 mkdir -p "$CDIR/data"
-# Сильный стартовый пароль для всех учёток клиента (задаётся при первом создании базы).
-# set +o pipefail в подоболочке — иначе head закрывает пайп → SIGPIPE у tr → выход из скрипта.
-SEED_PW="$(set +o pipefail; tr -dc 'A-Za-z0-9' </dev/urandom | head -c 14)"
-[ -n "$SEED_PW" ] || SEED_PW="$(openssl rand -hex 7 2>/dev/null || echo srmAdmin$$)"
+# Стартовый пароль учёток. Можно задать 3-м аргументом (для демо-кабинетов с простым паролем),
+# иначе генерируется случайный сильный. set +o pipefail — иначе head закрывает пайп → SIGPIPE у tr.
+SEED_PW="${3:-}"
+if [ -z "$SEED_PW" ]; then
+  SEED_PW="$(set +o pipefail; tr -dc 'A-Za-z0-9' </dev/urandom | head -c 14)"
+  [ -n "$SEED_PW" ] || SEED_PW="$(openssl rand -hex 7 2>/dev/null || echo srmAdmin$$)"
+fi
 cat > "$CDIR/docker-compose.yml" <<EOF
 # Приложение клиента «$NAME». База — в ./data/srm.db (только для этого клиента).
 # SEED_PASSWORD — стартовый пароль учёток (применяется один раз при создании базы).
