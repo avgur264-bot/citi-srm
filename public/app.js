@@ -42,6 +42,9 @@ const TODAY = new Date();
 
 const canView = m => ME && ME.permissions.view.includes(m);
 const canEdit = m => ME && ME.permissions.edit.includes(m);
+// логин: вводят только имя → подставляем домен; полный email оставляем как есть
+const LOGIN_DOMAIN='@citisrm.ru';
+const mkLogin = v => { v=(v||'').trim(); return !v? '' : (v.includes('@')? v.toLowerCase() : v.toLowerCase()+LOGIN_DOMAIN); };
 
 /* ---------- helpers ---------- */
 const fmt=n=>new Intl.NumberFormat('ru-RU').format(Math.round(n));
@@ -180,7 +183,7 @@ function showAuth(mode='login'){
   const login = `
     <h2>Вход в систему</h2><div class="lead">СИТИ SRM — управление коммерческой недвижимостью</div>
     <div class="err" id="authErr"></div>
-    <div class="field"><label>Email</label><input id="a-email" type="email" placeholder="admin@citisrm.ru" autocomplete="username"></div>
+    <div class="field"><label>Логин</label><input id="a-email" placeholder="admin (или admin@citisrm.ru)" autocomplete="username"></div>
     <div class="field"><label>Пароль</label><input id="a-pw" type="password" placeholder="••••••••" autocomplete="current-password"></div>
     <button class="btn" onclick="doLogin()">Войти</button>
     ${ALLOW_REG?`<div class="swap">Нет аккаунта? <a onclick="showAuth('register')">Зарегистрироваться</a></div>
@@ -198,7 +201,7 @@ function showAuth(mode='login'){
     <div class="field"><label>ФИО</label><input id="r-name" placeholder="Иванов Иван"></div>
     <div class="row2"><div class="field"><label>Должность</label><input id="r-pos" placeholder="Менеджер"></div>
       <div class="field"><label>Телефон</label><input id="r-phone" placeholder="+7 ..."></div></div>
-    <div class="field"><label>Email</label><input id="r-email" type="email" placeholder="you@citisrm.ru"></div>
+    <div class="field"><label>Логин</label><div style="display:flex"><input id="r-email" placeholder="ivanov" style="border-top-right-radius:0;border-bottom-right-radius:0"><span style="padding:9px 11px;border:1px solid var(--line2);border-left:none;border-radius:0 10px 10px 0;background:var(--bg2);color:var(--muted);white-space:nowrap;display:flex;align-items:center">@citisrm.ru</span></div></div>
     <div class="field"><label>Пароль</label><input id="r-pw" type="password" placeholder="не короче 6 символов"></div>
     <div class="field"><label>Роль (права доступа)</label><select id="r-role">${roleOpts}</select></div>
     <button class="btn" onclick="doRegister()">Создать аккаунт</button>
@@ -216,7 +219,7 @@ function showAuth(mode='login'){
 function authErr(msg){ const e=document.getElementById('authErr'); if(e){e.textContent=msg;e.classList.add('show');} }
 
 async function doLogin(){
-  try{ const {user}=await api('/api/auth/login','POST',{email:val('a-email'),password:val('a-pw')});
+  try{ const {user}=await api('/api/auth/login','POST',{email:mkLogin(val('a-email')),password:val('a-pw')});
     ME=user; await loadData(); showApp(); }
   catch(e){ authErr(e.message); }
 }
@@ -228,7 +231,7 @@ async function doRegister(){
   const pw=val('r-pw'); if(pw.length<6) return authErr('Пароль не короче 6 символов');
   try{ const {user}=await api('/api/auth/register','POST',{
       full_name:val('r-name'),position:val('r-pos'),phone:val('r-phone'),
-      email:val('r-email'),password:pw,role:val('r-role')});
+      email:mkLogin(val('r-email')),password:pw,role:val('r-role')});
     ME=user; await loadData(); showApp(); }
   catch(e){ authErr(e.message); }
 }
@@ -2064,7 +2067,8 @@ function userModal(id){
   <div class="modal-b"><div class="field"><label>ФИО</label><input id="u-name" value="${u?esc(u.full_name):''}"></div>
   <div class="row2"><div class="field"><label>Должность</label><input id="u-pos" value="${u?esc(u.position):''}"></div>
     <div class="field"><label>Телефон</label><input id="u-phone" value="${u?esc(u.phone):''}"></div></div>
-  <div class="field"><label>Email (логин)</label><input id="u-email" type="email" value="${u?esc(u.email):''}" ${u?'disabled style="opacity:.6"':''}></div>
+  ${u?`<div class="field"><label>Логин</label><input id="u-email" value="${esc(u.email)}" disabled style="opacity:.6"></div>`
+     :`<div class="field"><label>Логин</label><div style="display:flex"><input id="u-email" placeholder="ivanov" style="border-top-right-radius:0;border-bottom-right-radius:0"><span style="padding:9px 11px;border:1px solid var(--line2);border-left:none;border-radius:0 10px 10px 0;background:var(--bg2);color:var(--muted);white-space:nowrap;display:flex;align-items:center">@citisrm.ru</span></div><div class="t-sub" style="margin-top:4px">Введите только имя — домен подставится. Можно и полный email.</div></div>`}
   <div class="field"><label>${u?'Новый пароль (если менять)':'Пароль'}</label><input id="u-pw" type="password" placeholder="${u?'оставьте пустым':'не короче 6 символов'}"></div>
   <div class="field"><label>Роль (права доступа)</label><select id="u-role">${roleOpts}</select></div>
   ${u?`<div class="field"><label>Доступ</label><select id="u-active"><option value="1"${u.active?' selected':''}>Активен</option><option value="0"${!u.active?' selected':''}>Отключён</option></select></div>`:''}
@@ -2078,7 +2082,8 @@ async function saveUser(id){
       await api('/api/users/'+id,'PATCH',body);
     }else{
       const pw=val('u-pw'); if(pw.length<6)return alert('Пароль не короче 6 символов');
-      await api('/api/users','POST',{full_name:val('u-name'),position:val('u-pos'),phone:val('u-phone'),email:val('u-email'),password:pw,role:val('u-role')});
+      const email=mkLogin(val('u-email')); if(!email)return alert('Укажите логин');
+      await api('/api/users','POST',{full_name:val('u-name'),position:val('u-pos'),phone:val('u-phone'),email,password:pw,role:val('u-role')});
     }
     closeM(); USERS=await api('/api/users'); if(id===ME.id){const me=await api('/api/auth/me');ME=me.user;} render();
   }catch(e){alert(e.message);}
