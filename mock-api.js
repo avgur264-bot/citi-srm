@@ -189,6 +189,8 @@ async function api(path, method='GET', body){
   if(path==='/api/config') return {allowRegistration:true};
   // Telegram-отправка работает только на реальном сервере, не в автономном демо.
   if(path==='/api/notify/test') return {ok:false, demo:true};
+  // В автономном демо нет файловой системы — храним файл встроенным data-URL (как раньше).
+  if(path==='/api/files'&&method==='POST') return {url:body.dataUrl, stored:'embed'};
   if(path==='/api/auth/register'&&method==='POST'){
     const email=(body.email||'').toLowerCase().trim();
     if(!email||!body.password||!body.full_name) E('Заполните email, пароль и ФИО');

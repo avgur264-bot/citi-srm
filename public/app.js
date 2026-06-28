@@ -51,7 +51,7 @@ const fmt=n=>new Intl.NumberFormat('ru-RU').format(Math.round(n));
 const money=n=>fmt(n)+' ₽';
 const esc=s=>(s==null?'':String(s)).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 // безопасная внешняя ссылка: только http(s)/mailto, иначе пусто (защита от javascript:/data:text/html)
-const safeUrl=u=>{ const s=String(u||'').trim(); return /^(https?:\/\/|mailto:)/i.test(s)?s:''; };
+const safeUrl=u=>{ const s=String(u||'').trim(); return (/^(https?:\/\/|mailto:)/i.test(s) || /^\/api\/files\//.test(s))?s:''; };
 // ячейка CSV: экранирование + защита от формульных инъекций в Excel (ведущие = + - @)
 const csvCell=v=>{ let s=String(v==null?'':v); if(/^[=+\-@\t\r]/.test(s)) s="'"+s; return '"'+s.replace(/"/g,'""')+'"'; };
 const tenantOf=id=>DB.tenants.find(t=>t.id===id);
@@ -2135,11 +2135,21 @@ function addDocModal(type,id){_docFile=null;openM(`<div class="modal-h"><h3>До
   <div class="field"><label>Или ссылка на файл (если он уже где-то хранится)</label><input id="d-url" placeholder="https://…"></div>
   <div class="t-sub">Выберите файл с компьютера — он сохранится и будет открываться по кнопке «Открыть». Либо укажите ссылку. До 3 МБ.</div></div>
   <div class="modal-f"><button class="btn ghost" onclick="${backToInfo(type,id)}">Отмена</button><button class="btn" onclick="saveDoc('${type}','${id}')">Прикрепить</button></div>`);}
+function docFolder(type,id){
+  if(type==='unit'){ const u=unitOf(id); return ((u&&u.building)||'obj')+'/'+id; }
+  if(type==='tenant'){ return 'tenants/'+id; }
+  if(type==='listing'){ const a=(DB.listings||[]).find(x=>x.id===id); return 'ads/'+((a&&a.building)||'_')+'/'+id; }
+  if(type==='signage'){ const s=(DB.signage||[]).find(x=>x.id===id); return 'signage/'+((s&&s.building)||'_')+'/'+id; }
+  return 'misc/'+id;
+}
 async function saveDoc(type,id){const e=docEntity(type,id);if(!e)return;if(!e.documents)e.documents=[];
-  const url=_docFile?_docFile.data:(val('d-url')||null);
   const name=val('d-name')||(_docFile&&_docFile.name)||'Документ.pdf';
-  if(!_docFile && !val('d-url')){ if(!confirm('Файл не выбран и ссылка не указана — прикрепить только запись о документе?'))return; }
-  e.documents.push({name,type:val('d-type'),kind:DOC_TYPES[val('d-type')],date:val('d-date')||null,url,uploaded:!!_docFile});
+  let url=val('d-url')||null, stored='link';
+  if(_docFile){
+    try{ const r=await api('/api/files','POST',{folder:docFolder(type,id),name:_docFile.name,dataUrl:_docFile.data}); url=r.url; stored=r.stored||'file'; }
+    catch(err){ return alert('Не удалось загрузить файл: '+(err.message||err)); }
+  } else if(!val('d-url')){ if(!confirm('Файл не выбран и ссылка не указана — прикрепить только запись о документе?'))return; }
+  e.documents.push({name,type:val('d-type'),kind:DOC_TYPES[val('d-type')],date:val('d-date')||null,url,uploaded:!!_docFile,stored});
   _docFile=null; await saveState(); render(); reopenInfo(type,id);}
 async function delDoc(type,id,i){const e=docEntity(type,id);if(!e||!e.documents)return;if(!confirm('Удалить документ «'+e.documents[i].name+'»?'))return;
   e.documents.splice(i,1); await saveState(); render(); reopenInfo(type,id);}

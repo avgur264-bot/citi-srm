@@ -4,10 +4,10 @@
 // Без внешних зависимостей: node:http + node:sqlite + node:crypto.
 // ============================================================
 import http from 'node:http';
-import { readFile } from 'node:fs/promises';
+import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-import { dirname, join, extname, normalize } from 'node:path';
+import { dirname, join, extname, normalize, sep } from 'node:path';
 import {
   db, seed, resetData, hashPassword, verifyPassword,
   ROLES, ROLE_KEYS, perms, canView, canEdit
@@ -15,7 +15,11 @@ import {
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PUBLIC = join(__dirname, 'public');
+const FILES_PATH = process.env.FILES_PATH || join(__dirname, 'files');  // локальное хранилище документов (монтируется томом на клиента)
 const PORT = process.env.PORT || 4000;
+// санитизация сегмента пути (буквы/цифры/._- , кириллица), без выхода вверх
+const sanSeg = s => String(s||'').replace(/[^\w.\-а-яёА-ЯЁ ]+/gi,'_').replace(/^\.+/,'').slice(0,60);
+const sanitizeRel = p => String(p||'').split('/').map(sanSeg).filter(Boolean).join('/') || 'misc';
 
 seed();
 
@@ -363,13 +367,49 @@ async function api(req, res, url){
     return send(res,200,{ ok });
   }
 
+  // ---- загрузка документа в локальное файловое хранилище ----
+  if(path==='/api/files' && method==='POST'){
+    if(!isFull(me.role) && !canEdit(me.role,'objects') && !canEdit(me.role,'tenants') && !canEdit(me.role,'ads'))
+      return send(res,403,{error:'Нет прав на загрузку документов'});
+    const b = await readBody(req);
+    if(!b.dataUrl || !/^data:/.test(b.dataUrl)) return send(res,400,{error:'Нет файла'});
+    const mime = (/^data:([^;,]+)[;,]/.exec(b.dataUrl)||[])[1] || '';
+    if(/(html|svg|xml|xhtml|javascript|ecmascript)/i.test(mime) || /\.(html?|svg|xml|js|mjs)$/i.test(b.name||''))
+      return send(res,403,{error:'Тип файла запрещён (html/svg/скрипты)'});
+    const base64 = b.dataUrl.split(',')[1] || '';
+    const buf = Buffer.from(base64, 'base64');
+    if(buf.length > 4*1024*1024) return send(res,413,{error:'Файл больше 4 МБ'});
+    const folder = sanitizeRel(b.folder || 'misc');
+    const safeName = sanSeg(b.name || 'file').slice(0,80) || 'file';
+    const fname = Date.now() + '_' + safeName;
+    const abs = join(FILES_PATH, folder, fname);
+    if(!abs.startsWith(FILES_PATH + sep)) return send(res,400,{error:'Некорректный путь'});
+    try{
+      await mkdir(dirname(abs), { recursive:true });
+      await writeFile(abs, buf);
+      return send(res,200,{ url:'/api/files/'+folder+'/'+encodeURIComponent(fname), stored:'file', size:buf.length });
+    }catch(e){ console.error('file upload', e.message); return send(res,500,{error:'Не удалось сохранить файл'}); }
+  }
+  // ---- отдача документа (только залогиненным) ----
+  if(seg[1]==='files' && method==='GET' && seg.length>2){
+    const rel = decodeURIComponent(seg.slice(2).join('/'));
+    const safe = normalize(rel).replace(/^(\.\.[/\\])+/,'');
+    const abs = join(FILES_PATH, safe);
+    if(!abs.startsWith(FILES_PATH + sep)) { res.writeHead(403); return res.end('Forbidden'); }
+    try{
+      const data = await readFile(abs);
+      res.writeHead(200, { 'Content-Type': MIME[extname(abs).toLowerCase()] || 'application/octet-stream', 'Cache-Control':'private, max-age=3600' });
+      return res.end(data);
+    }catch{ res.writeHead(404); return res.end('Not found'); }
+  }
+
   return send(res,404,{error:'Не найдено'});
 }
 
 // ============================================================
 // Статика
 // ============================================================
-const MIME={'.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.svg':'image/svg+xml','.json':'application/json','.ico':'image/x-icon','.png':'image/png','.jpg':'image/jpeg','.jpeg':'image/jpeg','.webmanifest':'application/manifest+json','.webp':'image/webp'};
+const MIME={'.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.svg':'image/svg+xml','.json':'application/json','.ico':'image/x-icon','.png':'image/png','.jpg':'image/jpeg','.jpeg':'image/jpeg','.webmanifest':'application/manifest+json','.webp':'image/webp','.pdf':'application/pdf','.gif':'image/gif','.heic':'image/heic','.doc':'application/msword','.docx':'application/vnd.openxmlformats-officedocument.wordprocessingml.document','.xls':'application/vnd.ms-excel','.xlsx':'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','.txt':'text/plain; charset=utf-8','.zip':'application/zip'};
 async function serveStatic(req,res,url){
   let p = decodeURIComponent(url.pathname);
   if(p==='/') p='/index.html';

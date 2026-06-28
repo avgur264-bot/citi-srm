@@ -44,7 +44,7 @@ echo "→ Обновляю образ приложения citi-srm:latest…"
 docker build -t citi-srm:latest "$SRC" >/dev/null
 
 echo "→ Создаю изолированное приложение и базу для клиента '$NAME'…"
-mkdir -p "$CDIR/data"
+mkdir -p "$CDIR/data" "$CDIR/files"
 # Стартовый пароль учёток. Можно задать 3-м аргументом (для демо-кабинетов с простым паролем),
 # иначе генерируется случайный сильный. set +o pipefail — иначе head закрывает пайп → SIGPIPE у tr.
 SEED_PW="${3:-}"
@@ -63,9 +63,11 @@ services:
     environment:
       - PORT=4000
       - DB_PATH=/app/data/srm.db
+      - FILES_PATH=/app/files
       - SEED_PASSWORD=$SEED_PW
     volumes:
       - ./data:/app/data
+      - ./files:/app/files
     networks: [srmnet]
     restart: unless-stopped
 networks:

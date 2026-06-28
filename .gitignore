@@ -10,3 +10,6 @@ npm-debug.log*
 
 # автономный демо-билд (генерируется build-standalone.mjs)
 srm-demo.html
+
+# локальное хранилище документов
+files/
