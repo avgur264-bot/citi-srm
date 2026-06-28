@@ -232,7 +232,7 @@ async function logout(){ try{await api('/api/auth/logout','POST');}catch{} stopP
    APP SHELL
    ============================================================ */
 const NAV=[
-  {group:'Обзор',items:[['dashboard','▦','Дашборд'],['alerts','🔔','Центр сроков']]},
+  {group:'Обзор',items:[['dashboard','▦','Дашборд'],['alerts','🔔','Центр сроков'],['help','❓','Помощь']]},
   {group:'Управление',items:[['objects','🏢','Объекты и занятость'],['tenants','👥','Арендаторы'],['contracts','📄','Договоры']]},
   {group:'Финансы',items:[['payments','💳','Платежи аренды'],['utilities','⚡','Коммуналка и расходы'],['salaries','💼','Зарплата (ФОТ)'],['budget','📈','Бюджет и долги']]},
   {group:'Операции',items:[['tasks','✓','Задачи'],['requests','🛠','Заявки'],['upkeep','🧰','Плановое ТО'],['ads','📣','Реклама'],['employees','🧑‍💼','Сотрудники'],['reports','📊','Отчёты']]},
@@ -241,7 +241,7 @@ const NAV=[
 ];
 // модули, которые можно включать/выключать в настройках (без dashboard и settings)
 const TOGGLEABLE=[['objects','Объекты и занятость'],['tenants','Арендаторы'],['contracts','Договоры'],['payments','Платежи аренды'],['utilities','Коммуналка и расходы'],['salaries','Зарплата (ФОТ)'],['budget','Бюджет и долги'],['tasks','Задачи'],['requests','Заявки на обслуживание'],['upkeep','Плановое ТО'],['ads','Реклама и вывески'],['employees','Сотрудники'],['reports','Отчёты'],['integrations','Синхронизация']];
-const navVisible = k => (k==='settings'||k==='audit') ? isAdmin() : (k==='alerts') ? true : (canView(k) && modOn(k));
+const navVisible = k => (k==='settings'||k==='audit') ? isAdmin() : (k==='alerts'||k==='help') ? true : (canView(k) && modOn(k));
 const PAGE_TITLES={dashboard:'Дашборд',objects:'Объекты',tenants:'Арендаторы',contracts:'Договоры',payments:'Платежи',utilities:'Коммуналка',tasks:'Задачи',employees:'Сотрудники',reports:'Отчёты'};
 
 function showApp(){
@@ -285,7 +285,7 @@ function renderScopeSelector(){
   </select>`;
 }
 
-const PAGES={dashboard,alerts,objects,tenants,contracts,payments,utilities,salaries,tasks,requests,upkeep,ads,budget,employees,reports,integrations,audit:auditPage,settings:settingsPage};
+const PAGES={dashboard,alerts,help,objects,tenants,contracts,payments,utilities,salaries,tasks,requests,upkeep,ads,budget,employees,reports,integrations,audit:auditPage,settings:settingsPage};
 function render(){ updateBadges(); const m=document.getElementById('main'); if(!m)return; m.innerHTML=''; (PAGES[current]||dashboard)(); }
 function el(html){ const d=document.createElement('div'); d.className='page'; d.innerHTML=html; document.getElementById('main').appendChild(d); return d; }
 function head(title,sub,actions=''){ return `<div class="topbar"><div style="display:flex;align-items:center;gap:8px"><h1>${title}</h1>${PAGE_HELP[current]?`<button class="bell" style="width:30px;height:30px;font-size:15px" title="Для чего этот раздел" onclick="pageHelp()">ℹ️</button>`:''}</div><div class="sub" style="width:100%">${sub}</div><div class="spacer"></div>${actions}${bellHTML()}</div>`; }
@@ -313,6 +313,37 @@ function pageHelp(){ const h=PAGE_HELP[current]; if(!h)return;
   openM(`<div class="modal-h"><h3>ℹ️ ${esc(h.t)}</h3><span class="x" onclick="closeM()">×</span></div>
   <div class="modal-b"><div style="line-height:1.6">${esc(h.d)}</div></div>
   <div class="modal-f"><button class="btn" onclick="closeM()">Понятно</button></div>`);
+}
+function help(){
+  const steps=[
+    'Заведите объекты и помещения — раздел «Объекты и занятость» (кнопки «+ Объект», «+ Помещение»).',
+    'Добавьте арендаторов и оформите договоры аренды.',
+    'Внесите сотрудников и настройте им права — раздел «Сотрудники» (матрица прав).',
+    'Оформите систему под себя — «Настройки»: логотип, название, цвет, нужные модули, справочники.',
+    'Соберите дашборд под себя — «⚙ Настроить» и перетаскивание блоков мышью.',
+    'Работайте: платежи, заявки, плановое ТО, бюджет, отчёты. Следите за «Центром сроков» 🔔.'
+  ];
+  const tips=[
+    'У каждого раздела рядом с заголовком есть «ℹ️» — краткое описание, для чего он.',
+    'Колокольчик 🔔 вверху показывает всё срочное (просрочки, истекающие договоры, ТО).',
+    'Переключатель «Все объекты» вверху слева фильтрует ВСЕ разделы по выбранному зданию.',
+    'Тёмная/светлая тема — переключатель внизу бокового меню.',
+    'Документы (PDF, фото) можно прикреплять в карточках помещений, арендаторов, объявлений и разрешений.',
+    'Доступ к разделам зависит от вашей роли — права настраивает администратор в «Сотрудниках».'
+  ];
+  const sections=NAV.map(g=>{ const items=g.items.filter(i=>i[0]!=='help'&&navVisible(i[0])&&PAGE_HELP[i[0]]);
+    if(!items.length)return ''; return `<div style="margin-top:14px"><div class="t-sub" style="text-transform:uppercase;letter-spacing:.4px;margin-bottom:6px">${esc(g.group)}</div>
+    ${items.map(([k,ic,label])=>`<div class="doc" style="border:1px solid var(--line2);border-radius:11px;padding:11px 13px;margin-bottom:8px;cursor:pointer" onclick="gotoPage('${k}')">
+      <div class="di" style="font-size:17px">${ic}</div>
+      <div style="flex:1;min-width:0"><div class="t-strong">${esc(label)}</div><div class="t-sub">${esc(PAGE_HELP[k].d)}</div></div>
+      <span class="t-sub">→</span></div>`).join('')}</div>`; }).join('');
+  el(head('Помощь и инструкция','Как пользоваться СИТИ SRM','')+
+  `<div class="card" style="margin-bottom:16px"><div style="line-height:1.6"><b>СИТИ SRM</b> — система управления коммерческой недвижимостью: объекты и помещения, арендаторы и договоры, платежи и расходы, задачи, заявки на обслуживание, плановое ТО, бюджет, реклама, отчёты и интеграции. Всё привязано к объектам — переключатель «Все объекты» вверху слева фильтрует данные по выбранному зданию.</div></div>
+  <div class="card" style="margin-bottom:16px"><div class="sec-h">🚀 Быстрый старт (для нового пользователя)</div>
+    <ol style="margin:6px 0 0;padding-left:20px;display:flex;flex-direction:column;gap:8px;line-height:1.5">${steps.map(s=>`<li>${esc(s)}</li>`).join('')}</ol></div>
+  <div class="card" style="margin-bottom:16px"><div class="sec-h">📚 Разделы системы <span class="t-sub">— нажмите, чтобы перейти</span></div>${sections}</div>
+  <div class="card"><div class="sec-h">💡 Полезные подсказки</div>
+    <ul style="margin:6px 0 0;padding-left:20px;display:flex;flex-direction:column;gap:7px;line-height:1.5">${tips.map(t=>`<li>${esc(t)}</li>`).join('')}</ul></div>`);
 }
 
 function updateBadges(){
