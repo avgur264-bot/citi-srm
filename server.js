@@ -82,8 +82,50 @@ function filterStateForRole(state, role){
   const s = {...state};
   if(!canView(role,'salaries')) s.salaries = [];
   if(!canView(role,'budget')) s.budgets = {};
+  // токен Telegram-бота — только админу/собственнику
+  if(s.settings && s.settings.notify && s.settings.notify.telegram){
+    s.settings = {...s.settings, notify:{...s.settings.notify, telegram:{...s.settings.notify.telegram, token:''}}};
+  }
   return s;
 }
+
+// ---------- ежедневная сводка в Telegram ----------
+const fmtMoney = n => new Intl.NumberFormat('ru-RU').format(Math.round(n||0)) + ' ₽';
+const daysTo = d => d ? Math.round((new Date(d) - new Date(new Date().toISOString().slice(0,10)))/864e5) : 9999;
+function buildDigest(){
+  const st = JSON.parse(db.prepare(`SELECT json FROM state WHERE key='main'`).get().json);
+  const tName = Object.fromEntries((st.tenants||[]).map(t=>[t.id,t.name]));
+  const lines=[];
+  const overdue=(st.payments||[]).filter(p=>p.amount-p.paid>0 && daysTo(p.due)<0);
+  if(overdue.length) lines.push(`\u{1F534} Просроченные платежи: ${overdue.length} на ${fmtMoney(overdue.reduce((s,p)=>s+(p.amount-p.paid),0))}`);
+  const tasks=db.prepare(`SELECT * FROM tasks WHERE status!='done'`).all().filter(t=>daysTo(t.due)<=0);
+  if(tasks.length){ lines.push(`✅ Задачи на сегодня/просрочено: ${tasks.length}`); tasks.slice(0,6).forEach(t=>lines.push(`   • ${t.title}${daysTo(t.due)<0?' (просрочено)':''}`)); }
+  const exp=(st.contracts||[]).filter(c=>c.status!=='ended' && daysTo(c.end)>=0 && daysTo(c.end)<=30);
+  if(exp.length){ lines.push(`\u{1F4C4} Договоры истекают (≤30 дн): ${exp.length}`); exp.slice(0,5).forEach(c=>lines.push(`   • ${tName[c.tenant]||c.id} — до ${c.end}`)); }
+  const to=(st.equipment||[]).filter(e=>daysTo(e.nextService)<=7);
+  if(to.length){ lines.push(`\u{1F9F0} Плановое ТО (скоро/просрочено): ${to.length}`); to.slice(0,5).forEach(e=>lines.push(`   • ${e.name}`)); }
+  const req=(st.requests||[]).filter(r=>r.status==='new'||r.status==='in_progress');
+  if(req.length) lines.push(`\u{1F6E0} Открытые заявки: ${req.length}`);
+  const head=`\u{1F4CA} СИТИ SRM — сводка на ${new Date().toLocaleDateString('ru-RU')}`;
+  return lines.length ? head+'\n\n'+lines.join('\n') : head+'\n\n✅ Срочных дел на сегодня нет.';
+}
+async function sendTelegram(token, chatId, text){
+  try{
+    const r = await fetch(`https://api.telegram.org/bot${token}/sendMessage`,
+      { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({ chat_id: chatId, text }) });
+    return r.ok;
+  }catch{ return false; }
+}
+function notifyCfg(){ try{ const st=JSON.parse(db.prepare(`SELECT json FROM state WHERE key='main'`).get().json); return (st.settings&&st.settings.notify&&st.settings.notify.telegram)||null; }catch{ return null; } }
+// планировщик: раз в минуту проверяем время отправки (раз в день)
+let _lastDigest=null;
+setInterval(async ()=>{
+  const tg=notifyCfg();
+  if(!tg||!tg.enabled||!tg.token||!tg.chatId) return;
+  const now=new Date(); const hhmm=String(now.getHours()).padStart(2,'0')+':'+String(now.getMinutes()).padStart(2,'0');
+  const today=now.toISOString().slice(0,10);
+  if(hhmm===(tg.time||'08:00') && _lastDigest!==today){ _lastDigest=today; await sendTelegram(tg.token, tg.chatId, buildDigest()); }
+}, 60*1000);
 // роли, которые можно выбрать при самостоятельной регистрации (без привилегированных)
 const SELF_ROLES = ['leasing','accountant','maintenance'];
 // Самостоятельная регистрация по умолчанию ВЫКЛЮЧЕНА (безопасность боевого режима).
@@ -298,6 +340,15 @@ async function api(req, res, url){
     if(me.role!=='admin' && me.role!=='owner') return send(res,403,{error:'Недостаточно прав'});
     resetData();
     return send(res,200,{ ok:true });
+  }
+
+  // ---- тестовая отправка сводки в Telegram (админ) ----
+  if(path==='/api/notify/test' && method==='POST'){
+    if(!isFull(me.role)) return send(res,403,{error:'Только администратор'});
+    const tg=notifyCfg();
+    if(!tg||!tg.token||!tg.chatId) return send(res,400,{error:'Не заданы токен бота и chat_id. Сохраните настройки.'});
+    const ok=await sendTelegram(tg.token, tg.chatId, buildDigest());
+    return send(res,200,{ ok });
   }
 
   return send(res,404,{error:'Не найдено'});

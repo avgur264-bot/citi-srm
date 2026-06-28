@@ -187,6 +187,8 @@ async function api(path, method='GET', body){
 
   // В автономном демо регистрация и демо-доступ остаются открытыми.
   if(path==='/api/config') return {allowRegistration:true};
+  // Telegram-отправка работает только на реальном сервере, не в автономном демо.
+  if(path==='/api/notify/test') return {ok:false, demo:true};
   if(path==='/api/auth/register'&&method==='POST'){
     const email=(body.email||'').toLowerCase().trim();
     if(!email||!body.password||!body.full_name) E('Заполните email, пароль и ФИО');

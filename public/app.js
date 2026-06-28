@@ -141,6 +141,8 @@ function ensureState(){
   if(!Array.isArray(S.expenseCats)) S.expenseCats=['Клининг','Охрана','Электроэнергия','Водоснабжение','Отопление','Текущий ремонт','Вывоз мусора','Обслуживание лифтов'];
   if(!Array.isArray(S.unitTypes)) S.unitTypes=['Офис','Ритейл','Кафе','Коворкинг','Склад'];
   if(!Array.isArray(S.payMethodsExtra)) S.payMethodsExtra=[];
+  if(!S.notify || typeof S.notify!=='object') S.notify={};
+  if(!S.notify.telegram || typeof S.notify.telegram!=='object') S.notify.telegram={enabled:false,token:'',chatId:'',time:'08:00'};
 }
 /* ---- брендинг и модули из настроек клиента ---- */
 const isAdmin = ()=> ME && (ME.role==='admin'||ME.role==='owner');
@@ -1588,8 +1590,25 @@ function settingsPage(){
         <textarea id="s-paymethods" rows="3" class="search" style="width:100%;resize:vertical;font-family:inherit" placeholder="Например: СБП&#10;Взаимозачёт">${esc((s.payMethodsExtra||[]).join('\n'))}</textarea></div>
     </div>
   </div>
+  <div class="card" style="margin-top:16px">
+    <div class="sec-h">📨 Уведомления в Telegram (утренняя сводка)</div>
+    <div class="t-sub" style="margin-bottom:10px">Бот будет каждый день в заданное время присылать сводку: просроченные платежи, задачи на сегодня, истекающие договоры, плановое ТО, открытые заявки.</div>
+    <label style="display:flex;align-items:center;gap:10px;padding:6px 0;cursor:pointer"><input type="checkbox" id="s-tg-on" ${s.notify?.telegram?.enabled?'checked':''}> Включить ежедневную сводку</label>
+    <div class="row2"><div class="field"><label>Токен бота (от @BotFather)</label><input id="s-tg-token" value="${esc(s.notify?.telegram?.token||'')}" placeholder="123456:ABC-..."></div>
+      <div class="field"><label>Chat ID (куда слать)</label><input id="s-tg-chat" value="${esc(s.notify?.telegram?.chatId||'')}" placeholder="напр. 123456789 или -100..."></div></div>
+    <div class="row2"><div class="field"><label>Время отправки</label><input id="s-tg-time" type="time" value="${esc(s.notify?.telegram?.time||'08:00')}"></div>
+      <div class="field" style="display:flex;align-items:flex-end"><button class="btn ghost" onclick="testNotify()">📨 Сохранить и отправить тест сейчас</button></div></div>
+    <div class="t-sub" style="margin-top:8px">Как настроить: 1) в Telegram напишите <b>@BotFather</b> → /newbot → получите <b>токен</b>. 2) Напишите своему боту любое сообщение (или добавьте его в группу). 3) Узнайте <b>Chat ID</b> через бота <b>@userinfobot</b> (для себя) или @getidsbot (для группы). 4) Вставьте сюда и нажмите «Отправить тест».</div>
+  </div>
   <div style="margin-top:16px;display:flex;gap:10px"><button class="btn" onclick="saveSettings()">💾 Сохранить настройки</button>
     <span class="t-sub" style="align-self:center">Изменения видят все пользователи этого клиента.</span></div>`);
+}
+async function testNotify(){ ensureState();
+  DB.settings.notify={telegram:{enabled:document.getElementById('s-tg-on').checked,token:val('s-tg-token').trim(),chatId:val('s-tg-chat').trim(),time:val('s-tg-time')||'08:00'}};
+  if(!DB.settings.notify.telegram.token||!DB.settings.notify.telegram.chatId){ return alert('Сначала введите токен бота и Chat ID.'); }
+  await saveState();
+  try{ const r=await api('/api/notify/test','POST'); alert(r.ok?'✅ Тестовая сводка отправлена в Telegram. Проверьте чат с ботом.':'❌ Не удалось отправить. Проверьте токен и Chat ID (и что вы написали боту хотя бы раз).'); }
+  catch(e){ alert('Ошибка: '+(e.message||e)); }
 }
 function onLogoFile(input){ const f=input.files&&input.files[0]; if(!f)return;
   if(!/^image\/(png|jpeg)$/.test(f.type)){ alert('Только PNG или JPG.'); input.value=''; return; }
@@ -1610,6 +1629,7 @@ async function saveSettings(){
   S.expenseCats=lines('s-expcats');
   S.unitTypes=lines('s-unittypes');
   S.payMethodsExtra=lines('s-paymethods');
+  if(document.getElementById('s-tg-on')) S.notify={telegram:{enabled:document.getElementById('s-tg-on').checked,token:val('s-tg-token').trim(),chatId:val('s-tg-chat').trim(),time:val('s-tg-time')||'08:00'}};
   await afterStateChange();
   applyAccent(); showApp();
 }
