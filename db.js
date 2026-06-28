@@ -16,15 +16,15 @@ db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;');
 // view  — какие модули видны (read)
 // edit  — какие модули можно изменять (write)
 // Модули: dashboard, objects, tenants, contracts, payments, utilities, tasks, reports, employees
-const ALL = ['dashboard','objects','tenants','contracts','payments','utilities','tasks','reports','employees','salaries','integrations'];
+const ALL = ['dashboard','objects','tenants','contracts','payments','utilities','tasks','requests','reports','employees','salaries','integrations'];
 
 export const ROLES = {
   admin:       { title:'Администратор',             view: ALL, edit: ALL },
   owner:       { title:'Собственник / Руководитель', view: ALL, edit: ALL },
-  manager:     { title:'Управляющий объектом',       view: ALL, edit: ['dashboard','objects','tenants','contracts','payments','utilities','tasks','reports','salaries','integrations'] },
-  accountant:  { title:'Бухгалтер / Финансист',      view: ['dashboard','objects','tenants','contracts','payments','utilities','tasks','reports','salaries','integrations'], edit: ['payments','utilities','salaries','integrations'] },
-  leasing:     { title:'Отдел аренды',               view: ['dashboard','objects','tenants','contracts','payments','tasks'], edit: ['objects','tenants','contracts','tasks'] },
-  maintenance: { title:'Эксплуатация',               view: ['dashboard','objects','utilities','tasks'], edit: ['utilities','tasks'] },
+  manager:     { title:'Управляющий объектом',       view: ALL, edit: ['dashboard','objects','tenants','contracts','payments','utilities','tasks','requests','reports','salaries','integrations'] },
+  accountant:  { title:'Бухгалтер / Финансист',      view: ['dashboard','objects','tenants','contracts','payments','utilities','tasks','requests','reports','salaries','integrations'], edit: ['payments','utilities','salaries','integrations'] },
+  leasing:     { title:'Отдел аренды',               view: ['dashboard','objects','tenants','contracts','payments','tasks','requests'], edit: ['objects','tenants','contracts','tasks','requests'] },
+  maintenance: { title:'Эксплуатация',               view: ['dashboard','objects','utilities','tasks','requests'], edit: ['utilities','tasks','requests'] },
 };
 export const ROLE_KEYS = Object.keys(ROLES);
 export const perms = role => ROLES[role] || ROLES.maintenance;
@@ -268,6 +268,11 @@ function buildSeedState(){
       {id:'sal6',user_id:6,period:'2026-06',amount:110000,paid:0,status:'accrued',paidDate:null,method:null},
     ],
     integrations:{ bank:{connected:false,name:'',lastSync:null}, energy:{connected:false,lastSync:null}, water:{connected:false,lastSync:null}, onec:{connected:false,base:'',lastSync:null} },
+    requests:[
+      {id:'r1',building:'b1',unit:'2-01',tenant:'t1',title:'Не работает кондиционер',category:'Климат / вентиляция',priority:'high',status:'in_progress',assignee_id:6,created_by:1,created_at:'2026-06-25T09:00:00.000Z',due:'2026-06-28',done_at:null,note:'Арендатор жалуется на жару, температура не опускается ниже 26°.'},
+      {id:'r2',building:'b1',unit:'3-02',tenant:'t3',title:'Протечка в санузле',category:'Сантехника',priority:'high',status:'new',assignee_id:null,created_by:1,created_at:'2026-06-27T14:30:00.000Z',due:'2026-06-29',done_at:null,note:'Капает под раковиной.'},
+      {id:'r3',building:'b2',unit:'4-01',tenant:null,title:'Перегорела лампа в коридоре',category:'Электрика',priority:'low',status:'done',assignee_id:6,created_by:6,created_at:'2026-06-20T08:00:00.000Z',due:'2026-06-22',done_at:'2026-06-21T12:00:00.000Z',note:''},
+    ],
   };
   // обогащение помещений: документы, форма владения, ответственное лицо
   const defaultDocs = u => {

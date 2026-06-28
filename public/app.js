@@ -106,6 +106,7 @@ function myReminders(){
 function ensureState(){
   if(!DB) return;
   if(!Array.isArray(DB.salaries)) DB.salaries=[];
+  if(!Array.isArray(DB.requests)) DB.requests=[];
   if(!DB.integrations) DB.integrations={};
   const I=DB.integrations;
   if(!I.bank) I.bank={connected:false,name:'',lastSync:null};
@@ -217,12 +218,12 @@ const NAV=[
   {group:'Обзор',items:[['dashboard','▦','Дашборд']]},
   {group:'Управление',items:[['objects','🏢','Объекты и занятость'],['tenants','👥','Арендаторы'],['contracts','📄','Договоры']]},
   {group:'Финансы',items:[['payments','💳','Платежи аренды'],['utilities','⚡','Коммуналка и расходы'],['salaries','💼','Зарплата (ФОТ)']]},
-  {group:'Операции',items:[['tasks','✓','Задачи'],['employees','🧑‍💼','Сотрудники'],['reports','📊','Отчёты']]},
+  {group:'Операции',items:[['tasks','✓','Задачи'],['requests','🛠','Заявки'],['employees','🧑‍💼','Сотрудники'],['reports','📊','Отчёты']]},
   {group:'Интеграции',items:[['integrations','🔗','Синхронизация']]},
   {group:'Администрирование',items:[['settings','⚙','Настройки']]},
 ];
 // модули, которые можно включать/выключать в настройках (без dashboard и settings)
-const TOGGLEABLE=[['objects','Объекты и занятость'],['tenants','Арендаторы'],['contracts','Договоры'],['payments','Платежи аренды'],['utilities','Коммуналка и расходы'],['salaries','Зарплата (ФОТ)'],['tasks','Задачи'],['employees','Сотрудники'],['reports','Отчёты'],['integrations','Синхронизация']];
+const TOGGLEABLE=[['objects','Объекты и занятость'],['tenants','Арендаторы'],['contracts','Договоры'],['payments','Платежи аренды'],['utilities','Коммуналка и расходы'],['salaries','Зарплата (ФОТ)'],['tasks','Задачи'],['requests','Заявки на обслуживание'],['employees','Сотрудники'],['reports','Отчёты'],['integrations','Синхронизация']];
 const navVisible = k => (k==='settings') ? isAdmin() : (canView(k) && modOn(k));
 const PAGE_TITLES={dashboard:'Дашборд',objects:'Объекты',tenants:'Арендаторы',contracts:'Договоры',payments:'Платежи',utilities:'Коммуналка',tasks:'Задачи',employees:'Сотрудники',reports:'Отчёты'};
 
@@ -267,7 +268,7 @@ function renderScopeSelector(){
   </select>`;
 }
 
-const PAGES={dashboard,objects,tenants,contracts,payments,utilities,salaries,tasks,employees,reports,integrations,settings:settingsPage};
+const PAGES={dashboard,objects,tenants,contracts,payments,utilities,salaries,tasks,requests,employees,reports,integrations,settings:settingsPage};
 function render(){ updateBadges(); const m=document.getElementById('main'); if(!m)return; m.innerHTML=''; (PAGES[current]||dashboard)(); }
 function el(html){ const d=document.createElement('div'); d.className='page'; d.innerHTML=html; document.getElementById('main').appendChild(d); return d; }
 function head(title,sub,actions=''){ return `<div class="topbar"><div><h1>${title}</h1><div class="sub">${sub}</div></div><div class="spacer"></div>${actions}${bellHTML()}</div>`; }
@@ -277,6 +278,7 @@ function updateBadges(){
   const setB=(k,n)=>{const e=document.getElementById('badge-'+k); if(e){e.textContent=n; e.classList.toggle('hidden',!n);} };
   setB('payments', DB.payments.filter(p=>p.amount-p.paid>0).length);
   setB('tasks', TASKS.filter(t=>t.status!=='done').length);
+  setB('requests', (DB.requests||[]).filter(r=>r.status==='new'||r.status==='in_progress').length);
 }
 
 /* ---------- Напоминания (колокольчик) ---------- */
@@ -726,6 +728,108 @@ function dueLabel(d){const dl=daysLeft(d);if(d==null||dl===9999)return '<span cl
 async function advanceTask(id){const t=TASKS.find(t=>t.id===id);const next=t.status==='open'?'in_progress':'done';
   try{ await api('/api/tasks/'+id,'PATCH',{status:next}); await reloadTasks(); render(); }catch(e){alert(e.message);} }
 async function reloadTasks(){ TASKS=await api('/api/tasks'); }
+
+/* ============================================================
+   ЗАЯВКИ НА ОБСЛУЖИВАНИЕ (эксплуатация по объектам)
+   ============================================================ */
+const REQ_CATS=['Сантехника','Электрика','Климат / вентиляция','Лифт','Клининг','Двери / замки','Отделка / ремонт','Безопасность','Прочее'];
+const sRequests=()=>(DB.requests||[]).filter(r=>SCOPE==='all'||r.building===SCOPE);
+const reqOpen=r=>r.status==='new'||r.status==='in_progress';
+function reqStatusPill(s){const m={new:['gray','Новая'],in_progress:['amber','В работе'],done:['green','Выполнена'],rejected:['red','Отклонена']};const x=m[s]||['gray',s];return `<span class="pill ${x[0]}">${x[1]}</span>`;}
+function requests(){
+  const list=sRequests();
+  const open=list.filter(reqOpen); const overdue=open.filter(r=>daysLeft(r.due)<0);
+  el(head('Заявки на обслуживание',`${open.length} активных · просрочено: ${overdue.length} · ${scopeSub()}`,
+    canEdit('requests')?`<button class="btn" onclick="requestModal()">+ Заявка</button>`:'')+
+  `<div class="grid" style="grid-template-columns:repeat(3,1fr)" id="reqboard"></div><div id="reqRej"></div>`);
+  const cols=[['new','Новые','var(--muted2)'],['in_progress','В работе','var(--accent)'],['done','Выполнено','var(--green)']];
+  document.getElementById('reqboard').innerHTML=cols.map(([k,label,color])=>{
+    const items=list.filter(r=>r.status===k);
+    return `<div class="card"><div class="panel-title"><h3><span class="dot" style="background:${color}"></span>${label}</h3><span class="muted">${items.length}</span></div>
+    ${items.map(reqCard).join('')||'<div class="empty">Пусто</div>'}</div>`;
+  }).join('');
+  const rej=list.filter(r=>r.status==='rejected');
+  document.getElementById('reqRej').innerHTML=rej.length?`<div class="card" style="margin-top:14px"><div class="sec-h">Отклонённые (${rej.length})</div>${rej.map(reqCard).join('')}</div>`:'';
+}
+function reqCard(r){
+  const u=userOf(r.assignee_id); const t=r.tenant&&tenantOf(r.tenant); const b=buildingOf(r.building);
+  const dl=daysLeft(r.due), cls=reqOpen(r)&&dl<0?'overdue':(reqOpen(r)&&dl<=3?'soon':'');
+  return `<div class="task-card ${cls}">
+    <div class="t-strong" style="margin-bottom:6px;cursor:pointer" onclick="requestInfo('${r.id}')">${esc(r.title)}</div>
+    <div class="t-sub" style="margin-bottom:5px">🏢 ${esc(b?b.name:r.building)}${r.unit?' · 📍 '+esc(r.unit):''}${t?' · 👤 '+esc(t.name):''}</div>
+    <div class="t-sub" style="margin-bottom:8px">🛠 ${esc(r.category||'—')} · ${esc(u?u.full_name:'не назначен')}</div>
+    <div style="display:flex;align-items:center;gap:8px;justify-content:space-between">${prioPill(r.priority)}<span class="t-sub">${r.status==='done'?'<span style="color:var(--green)">✓ '+(r.done_at?fmtD(r.done_at):'выполнено')+'</span>':(r.status==='rejected'?'отклонена':dueLabel(r.due))}</span></div>
+    ${canEdit('requests')&&reqOpen(r)?`<button class="btn ghost sm" style="margin-top:10px;width:100%" onclick="advanceRequest('${r.id}')">${r.status==='new'?'→ В работу':'✓ Выполнено'}</button>`:''}
+  </div>`;
+}
+function requestModal(id){
+  const r=id?(DB.requests||[]).find(x=>x.id===id):null;
+  const def=r?r.building:(SCOPE!=='all'?SCOPE:(buildingsList()[0]||{}).id);
+  const unitOpts=b=>DB.units.filter(u=>u.building===b).map(u=>`<option value="${esc(u.id)}"${r&&r.unit===u.id?' selected':''}>${esc(u.id)}</option>`).join('');
+  const usr=USERS.filter(u=>u.active);
+  openM(`<div class="modal-h"><h3>${r?'Заявка':'Новая заявка'}</h3><span class="x" onclick="closeM()">×</span></div>
+  <div class="modal-b">
+    <div class="field"><label>Заголовок</label><input id="rq-title" value="${r?esc(r.title):''}" placeholder="Что случилось"></div>
+    <div class="row2">
+      <div class="field"><label>Объект</label><select id="rq-building" onchange="reqUnitsRefresh()">${buildingsList().map(b=>`<option value="${b.id}"${b.id===def?' selected':''}>${esc(b.name)}</option>`).join('')}</select></div>
+      <div class="field"><label>Помещение</label><select id="rq-unit"><option value="">— не указано —</option>${unitOpts(def)}</select></div>
+    </div>
+    <div class="row2">
+      <div class="field"><label>Тип</label><select id="rq-cat">${REQ_CATS.map(c=>`<option${r&&r.category===c?' selected':''}>${c}</option>`).join('')}</select></div>
+      <div class="field"><label>Приоритет</label><select id="rq-prio">${[['high','Высокий'],['medium','Средний'],['low','Низкий']].map(([k,l])=>`<option value="${k}"${(r?r.priority:'medium')===k?' selected':''}>${l}</option>`).join('')}</select></div>
+    </div>
+    <div class="row2">
+      <div class="field"><label>Исполнитель</label><select id="rq-assignee"><option value="">— не назначен —</option>${usr.map(u=>`<option value="${u.id}"${r&&r.assignee_id===u.id?' selected':''}>${esc(u.full_name)} — ${esc(u.roleTitle)}</option>`).join('')}</select></div>
+      <div class="field"><label>Срок</label><input id="rq-due" type="date" value="${r&&r.due?r.due:''}"></div>
+    </div>
+    <div class="field"><label>Описание</label><textarea id="rq-note" rows="3" class="search" style="width:100%;resize:vertical;font-family:inherit">${r?esc(r.note||''):''}</textarea></div>
+  </div>
+  <div class="modal-f"><button class="btn ghost" onclick="closeM()">Отмена</button><button class="btn" onclick="saveRequest(${r?`'${r.id}'`:''})">${r?'Сохранить':'Создать'}</button></div>`);
+}
+function reqUnitsRefresh(){ const b=val('rq-building'); const sel=document.getElementById('rq-unit');
+  sel.innerHTML='<option value="">— не указано —</option>'+DB.units.filter(u=>u.building===b).map(u=>`<option value="${esc(u.id)}">${esc(u.id)}</option>`).join(''); }
+async function saveRequest(id){
+  const title=val('rq-title').trim(); if(!title) return alert('Укажите заголовок заявки');
+  ensureState();
+  const data={ building:val('rq-building'), unit:val('rq-unit')||null, category:val('rq-cat'), title,
+    priority:val('rq-prio'), assignee_id:+val('rq-assignee')||null, due:val('rq-due')||null, note:val('rq-note').trim() };
+  if(id){ const r=DB.requests.find(x=>x.id===id); if(r) Object.assign(r,data); }
+  else { DB.requests.unshift({ id:'r'+Date.now(), ...data, tenant:null, status:'new', created_by:ME.id, created_at:new Date().toISOString(), done_at:null }); }
+  closeM(); await afterStateChange();
+}
+async function advanceRequest(id){ const r=(DB.requests||[]).find(x=>x.id===id); if(!r)return;
+  r.status = r.status==='new'?'in_progress':'done';
+  if(r.status==='done') r.done_at=new Date().toISOString();
+  await afterStateChange(); }
+async function rejectRequest(id){ if(!confirm('Отклонить заявку?'))return; const r=(DB.requests||[]).find(x=>x.id===id); if(r)r.status='rejected'; closeM(); await afterStateChange(); }
+async function delRequest(id){ if(!confirm('Удалить заявку?'))return; DB.requests=(DB.requests||[]).filter(x=>x.id!==id); closeM(); await afterStateChange(); }
+function requestInfo(id){
+  const r=(DB.requests||[]).find(x=>x.id===id); if(!r)return;
+  const u=userOf(r.assignee_id); const t=r.tenant&&tenantOf(r.tenant); const b=buildingOf(r.building); const ed=canEdit('requests');
+  const row=(k,v)=>`<div class="row"><span>${k}</span><b>${v}</b></div>`;
+  openM(`<div class="modal-h"><h3>Заявка на обслуживание</h3><span class="x" onclick="closeM()">×</span></div>
+  <div class="modal-b">
+    <div class="t-strong" style="font-size:16px;margin-bottom:10px">${esc(r.title)}</div>
+    ${row('Статус',reqStatusPill(r.status))}
+    ${row('Объект',esc(b?b.name:r.building))}
+    ${r.unit?row('Помещение',esc(r.unit)):''}
+    ${t?row('Арендатор',esc(t.name)):''}
+    ${row('Тип',esc(r.category||'—'))}
+    ${row('Приоритет',prioWord(r.priority))}
+    ${row('Исполнитель',esc(u?u.full_name:'не назначен'))}
+    ${row('Срок',r.due?fmtD(r.due):'—')}
+    ${row('Создана',fmtDateTime(r.created_at))}
+    ${r.done_at?row('Выполнена',fmtDateTime(r.done_at)):''}
+    ${r.note?`<div style="margin-top:8px"><div class="t-sub" style="margin-bottom:4px">Описание</div><div>${esc(r.note)}</div></div>`:''}
+  </div>
+  <div class="modal-f">
+    ${ed?`<button class="btn ghost sm" onclick="requestModal('${r.id}')">Редактировать</button>
+      ${reqOpen(r)?`<button class="btn ghost sm" onclick="rejectRequest('${r.id}')">Отклонить</button>`:''}
+      <button class="btn ghost sm" onclick="delRequest('${r.id}')">🗑</button>`:''}
+    <div class="spacer"></div>
+    ${ed&&reqOpen(r)?`<button class="btn" onclick="advanceRequest('${r.id}');closeM()">${r.status==='new'?'→ В работу':'✓ Выполнено'}</button>`:'<button class="btn ghost" onclick="closeM()">Закрыть</button>'}
+  </div>`);
+}
 
 /* ============================================================
    СОТРУДНИКИ / ПОЛЬЗОВАТЕЛИ
