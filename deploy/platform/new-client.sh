@@ -34,7 +34,9 @@ docker build -t citi-srm:latest "$SRC" >/dev/null
 echo "→ Создаю изолированное приложение и базу для клиента '$NAME'…"
 mkdir -p "$CDIR/data"
 # Сильный стартовый пароль для всех учёток клиента (задаётся при первом создании базы).
-SEED_PW="$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 14)"
+# set +o pipefail в подоболочке — иначе head закрывает пайп → SIGPIPE у tr → выход из скрипта.
+SEED_PW="$(set +o pipefail; tr -dc 'A-Za-z0-9' </dev/urandom | head -c 14)"
+[ -n "$SEED_PW" ] || SEED_PW="$(openssl rand -hex 7 2>/dev/null || echo srmAdmin$$)"
 cat > "$CDIR/docker-compose.yml" <<EOF
 # Приложение клиента «$NAME». База — в ./data/srm.db (только для этого клиента).
 # SEED_PASSWORD — стартовый пароль учёток (применяется один раз при создании базы).
