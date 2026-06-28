@@ -1,11 +1,11 @@
 /* ---------- ВСТРОЕННЫЙ «БЭКЕНД» (автономный демо-режим, данные в localStorage браузера) ---------- */
 const SRM_KEY='srm_demo_db';
-const _ALL=['dashboard','objects','tenants','contracts','payments','utilities','tasks','requests','upkeep','reports','employees','salaries','integrations'];
+const _ALL=['dashboard','objects','tenants','contracts','payments','utilities','tasks','requests','upkeep','reports','budget','employees','salaries','integrations'];
 const SRM_ROLES={
   admin:{title:'Администратор',view:_ALL,edit:_ALL},
   owner:{title:'Собственник / Руководитель',view:_ALL,edit:_ALL},
-  manager:{title:'Управляющий объектом',view:_ALL,edit:['dashboard','objects','tenants','contracts','payments','utilities','tasks','requests','upkeep','reports','salaries','integrations']},
-  accountant:{title:'Бухгалтер / Финансист',view:['dashboard','objects','tenants','contracts','payments','utilities','tasks','requests','upkeep','reports','salaries','integrations'],edit:['payments','utilities','salaries','integrations']},
+  manager:{title:'Управляющий объектом',view:_ALL,edit:['dashboard','objects','tenants','contracts','payments','utilities','tasks','requests','upkeep','reports','budget','salaries','integrations']},
+  accountant:{title:'Бухгалтер / Финансист',view:['dashboard','objects','tenants','contracts','payments','utilities','tasks','requests','upkeep','reports','budget','salaries','integrations'],edit:['payments','utilities','budget','salaries','integrations']},
   leasing:{title:'Отдел аренды',view:['dashboard','objects','tenants','contracts','payments','tasks','requests'],edit:['objects','tenants','contracts','tasks','requests']},
   maintenance:{title:'Эксплуатация',view:['dashboard','objects','utilities','tasks','requests','upkeep'],edit:['utilities','tasks','requests','upkeep']},
 };
@@ -94,6 +94,8 @@ function srmBuildState(){
       {id:'eq3',building:'b1',name:'Пожарная сигнализация',type:'Пожарная сигнализация',location:'Все этажи',vendor:'ЧОП «Барьер»',intervalMonths:12,lastService:'2026-06-01',nextService:'2027-06-01',note:''},
       {id:'eq4',building:'b2',name:'Грузовой лифт',type:'Лифт',location:'Склад',vendor:'ООО «ЛифтСервис»',intervalMonths:3,lastService:'2026-03-20',nextService:'2026-06-20',note:''},
     ],
+    budgets:{ b1:{income:48000000,expense:14000000}, b2:{income:13000000,expense:5000000} },
+    penaltyRate:0.1,
   };
   const D2={
     building:{id:'b2',name:'Бизнес-парк «Север»',address:'г. Москва, ул. Складочная, 7',floors:3,totalArea:3200},

@@ -108,6 +108,8 @@ function ensureState(){
   if(!Array.isArray(DB.salaries)) DB.salaries=[];
   if(!Array.isArray(DB.requests)) DB.requests=[];
   if(!Array.isArray(DB.equipment)) DB.equipment=[];
+  if(!DB.budgets || typeof DB.budgets!=='object' || Array.isArray(DB.budgets)) DB.budgets={};
+  if(typeof DB.penaltyRate!=='number') DB.penaltyRate=0.1;
   if(!DB.integrations) DB.integrations={};
   const I=DB.integrations;
   if(!I.bank) I.bank={connected:false,name:'',lastSync:null};
@@ -218,13 +220,13 @@ async function logout(){ try{await api('/api/auth/logout','POST');}catch{} stopP
 const NAV=[
   {group:'Обзор',items:[['dashboard','▦','Дашборд']]},
   {group:'Управление',items:[['objects','🏢','Объекты и занятость'],['tenants','👥','Арендаторы'],['contracts','📄','Договоры']]},
-  {group:'Финансы',items:[['payments','💳','Платежи аренды'],['utilities','⚡','Коммуналка и расходы'],['salaries','💼','Зарплата (ФОТ)']]},
+  {group:'Финансы',items:[['payments','💳','Платежи аренды'],['utilities','⚡','Коммуналка и расходы'],['salaries','💼','Зарплата (ФОТ)'],['budget','📈','Бюджет и долги']]},
   {group:'Операции',items:[['tasks','✓','Задачи'],['requests','🛠','Заявки'],['upkeep','🧰','Плановое ТО'],['employees','🧑‍💼','Сотрудники'],['reports','📊','Отчёты']]},
   {group:'Интеграции',items:[['integrations','🔗','Синхронизация']]},
   {group:'Администрирование',items:[['settings','⚙','Настройки']]},
 ];
 // модули, которые можно включать/выключать в настройках (без dashboard и settings)
-const TOGGLEABLE=[['objects','Объекты и занятость'],['tenants','Арендаторы'],['contracts','Договоры'],['payments','Платежи аренды'],['utilities','Коммуналка и расходы'],['salaries','Зарплата (ФОТ)'],['tasks','Задачи'],['requests','Заявки на обслуживание'],['upkeep','Плановое ТО'],['employees','Сотрудники'],['reports','Отчёты'],['integrations','Синхронизация']];
+const TOGGLEABLE=[['objects','Объекты и занятость'],['tenants','Арендаторы'],['contracts','Договоры'],['payments','Платежи аренды'],['utilities','Коммуналка и расходы'],['salaries','Зарплата (ФОТ)'],['budget','Бюджет и долги'],['tasks','Задачи'],['requests','Заявки на обслуживание'],['upkeep','Плановое ТО'],['employees','Сотрудники'],['reports','Отчёты'],['integrations','Синхронизация']];
 const navVisible = k => (k==='settings') ? isAdmin() : (canView(k) && modOn(k));
 const PAGE_TITLES={dashboard:'Дашборд',objects:'Объекты',tenants:'Арендаторы',contracts:'Договоры',payments:'Платежи',utilities:'Коммуналка',tasks:'Задачи',employees:'Сотрудники',reports:'Отчёты'};
 
@@ -269,7 +271,7 @@ function renderScopeSelector(){
   </select>`;
 }
 
-const PAGES={dashboard,objects,tenants,contracts,payments,utilities,salaries,tasks,requests,upkeep,employees,reports,integrations,settings:settingsPage};
+const PAGES={dashboard,objects,tenants,contracts,payments,utilities,salaries,tasks,requests,upkeep,budget,employees,reports,integrations,settings:settingsPage};
 function render(){ updateBadges(); const m=document.getElementById('main'); if(!m)return; m.innerHTML=''; (PAGES[current]||dashboard)(); }
 function el(html){ const d=document.createElement('div'); d.className='page'; d.innerHTML=html; document.getElementById('main').appendChild(d); return d; }
 function head(title,sub,actions=''){ return `<div class="topbar"><div><h1>${title}</h1><div class="sub">${sub}</div></div><div class="spacer"></div>${actions}${bellHTML()}</div>`; }
@@ -900,6 +902,79 @@ async function markServiced(id){ const e=(DB.equipment||[]).find(x=>x.id===id); 
   e.lastService=today; e.nextService=addMonths(today,e.intervalMonths||12);
   await afterStateChange(); }
 async function delEquip(id){ if(!confirm('Удалить оборудование из реестра?'))return; DB.equipment=(DB.equipment||[]).filter(x=>x.id!==id); closeM(); await afterStateChange(); }
+
+/* ============================================================
+   БЮДЖЕТ ПО ОБЪЕКТУ (план/факт) + СТАРЕНИЕ ЗАДОЛЖЕННОСТИ
+   ============================================================ */
+const paymentBuilding=p=>{const c=contractOf(p.contract);const u=c&&unitOf(c.unit);return u?u.building:null;};
+const bIncome=(bid,year)=>DB.payments.filter(p=>paymentBuilding(p)===bid && String(p.period||'').startsWith(year)).reduce((s,p)=>s+(p.paid||0),0);
+const bExpense=(bid,year)=>DB.expenses.filter(e=>e.building===bid && String(e.period||'').startsWith(year)).reduce((s,e)=>s+(e.amount||0),0);
+function pctCell(fact,plan,expense){ if(!plan) return '<span class="t-sub">—</span>'; const p=Math.round(fact/plan*100);
+  const color=expense?(p>100?'var(--red)':p>90?'var(--amber)':'var(--green)'):(p>=100?'var(--green)':p>=70?'var(--amber)':'var(--red)');
+  return `<span style="color:${color};font-weight:600">${p}%</span>`; }
+function agingBuckets(bid){
+  const a={cur:0,d30:0,d60:0,d90:0,d90p:0,penalty:0,total:0,count:0}; const rate=(DB.penaltyRate||0)/100;
+  DB.payments.filter(p=>(bid==='all'||paymentBuilding(p)===bid) && (p.amount-p.paid)>0).forEach(p=>{
+    const debt=p.amount-p.paid; const od=-daysLeft(p.due); a.total+=debt; a.count++;
+    if(od<=0) a.cur+=debt; else if(od<=30) a.d30+=debt; else if(od<=60) a.d60+=debt; else if(od<=90) a.d90+=debt; else a.d90p+=debt;
+    if(od>0) a.penalty+=debt*rate*od;
+  });
+  return a;
+}
+function budget(){
+  const year=String(TODAY.getFullYear());
+  const blds=(SCOPE==='all'?buildingsList():buildingsList().filter(b=>b.id===SCOPE));
+  const ed=canEdit('budget');
+  let tIncP=0,tIncF=0,tExpP=0,tExpF=0;
+  const bRows=blds.map(b=>{ const bg=(DB.budgets||{})[b.id]||{income:0,expense:0};
+    const incP=bg.income||0,expP=bg.expense||0,incF=bIncome(b.id,year),expF=bExpense(b.id,year);
+    tIncP+=incP;tIncF+=incF;tExpP+=expP;tExpF+=expF;
+    return `<tr>
+      <td class="t-strong">${esc(b.name)}</td>
+      <td>${money(incP)}</td><td>${money(incF)}</td><td>${pctCell(incF,incP)}</td>
+      <td>${money(expP)}</td><td>${money(expF)}</td><td>${pctCell(expF,expP,true)}</td>
+      <td><b>${money(incF-expF)}</b><div class="t-sub">план ${money(incP-expP)}</div></td>
+      ${ed?`<td><button class="btn ghost sm" onclick="budgetModal('${b.id}')">✎ План</button></td>`:''}</tr>`;
+  }).join('');
+  // старение задолженности
+  let agg={cur:0,d30:0,d60:0,d90:0,d90p:0,penalty:0,total:0,count:0};
+  const agRows=blds.map(b=>{ const a=agingBuckets(b.id); Object.keys(agg).forEach(k=>agg[k]+=a[k]);
+    return `<tr><td class="t-strong">${esc(b.name)}</td>
+      <td>${money(a.cur)}</td><td>${a.d30?money(a.d30):'—'}</td><td>${a.d60?money(a.d60):'—'}</td><td>${a.d90?money(a.d90):'—'}</td>
+      <td${a.d90p?' style="color:var(--red)"':''}>${a.d90p?money(a.d90p):'—'}</td>
+      <td><b>${money(a.total)}</b></td><td style="color:var(--amber)">${a.penalty?money(Math.round(a.penalty)):'—'}</td></tr>`;
+  }).join('');
+  el(head('Бюджет и контроль задолженности',`План/факт за ${year} год · ${scopeSub()}`,'')+
+  `<div class="card" style="padding:0;overflow-x:auto;margin-bottom:16px"><div class="sec-h" style="padding:14px 16px 0">Бюджет: план / факт (${year})</div>
+   <table><thead><tr><th>Объект</th><th>План доход</th><th>Факт доход</th><th>%</th><th>План расход</th><th>Факт расход</th><th>%</th><th>NOI (факт)</th>${ed?'<th></th>':''}</tr></thead><tbody>
+   ${bRows||`<tr><td colspan="9" class="empty">Нет объектов</td></tr>`}
+   <tr style="border-top:2px solid var(--line2)"><td class="t-strong">Итого</td><td>${money(tIncP)}</td><td><b>${money(tIncF)}</b></td><td>${pctCell(tIncF,tIncP)}</td><td>${money(tExpP)}</td><td><b>${money(tExpF)}</b></td><td>${pctCell(tExpF,tExpP,true)}</td><td><b>${money(tIncF-tExpF)}</b></td>${ed?'<td></td>':''}</tr>
+   </tbody></table></div>
+   <div class="card" style="padding:0;overflow-x:auto">
+   <div class="sec-h" style="padding:14px 16px 0;display:flex;align-items:center;justify-content:space-between"><span>Старение задолженности и пени</span>
+     <span class="t-sub">Ставка пени: <b>${DB.penaltyRate||0}%</b>/день ${ed?`<button class="btn ghost sm" onclick="penaltyModal()" style="margin-left:6px">изменить</button>`:''}</span></div>
+   <table><thead><tr><th>Объект</th><th>Текущая</th><th>1–30 дн</th><th>31–60 дн</th><th>61–90 дн</th><th>90+ дн</th><th>Всего долг</th><th>Пеня</th></tr></thead><tbody>
+   ${agRows||`<tr><td colspan="8" class="empty">Нет объектов</td></tr>`}
+   <tr style="border-top:2px solid var(--line2)"><td class="t-strong">Итого (${agg.count})</td><td>${money(agg.cur)}</td><td>${money(agg.d30)}</td><td>${money(agg.d60)}</td><td>${money(agg.d90)}</td><td style="color:var(--red)">${money(agg.d90p)}</td><td><b>${money(agg.total)}</b></td><td style="color:var(--amber)"><b>${money(Math.round(agg.penalty))}</b></td></tr>
+   </tbody></table></div>`);
+}
+function budgetModal(bid){ const b=buildingOf(bid); const bg=(DB.budgets||{})[bid]||{income:0,expense:0};
+  openM(`<div class="modal-h"><h3>Годовой план — ${esc(b?b.name:bid)}</h3><span class="x" onclick="closeM()">×</span></div>
+  <div class="modal-b">
+    <div class="field"><label>План доходов (аренда), ₽ / год</label><input id="bg-income" type="number" value="${bg.income||0}"></div>
+    <div class="field"><label>План расходов (содержание), ₽ / год</label><input id="bg-expense" type="number" value="${bg.expense||0}"></div>
+    <div class="t-sub">Факт считается автоматически из платежей и расходов за ${TODAY.getFullYear()} год.</div>
+  </div>
+  <div class="modal-f"><button class="btn ghost" onclick="closeM()">Отмена</button><button class="btn" onclick="saveBudget('${bid}')">Сохранить</button></div>`);
+}
+async function saveBudget(bid){ ensureState(); DB.budgets[bid]={income:+val('bg-income')||0,expense:+val('bg-expense')||0}; closeM(); await afterStateChange(); }
+function penaltyModal(){
+  openM(`<div class="modal-h"><h3>Ставка пени</h3><span class="x" onclick="closeM()">×</span></div>
+  <div class="modal-b"><div class="field"><label>Пеня за просрочку, % в день от суммы долга</label><input id="pen-rate" type="number" step="0.01" value="${DB.penaltyRate||0}"></div>
+  <div class="t-sub">Обычно 0.1% в день (≈1/300 ставки ЦБ). Пеня начисляется на дни просрочки.</div></div>
+  <div class="modal-f"><button class="btn ghost" onclick="closeM()">Отмена</button><button class="btn" onclick="savePenalty()">Сохранить</button></div>`);
+}
+async function savePenalty(){ ensureState(); DB.penaltyRate=+val('pen-rate')||0; closeM(); await afterStateChange(); }
 
 /* ============================================================
    СОТРУДНИКИ / ПОЛЬЗОВАТЕЛИ
