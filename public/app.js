@@ -1593,7 +1593,8 @@ function settingsPage(){
   <div class="card" style="margin-top:16px">
     <div class="sec-h">📨 Уведомления в Telegram (утренняя сводка)</div>
     <div class="t-sub" style="margin-bottom:10px">Бот будет каждый день в заданное время присылать сводку: просроченные платежи, задачи на сегодня, истекающие договоры, плановое ТО, открытые заявки.</div>
-    <label style="display:flex;align-items:center;gap:10px;padding:6px 0;cursor:pointer"><input type="checkbox" id="s-tg-on" ${s.notify?.telegram?.enabled?'checked':''}> Включить ежедневную сводку</label>
+    <label style="display:flex;align-items:center;gap:10px;padding:6px 0;cursor:pointer"><input type="checkbox" id="s-tg-on" ${s.notify?.telegram?.enabled?'checked':''}> Включить ежедневную сводку (по времени)</label>
+    <label style="display:flex;align-items:center;gap:10px;padding:6px 0;cursor:pointer"><input type="checkbox" id="s-tg-instant" ${s.notify?.telegram?.instant?'checked':''}> Мгновенные оповещения о новых заявках и задачах</label>
     <div class="row2"><div class="field"><label>Токен бота (от @BotFather)</label><input id="s-tg-token" value="${esc(s.notify?.telegram?.token||'')}" placeholder="123456:ABC-..."></div>
       <div class="field"><label>Chat ID (куда слать)</label><input id="s-tg-chat" value="${esc(s.notify?.telegram?.chatId||'')}" placeholder="напр. 123456789 или -100..."></div></div>
     <div class="row2"><div class="field"><label>Время отправки</label><input id="s-tg-time" type="time" value="${esc(s.notify?.telegram?.time||'08:00')}"></div>
@@ -1604,7 +1605,7 @@ function settingsPage(){
     <span class="t-sub" style="align-self:center">Изменения видят все пользователи этого клиента.</span></div>`);
 }
 async function testNotify(){ ensureState();
-  DB.settings.notify={telegram:{enabled:document.getElementById('s-tg-on').checked,token:val('s-tg-token').trim(),chatId:val('s-tg-chat').trim(),time:val('s-tg-time')||'08:00'}};
+  DB.settings.notify={telegram:{enabled:document.getElementById('s-tg-on').checked,instant:!!document.getElementById('s-tg-instant')?.checked,token:val('s-tg-token').trim(),chatId:val('s-tg-chat').trim(),time:val('s-tg-time')||'08:00'}};
   if(!DB.settings.notify.telegram.token||!DB.settings.notify.telegram.chatId){ return alert('Сначала введите токен бота и Chat ID.'); }
   await saveState();
   try{ const r=await api('/api/notify/test','POST'); alert(r.ok?'✅ Тестовая сводка отправлена в Telegram. Проверьте чат с ботом.':'❌ Не удалось отправить. Проверьте токен и Chat ID (и что вы написали боту хотя бы раз).'); }
@@ -1629,7 +1630,7 @@ async function saveSettings(){
   S.expenseCats=lines('s-expcats');
   S.unitTypes=lines('s-unittypes');
   S.payMethodsExtra=lines('s-paymethods');
-  if(document.getElementById('s-tg-on')) S.notify={telegram:{enabled:document.getElementById('s-tg-on').checked,token:val('s-tg-token').trim(),chatId:val('s-tg-chat').trim(),time:val('s-tg-time')||'08:00'}};
+  if(document.getElementById('s-tg-on')) S.notify={telegram:{enabled:document.getElementById('s-tg-on').checked,instant:!!document.getElementById('s-tg-instant')?.checked,token:val('s-tg-token').trim(),chatId:val('s-tg-chat').trim(),time:val('s-tg-time')||'08:00'}};
   await afterStateChange();
   applyAccent(); showApp();
 }

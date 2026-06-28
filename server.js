@@ -117,6 +117,8 @@ async function sendTelegram(token, chatId, text){
   }catch{ return false; }
 }
 function notifyCfg(){ try{ const st=JSON.parse(db.prepare(`SELECT json FROM state WHERE key='main'`).get().json); return (st.settings&&st.settings.notify&&st.settings.notify.telegram)||null; }catch{ return null; } }
+// мгновенное оповещение (если включено instant) — не блокирует ответ
+function notifyInstant(text){ const tg=notifyCfg(); if(tg&&tg.instant&&tg.token&&tg.chatId) sendTelegram(tg.token, tg.chatId, text); }
 // планировщик: раз в минуту проверяем время отправки (раз в день)
 let _lastDigest=null;
 setInterval(async ()=>{
@@ -253,6 +255,14 @@ async function api(req, res, url){
       }
       db.prepare(`UPDATE state SET json=?, updated_at=?, updated_by=? WHERE key='main'`)
         .run(JSON.stringify(toSave), new Date().toISOString(), me.email);
+      // мгновенные оповещения о новых заявках
+      try{
+        const oldIds=new Set((cur.requests||[]).map(r=>r.id));
+        const bn=Object.fromEntries((toSave.buildings||[]).map(x=>[x.id,x.name]));
+        const PR={high:'высокий',medium:'средний',low:'низкий'};
+        (toSave.requests||[]).filter(r=>!oldIds.has(r.id)).forEach(r=>
+          notifyInstant(`\u{1F195} Новая заявка на обслуживание\n${r.title}\nТип: ${r.category||'—'} · приоритет: ${PR[r.priority]||r.priority||''}\nОбъект: ${bn[r.building]||r.building||'—'}${r.unit?', помещ. '+r.unit:''}`));
+      }catch{}
       return send(res,200,{ ok:true });
     }
   }
@@ -268,6 +278,8 @@ async function api(req, res, url){
                                VALUES(?,?,?,?,?,?,?,'open',?)`)
         .run(b.title.trim(), (b.description||'').trim(), b.unit||'—',
              b.assignee_id||null, me.id, b.due||null, b.priority||'medium', new Date().toISOString());
+      const asg = b.assignee_id ? db.prepare('SELECT full_name FROM users WHERE id=?').get(b.assignee_id) : null;
+      notifyInstant(`\u{2705} Новая задача\n${b.title.trim()}${b.unit&&b.unit!=='—'?'\nПомещение: '+b.unit:''}${asg?'\nИсполнитель: '+asg.full_name:''}${b.due?'\nСрок: '+b.due:''}`);
       return send(res,200, db.prepare(TASK_SELECT+' WHERE t.id=?').get(info.lastInsertRowid));
     }
   }
