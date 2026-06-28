@@ -1526,8 +1526,19 @@ function intCard(key,icon,title,desc,st,extra,extraActions){ st=st||{};
 }
 const BANKS=[
   {id:'sber',name:'Сбер Бизнес',color:'#21A038'},
+  {id:'tbank',name:'Т-Банк (Тинькофф Бизнес)',color:'#FFB800'},
+  {id:'alfa',name:'Альфа-Банк',color:'#EF3124'},
   {id:'vtb',name:'ВТБ',color:'#0A2896'},
-  {id:'tochka',name:'Точка',color:'#1A1A1A'},
+  {id:'tochka',name:'Точка',color:'#7A5CFA'},
+  {id:'raif',name:'Райффайзен Банк',color:'#FEE600'},
+  {id:'gazprom',name:'Газпромбанк',color:'#0079C2'},
+  {id:'psb',name:'ПСБ (Промсвязьбанк)',color:'#EE3124'},
+  {id:'sovcom',name:'Совкомбанк',color:'#1F4E9E'},
+  {id:'modul',name:'Модульбанк',color:'#00A3E0'},
+  {id:'ozon',name:'Озон Банк',color:'#005BFF'},
+  {id:'rshb',name:'Россельхозбанк',color:'#006837'},
+  {id:'mts',name:'МТС Банк',color:'#E30611'},
+  {id:'other',name:'Другой банк',color:'#64748B'},
 ];
 function bankConnectModal(){
   openM(`<div class="modal-h"><h3>Подключить банк</h3><span class="x" onclick="closeM()">×</span></div>
