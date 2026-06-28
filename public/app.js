@@ -860,15 +860,52 @@ function utilities(){
 }
 function utilTable(list){
   return `<div style="overflow-x:auto"><table><thead><tr><th>Помещение</th><th>Эл-во</th><th>Вода</th><th>Отопл.</th><th>Итого</th><th>Статус</th></tr></thead><tbody>
-    ${list.length?list.map(u=>{const tot=u.electricity+u.water+u.heating;return `<tr><td class="t-strong">${u.unit}</td><td>${fmt(u.electricity)}</td><td>${fmt(u.water)}</td><td>${fmt(u.heating)}</td><td class="t-strong">${money(tot)}</td><td>${utilPill(u.status)}</td></tr>`;}).join(''):'<tr><td colspan="6" class="empty">Нет начислений</td></tr>'}
+    ${list.length?list.map(u=>{const tot=u.electricity+u.water+u.heating;const clk=canEdit('utilities');return `<tr${clk?` style="cursor:pointer" onclick="utilEdit('${esc(u.id)}')"`:''}><td class="t-strong">${esc(u.unit)}</td><td>${fmt(u.electricity)}</td><td>${fmt(u.water)}</td><td>${fmt(u.heating)}</td><td class="t-strong">${money(tot)}</td><td>${utilPill(u.status)}</td></tr>`;}).join(''):'<tr><td colspan="6" class="empty">Нет начислений</td></tr>'}
     </tbody></table></div>`;
 }
 function expenseTable(list){
   return `<div style="overflow-x:auto"><table><thead><tr><th>Категория</th><th>Подрядчик</th><th>Сумма</th><th>Статус</th></tr></thead><tbody>
-    ${list.length?list.map(e=>`<tr><td class="t-strong">${esc(e.category)}</td><td class="t-sub">${esc(e.vendor)}</td><td class="t-strong">${money(e.amount)}</td><td>${utilPill(e.status)}</td></tr>`).join(''):'<tr><td colspan="4" class="empty">Нет расходов</td></tr>'}
+    ${list.length?list.map(e=>{const clk=canEdit('utilities');return `<tr${clk?` style="cursor:pointer" onclick="expenseEdit('${esc(e.id)}')"`:''}><td class="t-strong">${esc(e.category)}</td><td class="t-sub">${esc(e.vendor)}</td><td class="t-strong">${money(e.amount)}</td><td>${utilPill(e.status)}</td></tr>`;}).join(''):'<tr><td colspan="4" class="empty">Нет расходов</td></tr>'}
     </tbody></table></div>`;
 }
 function utilPill(s){const m={paid:['green','Оплачено'],invoiced:['blue','Выставлен'],overdue:['red','Просрочен'],planned:['gray','План']};const x=m[s]||['gray',s];return `<span class="pill ${x[0]}">${x[1]}</span>`;}
+const EX_STATUS=[['planned','План'],['invoiced','Выставлен (счёт получен)'],['paid','Оплачено'],['overdue','Просрочен']];
+function expenseEdit(id){ const e=DB.expenses.find(x=>x.id===id); if(!e||!canEdit('utilities'))return; const b=buildingOf(e.building);
+  openM(`<div class="modal-h"><h3>Расход на содержание</h3><span class="x" onclick="closeM()">×</span></div>
+  <div class="modal-b">
+    <div class="t-sub" style="margin-bottom:10px">Объект: ${esc(b?b.name:e.building||'—')}${e.period?' · '+fmtPeriod(e.period):''}</div>
+    <div class="row2"><div class="field"><label>Категория</label><input id="ee-cat" list="catList2" value="${esc(e.category||'')}"><datalist id="catList2">${(stg().expenseCats||[]).map(c=>`<option value="${esc(c)}">`).join('')}</datalist></div>
+      <div class="field"><label>Сумма, ₽</label><input id="ee-amt" type="number" value="${e.amount||0}"></div></div>
+    <div class="row2"><div class="field"><label>Подрядчик</label><input id="ee-vendor" value="${esc(e.vendor||'')}"></div>
+      <div class="field"><label>Статус</label><select id="ee-status">${EX_STATUS.map(([k,l])=>`<option value="${k}"${e.status===k?' selected':''}>${l}</option>`).join('')}</select></div></div>
+    <div class="row2"><div class="field"><label>Дата оплаты <span class="t-sub">(если оплачено)</span></label><input id="ee-date" type="date" value="${e.paidDate||''}"></div>
+      <div class="field"><label>Способ оплаты</label><select id="ee-method">${payMethodOpts(e.method||'bank')}</select></div></div>
+    <div class="t-sub">«Оплачено» — расход проведён (попадёт в факт бюджета и сверку с банком). Статусы: План → Выставлен → Оплачено.</div>
+  </div>
+  <div class="modal-f"><button class="btn ghost sm" onclick="delExpense('${id}')">🗑 Удалить</button><div class="spacer"></div><button class="btn ghost" onclick="closeM()">Отмена</button><button class="btn" onclick="saveExpenseEdit('${id}')">Сохранить</button></div>`);
+}
+async function saveExpenseEdit(id){ const e=DB.expenses.find(x=>x.id===id); if(!e)return;
+  e.category=val('ee-cat').trim()||e.category; e.amount=+val('ee-amt')||0; e.vendor=val('ee-vendor').trim(); e.status=val('ee-status');
+  if(e.status==='paid'){ e.paidDate=val('ee-date')||TODAY.toISOString().slice(0,10); e.method=val('ee-method'); }
+  else { e.paidDate=val('ee-date')||null; }
+  closeM(); await afterStateChange(); }
+async function delExpense(id){ if(!confirm('Удалить этот расход?'))return; DB.expenses=DB.expenses.filter(x=>x.id!==id); closeM(); await afterStateChange(); }
+function utilEdit(id){ const u=DB.utilities.find(x=>x.id===id); if(!u||!canEdit('utilities'))return;
+  openM(`<div class="modal-h"><h3>Коммунальные начисления — ${esc(u.unit)}</h3><span class="x" onclick="closeM()">×</span></div>
+  <div class="modal-b">
+    <div class="row2"><div class="field"><label>Электроэнергия, ₽</label><input id="ue-el" type="number" value="${u.electricity||0}"></div>
+      <div class="field"><label>Вода, ₽</label><input id="ue-wt" type="number" value="${u.water||0}"></div></div>
+    <div class="row2"><div class="field"><label>Отопление, ₽</label><input id="ue-ht" type="number" value="${u.heating||0}"></div>
+      <div class="field"><label>Статус</label><select id="ue-status">${EX_STATUS.map(([k,l])=>`<option value="${k}"${u.status===k?' selected':''}>${l}</option>`).join('')}</select></div></div>
+    <div class="field"><label>Дата оплаты <span class="t-sub">(если оплачено)</span></label><input id="ue-date" type="date" value="${u.paidDate||''}"></div>
+  </div>
+  <div class="modal-f"><button class="btn ghost sm" onclick="delUtil('${id}')">🗑 Удалить</button><div class="spacer"></div><button class="btn ghost" onclick="closeM()">Отмена</button><button class="btn" onclick="saveUtilEdit('${id}')">Сохранить</button></div>`);
+}
+async function saveUtilEdit(id){ const u=DB.utilities.find(x=>x.id===id); if(!u)return;
+  u.electricity=+val('ue-el')||0; u.water=+val('ue-wt')||0; u.heating=+val('ue-ht')||0; u.status=val('ue-status');
+  u.paidDate=(u.status==='paid')?(val('ue-date')||TODAY.toISOString().slice(0,10)):(val('ue-date')||null);
+  closeM(); await afterStateChange(); }
+async function delUtil(id){ if(!confirm('Удалить это начисление?'))return; DB.utilities=DB.utilities.filter(x=>x.id!==id); closeM(); await afterStateChange(); }
 
 /* ============================================================
    ЗАДАЧИ (канбан + назначение сотрудникам + сроки)
