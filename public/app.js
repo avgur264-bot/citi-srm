@@ -110,6 +110,8 @@ function ensureState(){
   if(!Array.isArray(DB.equipment)) DB.equipment=[];
   if(!DB.budgets || typeof DB.budgets!=='object' || Array.isArray(DB.budgets)) DB.budgets={};
   if(typeof DB.penaltyRate!=='number') DB.penaltyRate=0.1;
+  if(!Array.isArray(DB.listings)) DB.listings=[];
+  if(!Array.isArray(DB.signage)) DB.signage=[];
   if(!DB.integrations) DB.integrations={};
   const I=DB.integrations;
   if(!I.bank) I.bank={connected:false,name:'',lastSync:null};
@@ -221,12 +223,12 @@ const NAV=[
   {group:'Обзор',items:[['dashboard','▦','Дашборд'],['alerts','🔔','Центр сроков']]},
   {group:'Управление',items:[['objects','🏢','Объекты и занятость'],['tenants','👥','Арендаторы'],['contracts','📄','Договоры']]},
   {group:'Финансы',items:[['payments','💳','Платежи аренды'],['utilities','⚡','Коммуналка и расходы'],['salaries','💼','Зарплата (ФОТ)'],['budget','📈','Бюджет и долги']]},
-  {group:'Операции',items:[['tasks','✓','Задачи'],['requests','🛠','Заявки'],['upkeep','🧰','Плановое ТО'],['employees','🧑‍💼','Сотрудники'],['reports','📊','Отчёты']]},
+  {group:'Операции',items:[['tasks','✓','Задачи'],['requests','🛠','Заявки'],['upkeep','🧰','Плановое ТО'],['ads','📣','Реклама'],['employees','🧑‍💼','Сотрудники'],['reports','📊','Отчёты']]},
   {group:'Интеграции',items:[['integrations','🔗','Синхронизация']]},
   {group:'Администрирование',items:[['settings','⚙','Настройки']]},
 ];
 // модули, которые можно включать/выключать в настройках (без dashboard и settings)
-const TOGGLEABLE=[['objects','Объекты и занятость'],['tenants','Арендаторы'],['contracts','Договоры'],['payments','Платежи аренды'],['utilities','Коммуналка и расходы'],['salaries','Зарплата (ФОТ)'],['budget','Бюджет и долги'],['tasks','Задачи'],['requests','Заявки на обслуживание'],['upkeep','Плановое ТО'],['employees','Сотрудники'],['reports','Отчёты'],['integrations','Синхронизация']];
+const TOGGLEABLE=[['objects','Объекты и занятость'],['tenants','Арендаторы'],['contracts','Договоры'],['payments','Платежи аренды'],['utilities','Коммуналка и расходы'],['salaries','Зарплата (ФОТ)'],['budget','Бюджет и долги'],['tasks','Задачи'],['requests','Заявки на обслуживание'],['upkeep','Плановое ТО'],['ads','Реклама и вывески'],['employees','Сотрудники'],['reports','Отчёты'],['integrations','Синхронизация']];
 const navVisible = k => (k==='settings') ? isAdmin() : (k==='alerts') ? true : (canView(k) && modOn(k));
 const PAGE_TITLES={dashboard:'Дашборд',objects:'Объекты',tenants:'Арендаторы',contracts:'Договоры',payments:'Платежи',utilities:'Коммуналка',tasks:'Задачи',employees:'Сотрудники',reports:'Отчёты'};
 
@@ -271,7 +273,7 @@ function renderScopeSelector(){
   </select>`;
 }
 
-const PAGES={dashboard,alerts,objects,tenants,contracts,payments,utilities,salaries,tasks,requests,upkeep,budget,employees,reports,integrations,settings:settingsPage};
+const PAGES={dashboard,alerts,objects,tenants,contracts,payments,utilities,salaries,tasks,requests,upkeep,ads,budget,employees,reports,integrations,settings:settingsPage};
 function render(){ updateBadges(); const m=document.getElementById('main'); if(!m)return; m.innerHTML=''; (PAGES[current]||dashboard)(); }
 function el(html){ const d=document.createElement('div'); d.className='page'; d.innerHTML=html; document.getElementById('main').appendChild(d); return d; }
 function head(title,sub,actions=''){ return `<div class="topbar"><div><h1>${title}</h1><div class="sub">${sub}</div></div><div class="spacer"></div>${actions}${bellHTML()}</div>`; }
@@ -999,6 +1001,10 @@ function buildAlerts(){
   // Задачи срочные
   (TASKS||[]).filter(t=>t.status!=='done' && daysLeft(t.due)<=3).forEach(t=>{ const dl=daysLeft(t.due);
     A.push({level:dl<0?'danger':'warn',icon:'✓',cat:'Задачи',title:t.title,sub:`${esc(t.unit||'')} · ${dueLabel(t.due)}`,page:'tasks',sort:dl}); });
+  // Разрешения на вывески истекают/истекли (≤60 дн)
+  (DB.signage||[]).forEach(s=>{ if(!inS(s.building))return; const dl=s.expiry?daysLeft(s.expiry):9999; if(dl>60)return;
+    const who=s.owner==='self'?'собственника':((s.tenant&&tenantOf(s.tenant))?tenantOf(s.tenant).name:'арендатора');
+    A.push({level:dl<0?'danger':dl<=30?'warn':'info',icon:'📣',cat:'Реклама',title:`Разрешение ${dl<0?'истекло':'истекает'}: ${esc(s.kind||'вывеска')} (${esc(who)})`,sub:`${esc(s.permitNo||'')} · ${s.expiry?fmtD(s.expiry):''} · ${dueLabel(s.expiry)}`,page:'ads',sort:dl}); });
   return A.sort((x,y)=>x.sort-y.sort);
 }
 const alertColor=l=>l==='danger'?'var(--red)':l==='warn'?'var(--amber)':'var(--accent2)';
@@ -1021,6 +1027,119 @@ function alerts(){
         <span class="t-sub">→</span></div>`).join('')}</div>`;
   }).join('') : '<div class="card"><div class="empty" style="padding:30px">Срочных событий нет — всё под контролем 🎉</div></div>'}`);
 }
+
+/* ============================================================
+   РЕКЛАМА: объявления (ЦИАН/Авито) + разрешения на вывески
+   ============================================================ */
+const AD_PLATFORMS={cian:['ЦИАН','#0468ff'],avito:['Авито','#00aaff'],other:['Другая','#888']};
+const SIGN_KINDS=['Настенная вывеска','Световой короб','Медиафасад','Рекламная стела','Баннер','Штендер','Витрина','Крышная установка'];
+const adPlatform=p=>AD_PLATFORMS[p]||AD_PLATFORMS.other;
+function listingStatusPill(s){const m={active:['green','Активно'],paused:['amber','На паузе'],archived:['gray','В архиве']};const x=m[s]||['gray',s];return `<span class="pill ${x[0]}">${x[1]}</span>`;}
+function signageStatus(s){ const dl=daysLeft(s.expiry); if(s.expiry==null||dl===9999) return ['gray','Бессрочно','—']; if(dl<0) return ['red','Истекло',`${-dl} дн назад`]; if(dl<=60) return ['amber','Истекает',`через ${dl} дн`]; return ['green','Действует',`через ${dl} дн`]; }
+const sListings=()=>(DB.listings||[]).filter(a=>SCOPE==='all'||a.building===SCOPE);
+const sSignage=()=>(DB.signage||[]).filter(s=>SCOPE==='all'||s.building===SCOPE);
+let signFilter='all';
+function setSignFilter(f){ signFilter=f; render(); }
+function ads(){
+  const ed=canEdit('ads');
+  const list=sListings(); const totV=list.reduce((s,a)=>s+(a.views||0),0); const totL=list.reduce((s,a)=>s+(a.leads||0),0); const active=list.filter(a=>a.status==='active').length;
+  const sign=sSignage(); const filtered=sign.filter(s=>signFilter==='all'||s.owner===signFilter);
+  const tabs=[['all','Все'],['tenant','Арендаторов'],['self','Собственника']];
+  el(head('Реклама и вывески',`Объявления: ${list.length} (активных ${active}) · разрешения: ${sign.length} · ${scopeSub()}`,
+    ed?`<button class="btn ghost" onclick="listingModal()">+ Объявление</button> <button class="btn" onclick="signageModal()">+ Разрешение</button>`:'')+
+  `<div class="card" style="padding:0;overflow-x:auto;margin-bottom:16px">
+    <div class="sec-h" style="padding:14px 16px 0;display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap"><span>Объявления на площадках · 👁 ${fmt(totV)} просмотров · 📞 ${totL} заявок</span>
+      ${ed?`<span><button class="btn ghost sm" onclick="syncListings('cian')">↻ ЦИАН</button> <button class="btn ghost sm" onclick="syncListings('avito')">↻ Авито</button></span>`:''}</div>
+    <table><thead><tr><th>Площадка</th><th>Объект / пом.</th><th>Заголовок</th><th>Цена</th><th>Просм.</th><th>Заявки</th><th>Статус</th>${ed?'<th></th>':''}</tr></thead><tbody>
+    ${list.length?list.map(a=>{const pl=adPlatform(a.platform);const b=buildingOf(a.building);
+      return `<tr>
+        <td><span class="pill" style="background:${pl[1]}22;color:${pl[1]}">${pl[0]}</span></td>
+        <td class="t-sub">${esc(b?b.name:a.building)}${a.unit?' · '+esc(a.unit):''}</td>
+        <td class="t-strong" style="cursor:pointer" onclick="listingModal('${a.id}')">${esc(a.title)}${a.url?` <a href="${esc(a.url)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" style="font-size:12px">↗</a>`:''}</td>
+        <td>${money(a.price)}</td><td>👁 ${fmt(a.views||0)}</td><td>📞 ${a.leads||0}</td>
+        <td>${listingStatusPill(a.status)}${a.lastSync?`<div class="t-sub">синх. ${fmtDateTime(a.lastSync)}</div>`:''}</td>
+        ${ed?`<td><button class="btn ghost sm" onclick="delListing('${a.id}')">🗑</button></td>`:''}</tr>`;}).join(''):`<tr><td colspan="8" class="empty">Объявлений нет</td></tr>`}
+    </tbody></table>
+    <div class="t-sub" style="padding:10px 16px">⚠️ Демо-синхронизация: обновляет просмотры/заявки по тестовым данным. В боевой версии — через API ЦИАН/Авито (личный кабинет, ключ доступа).</div>
+  </div>
+  <div class="card" style="padding:0;overflow-x:auto">
+    <div class="sec-h" style="padding:14px 16px 0;display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap"><span>Разрешения на вывески и наружную рекламу</span>
+      <span>${tabs.map(([k,l])=>`<button class="btn ${signFilter===k?'':'ghost'} sm" onclick="setSignFilter('${k}')">${l}</button>`).join(' ')}</span></div>
+    <table><thead><tr><th>Чьё</th><th>Объект / пом.</th><th>Тип конструкции</th><th>№ разрешения</th><th>Выдано</th><th>Действует до</th><th>Статус</th>${ed?'<th></th>':''}</tr></thead><tbody>
+    ${filtered.length?filtered.map(s=>{const st=signageStatus(s);const b=buildingOf(s.building);const t=s.tenant&&tenantOf(s.tenant);
+      return `<tr>
+        <td>${s.owner==='self'?'<span class="pill" style="background:rgba(106,168,255,.18);color:var(--accent2)">Собственник</span>':`<span class="t-strong">${esc(t?t.name:'Арендатор')}</span>`}</td>
+        <td class="t-sub">${esc(b?b.name:s.building||'—')}${s.unit?' · '+esc(s.unit):''}</td>
+        <td class="t-sub">${esc(s.kind||'—')}</td><td class="t-sub">${esc(s.permitNo||'—')}</td>
+        <td class="t-sub">${s.issued?fmtD(s.issued):'—'}</td>
+        <td><b>${s.expiry?fmtD(s.expiry):'—'}</b><div class="t-sub">${st[2]}</div></td>
+        <td><span class="pill ${st[0]}">${st[1]}</span></td>
+        ${ed?`<td><button class="btn ghost sm" onclick="signageModal('${s.id}')">✎</button></td>`:''}</tr>`;}).join(''):`<tr><td colspan="8" class="empty">Разрешений нет</td></tr>`}
+    </tbody></table></div>`);
+}
+async function syncListings(platform){
+  ensureState(); const now=new Date().toISOString();
+  const items=(DB.listings||[]).filter(a=>a.platform===platform && a.status==='active');
+  if(!items.length) return alert(`На площадке «${adPlatform(platform)[0]}» нет активных объявлений для синхронизации.`);
+  let dV=0,dL=0;
+  items.forEach(a=>{ const addV=Math.max(5,Math.round((a.views||0)*0.08)); const addL=Math.max(0,Math.round(addV/40));
+    a.views=(a.views||0)+addV; a.leads=(a.leads||0)+addL; a.lastSync=now; dV+=addV; dL+=addL; });
+  logSync(platform,'📣',adPlatform(platform)[0],'in',`Обновлено объявлений: ${items.length}`,items.length,0,[`+${dV} просмотров`,`+${dL} заявок`]);
+  await afterStateChange(); alert(`Синхронизация с «${adPlatform(platform)[0]}» завершена.\nОбъявлений: ${items.length}\n+${dV} просмотров, +${dL} заявок.`);
+}
+function listingModal(id){
+  const a=id?(DB.listings||[]).find(x=>x.id===id):null;
+  const def=a?a.building:(SCOPE!=='all'?SCOPE:(buildingsList()[0]||{}).id);
+  openM(`<div class="modal-h"><h3>${a?'Объявление':'Новое объявление'}</h3><span class="x" onclick="closeM()">×</span></div>
+  <div class="modal-b">
+    <div class="row2"><div class="field"><label>Площадка</label><select id="ad-platform">${Object.entries(AD_PLATFORMS).map(([k,v])=>`<option value="${k}"${a&&a.platform===k?' selected':''}>${v[0]}</option>`).join('')}</select></div>
+      <div class="field"><label>Статус</label><select id="ad-status">${[['active','Активно'],['paused','На паузе'],['archived','В архиве']].map(([k,l])=>`<option value="${k}"${(a?a.status:'active')===k?' selected':''}>${l}</option>`).join('')}</select></div></div>
+    <div class="field"><label>Заголовок</label><input id="ad-title" value="${a?esc(a.title):''}" placeholder="Аренда офиса 95 м²"></div>
+    <div class="row2"><div class="field"><label>Объект</label><select id="ad-building">${buildingsList().map(b=>`<option value="${b.id}"${b.id===def?' selected':''}>${esc(b.name)}</option>`).join('')}</select></div>
+      <div class="field"><label>Помещение</label><input id="ad-unit" value="${a?esc(a.unit||''):''}" placeholder="1-03"></div></div>
+    <div class="row2"><div class="field"><label>Цена, ₽/мес</label><input id="ad-price" type="number" value="${a?a.price||0:0}"></div>
+      <div class="field"><label>Ссылка</label><input id="ad-url" value="${a?esc(a.url||''):''}" placeholder="https://"></div></div>
+  </div>
+  <div class="modal-f">${a?`<button class="btn ghost sm" onclick="delListing('${a.id}')">🗑 Удалить</button>`:''}<div class="spacer"></div><button class="btn ghost" onclick="closeM()">Отмена</button><button class="btn" onclick="saveListing(${a?`'${a.id}'`:''})">${a?'Сохранить':'Добавить'}</button></div>`);
+}
+async function saveListing(id){
+  const title=val('ad-title').trim(); if(!title)return alert('Укажите заголовок объявления'); ensureState();
+  const data={platform:val('ad-platform'),status:val('ad-status'),title,building:val('ad-building'),unit:val('ad-unit').trim(),price:+val('ad-price')||0,url:val('ad-url').trim()};
+  if(id){const a=DB.listings.find(x=>x.id===id); if(a)Object.assign(a,data);}
+  else DB.listings.unshift({id:'ad'+Date.now(),...data,views:0,leads:0,posted:TODAY.toISOString().slice(0,10),lastSync:null});
+  closeM(); await afterStateChange();
+}
+async function delListing(id){ if(!confirm('Удалить объявление?'))return; DB.listings=(DB.listings||[]).filter(x=>x.id!==id); closeM(); await afterStateChange(); }
+function signageModal(id){
+  const s=id?(DB.signage||[]).find(x=>x.id===id):null;
+  const def=s?s.building:(SCOPE!=='all'?SCOPE:(buildingsList()[0]||{}).id);
+  const owner=s?s.owner:'tenant'; const tnts=DB.tenants||[];
+  openM(`<div class="modal-h"><h3>${s?'Разрешение на рекламу':'Новое разрешение'}</h3><span class="x" onclick="closeM()">×</span></div>
+  <div class="modal-b">
+    <div class="field"><label>Чья реклама</label><select id="sg-owner" onchange="sgOwnerToggle()">
+      <option value="tenant"${owner==='tenant'?' selected':''}>Арендатора</option>
+      <option value="self"${owner==='self'?' selected':''}>Собственника (своя)</option></select></div>
+    <div class="field" id="sg-tenant-wrap"><label>Арендатор</label><select id="sg-tenant">${tnts.map(t=>`<option value="${t.id}"${s&&s.tenant===t.id?' selected':''}>${esc(t.name)}</option>`).join('')}</select></div>
+    <div class="row2"><div class="field"><label>Объект</label><select id="sg-building">${buildingsList().map(b=>`<option value="${b.id}"${b.id===def?' selected':''}>${esc(b.name)}</option>`).join('')}</select></div>
+      <div class="field"><label>Помещение (если есть)</label><input id="sg-unit" value="${s?esc(s.unit||''):''}" placeholder="2-01"></div></div>
+    <div class="row2"><div class="field"><label>Тип конструкции</label><select id="sg-kind">${SIGN_KINDS.map(k=>`<option${s&&s.kind===k?' selected':''}>${k}</option>`).join('')}</select></div>
+      <div class="field"><label>№ разрешения</label><input id="sg-permit" value="${s?esc(s.permitNo||''):''}" placeholder="РВ-2026-..."></div></div>
+    <div class="row2"><div class="field"><label>Выдано</label><input id="sg-issued" type="date" value="${s&&s.issued?s.issued:''}"></div>
+      <div class="field"><label>Действует до</label><input id="sg-expiry" type="date" value="${s&&s.expiry?s.expiry:''}"></div></div>
+    <div class="field"><label>Примечание</label><input id="sg-note" value="${s?esc(s.note||''):''}"></div>
+  </div>
+  <div class="modal-f">${s?`<button class="btn ghost sm" onclick="delSignage('${s.id}')">🗑 Удалить</button>`:''}<div class="spacer"></div><button class="btn ghost" onclick="closeM()">Отмена</button><button class="btn" onclick="saveSignage(${s?`'${s.id}'`:''})">${s?'Сохранить':'Добавить'}</button></div>`);
+  sgOwnerToggle();
+}
+function sgOwnerToggle(){ const o=val('sg-owner'); const w=document.getElementById('sg-tenant-wrap'); if(w)w.style.display=o==='tenant'?'':'none'; }
+async function saveSignage(id){
+  ensureState(); const owner=val('sg-owner');
+  const data={owner,tenant:owner==='tenant'?val('sg-tenant'):null,building:val('sg-building'),unit:val('sg-unit').trim()||null,kind:val('sg-kind'),permitNo:val('sg-permit').trim(),issued:val('sg-issued')||null,expiry:val('sg-expiry')||null,note:val('sg-note').trim()};
+  if(id){const s=DB.signage.find(x=>x.id===id); if(s)Object.assign(s,data);}
+  else DB.signage.push({id:'sg'+Date.now(),...data,documents:[]});
+  closeM(); await afterStateChange();
+}
+async function delSignage(id){ if(!confirm('Удалить разрешение?'))return; DB.signage=(DB.signage||[]).filter(x=>x.id!==id); closeM(); await afterStateChange(); }
 
 /* ============================================================
    СОТРУДНИКИ / ПОЛЬЗОВАТЕЛИ
@@ -1680,8 +1799,19 @@ function tenantInfo(id){const t=tenantOf(id);const c=DB.contracts.find(c=>c.tena
   openM(`<div class="modal-h"><h3>${esc(t.name)}</h3><span class="x" onclick="closeM()">×</span></div>
   <div class="modal-b">${infoRow('Контакт',esc(t.contact))}${infoRow('Телефон',esc(t.phone))}${infoRow('Email',esc(t.email))}${infoRow('ИНН',esc(t.inn))}${infoRow('Отрасль',esc(t.industry))}
   ${c?infoRow('Объект',esc(buildingOf(u?.building)?.name||'—'))+infoRow('Помещение',c.unit)+infoRow('Аренда/мес',money(monthlyRent(c)))+infoRow('Договор',fmtD(c.start)+' — '+fmtD(c.end)):infoRow('Размещение','не размещён в помещении')}
-  ${docsBlock('tenant',id,t.documents)}</div>
+  ${docsBlock('tenant',id,t.documents)}
+  ${tenantSignageBlock(id)}</div>
   <div class="modal-f">${canEdit('tenants')?`<button class="btn ghost" onclick="editTenantModal('${id}')">✎ Редактировать</button><button class="btn danger" onclick="delTenant('${id}')">Удалить</button>`:''}<button class="btn" onclick="closeM()">Закрыть</button></div>`);}
+function tenantSignageBlock(id){
+  const items=(DB.signage||[]).filter(s=>s.owner==='tenant'&&s.tenant===id);
+  const canAdd=canEdit('ads');
+  return `<div class="sec-h" style="margin-top:14px">Разрешения на вывески ${canAdd?`<button class="btn sm" onclick="closeM();signFilter='tenant';current='ads';markActive();render()">Открыть «Реклама»</button>`:''}</div>
+  ${items.length?items.map(s=>{const st=signageStatus(s);
+    return `<div class="doc"><div class="di">📣</div>
+      <div style="flex:1;min-width:0"><div class="t-strong">${esc(s.kind||'Вывеска')}${s.permitNo?` · ${esc(s.permitNo)}`:''}</div>
+        <div class="t-sub">${s.expiry?'до '+fmtD(s.expiry):'бессрочно'}${s.unit?' · '+esc(s.unit):''}${s.note?' · '+esc(s.note):''}</div></div>
+      <span class="pill ${st[0]}">${st[1]}</span></div>`;}).join(''):'<div class="empty" style="padding:14px">Разрешений на вывески нет</div>'}`;
+}
 function editTenantModal(id){const t=tenantOf(id);if(!t)return;
   openM(`<div class="modal-h"><h3>Редактировать арендатора</h3><span class="x" onclick="closeM()">×</span></div>
   <div class="modal-b"><div class="field"><label>Наименование</label><input id="et-name" value="${esc(t.name)}"></div>

@@ -1,12 +1,12 @@
 /* ---------- ВСТРОЕННЫЙ «БЭКЕНД» (автономный демо-режим, данные в localStorage браузера) ---------- */
 const SRM_KEY='srm_demo_db';
-const _ALL=['dashboard','objects','tenants','contracts','payments','utilities','tasks','requests','upkeep','reports','budget','employees','salaries','integrations'];
+const _ALL=['dashboard','objects','tenants','contracts','payments','utilities','tasks','requests','upkeep','ads','reports','budget','employees','salaries','integrations'];
 const SRM_ROLES={
   admin:{title:'Администратор',view:_ALL,edit:_ALL},
   owner:{title:'Собственник / Руководитель',view:_ALL,edit:_ALL},
-  manager:{title:'Управляющий объектом',view:_ALL,edit:['dashboard','objects','tenants','contracts','payments','utilities','tasks','requests','upkeep','reports','budget','salaries','integrations']},
-  accountant:{title:'Бухгалтер / Финансист',view:['dashboard','objects','tenants','contracts','payments','utilities','tasks','requests','upkeep','reports','budget','salaries','integrations'],edit:['payments','utilities','budget','salaries','integrations']},
-  leasing:{title:'Отдел аренды',view:['dashboard','objects','tenants','contracts','payments','tasks','requests'],edit:['objects','tenants','contracts','tasks','requests']},
+  manager:{title:'Управляющий объектом',view:_ALL,edit:['dashboard','objects','tenants','contracts','payments','utilities','tasks','requests','upkeep','ads','reports','budget','salaries','integrations']},
+  accountant:{title:'Бухгалтер / Финансист',view:['dashboard','objects','tenants','contracts','payments','utilities','tasks','requests','upkeep','ads','reports','budget','salaries','integrations'],edit:['payments','utilities','budget','salaries','integrations']},
+  leasing:{title:'Отдел аренды',view:['dashboard','objects','tenants','contracts','payments','tasks','requests','ads'],edit:['objects','tenants','contracts','tasks','requests','ads']},
   maintenance:{title:'Эксплуатация',view:['dashboard','objects','utilities','tasks','requests','upkeep'],edit:['utilities','tasks','requests','upkeep']},
 };
 const _perms=r=>SRM_ROLES[r]||SRM_ROLES.maintenance;
@@ -96,6 +96,17 @@ function srmBuildState(){
     ],
     budgets:{ b1:{income:48000000,expense:14000000}, b2:{income:13000000,expense:5000000} },
     penaltyRate:0.1,
+    listings:[
+      {id:'ad1',platform:'cian',building:'b1',unit:'1-03',title:'Аренда офиса 95 м², БЦ «СИТИ Плаза»',price:285000,status:'active',url:'https://www.cian.ru/rent/commercial/',views:1240,leads:18,posted:'2026-06-01',lastSync:'2026-06-27T10:00:00.000Z'},
+      {id:'ad2',platform:'avito',building:'b1',unit:'1-03',title:'Офис 95 м² в бизнес-центре, центр',price:285000,status:'active',url:'https://www.avito.ru/moskva/kommercheskaya_nedvizhimost',views:870,leads:9,posted:'2026-06-05',lastSync:null},
+      {id:'ad3',platform:'cian',building:'b2',unit:'4-02',title:'Склад 200 м², Бизнес-парк «Север»',price:180000,status:'paused',url:'',views:430,leads:4,posted:'2026-05-20',lastSync:null},
+    ],
+    signage:[
+      {id:'sg1',owner:'tenant',tenant:'t1',building:'b1',unit:'2-01',kind:'Световой короб',permitNo:'РВ-2024-1187',issued:'2024-03-15',expiry:'2027-03-14',note:'Вывеска над входом',documents:[]},
+      {id:'sg2',owner:'tenant',tenant:'t3',building:'b1',unit:'2-01',kind:'Настенная вывеска',permitNo:'РВ-2025-0455',issued:'2025-02-01',expiry:'2026-07-31',note:'',documents:[]},
+      {id:'sg3',owner:'self',tenant:null,building:'b1',unit:null,kind:'Медиафасад',permitNo:'РВ-2023-0912',issued:'2023-06-01',expiry:'2026-06-15',note:'Реклама БЦ на фасаде',documents:[]},
+      {id:'sg4',owner:'self',tenant:null,building:'b2',unit:null,kind:'Рекламная стела',permitNo:'РВ-2024-2201',issued:'2024-08-01',expiry:'2027-07-31',note:'Брендинг бизнес-парка',documents:[]},
+    ],
   };
   const D2={
     building:{id:'b2',name:'Бизнес-парк «Север»',address:'г. Москва, ул. Складочная, 7',floors:3,totalArea:3200},
