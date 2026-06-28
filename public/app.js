@@ -113,6 +113,9 @@ function ensureState(){
   if(!I.water) I.water={connected:false,lastSync:null};
   if(!I.onec) I.onec={connected:false,base:'',lastSync:null};
   if(!Array.isArray(I.log)) I.log=[];
+  // что именно синхронизировать (по типам документов)
+  if(!I.bank.scope || typeof I.bank.scope!=='object') I.bank.scope={rent:true,expenses:false};
+  if(!I.onec.scope || typeof I.onec.scope!=='object') I.onec.scope={rent:true,expenses:true,salaries:true};
   // Настройки клиента (брендинг, модули, справочники) — у каждого своя база.
   if(!DB.settings || typeof DB.settings!=='object') DB.settings={};
   const S=DB.settings;
@@ -925,10 +928,10 @@ function integrations(){
   const unpaid=DB.payments.filter(p=>p.amount-p.paid>0); const unpaidSum=unpaid.reduce((s,p)=>s+(p.amount-p.paid),0);
   el(head('Синхронизация и интеграции','Банк и поставщики коммунальных услуг','')+
    `<div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(300px,1fr))">
-     ${intCard('bank','🏦','Банк','Автосверка платежей, импорт выписки',I.bank,`Непогашенных начислений аренды: <b>${unpaid.length}</b> на ${money(unpaidSum)}`)}
+     ${intCard('bank','🏦','Банк','Автосверка платежей, импорт выписки',I.bank,`Синхронизируется: ${scopeSummary('bank')}`,`<button class="btn ghost sm" onclick="syncScopeModal('bank')">⚙ Что синхронизировать</button>`)}
      ${intCard('energy','⚡','Мособлэнергосбыт','Электроэнергия — приём начислений',I.energy,'Передача показаний и приём начислений за свет')}
      ${intCard('water','💧','Водоканал','Вода и водоотведение — приём начислений',I.water,'Передача показаний и приём начислений за воду')}
-     ${intCard('onec','🧾','1С: Бухгалтерия','Обмен документами с 1С',I.onec,'Выгрузка аренды, расходов и ФОТ; приём проводок',`<button class="btn ghost sm" onclick="export1C()">⤓ Выгрузить в 1С (CSV)</button>`)}
+     ${intCard('onec','🧾','1С: Бухгалтерия','Обмен документами с 1С',I.onec,`Синхронизируется: ${scopeSummary('onec')}`,`<button class="btn ghost sm" onclick="syncScopeModal('onec')">⚙ Что синхронизировать</button> <button class="btn ghost sm" onclick="export1C()">⤓ Выгрузить в 1С (CSV)</button>`)}
    </div>
    ${syncLogBlock()}
    <div class="card" style="margin-top:16px"><div class="t-sub">⚠️ Демонстрационные интеграции: подключение и синхронизация имитируются на тестовых данных приложения. В боевой версии подключаются реальные API банка и поставщиков (договор, ключи доступа, передача показаний счётчиков).</div></div>`);
@@ -978,7 +981,7 @@ function bankConnectModal(){
   <div class="modal-f"><button class="btn ghost" onclick="closeM()">Отмена</button></div>`);
 }
 async function connectBank(id){ const b=BANKS.find(x=>x.id===id); if(!b)return;
-  ensureState(); DB.integrations.bank={connected:true,name:b.name,bankId:id,lastSync:null};
+  ensureState(); DB.integrations.bank={...DB.integrations.bank,connected:true,name:b.name,bankId:id,lastSync:null};
   closeM(); await afterStateChange(); }
 const ONEC_BASES=['1С:Бухгалтерия 8.3','1С:Управление недвижимостью','1С:Управление холдингом','1С:Аренда и управление имуществом'];
 function onecConnectModal(){
@@ -991,7 +994,7 @@ function onecConnectModal(){
   <div class="t-sub" style="margin-top:6px">Демо-подключение: реальный обмен через формат 1С (CommerceML/EnterpriseData) — в боевой версии.</div></div>
   <div class="modal-f"><button class="btn ghost" onclick="closeM()">Отмена</button></div>`);
 }
-async function connectOnec(base){ ensureState(); DB.integrations.onec={connected:true,base,lastSync:null}; closeM(); await afterStateChange(); }
+async function connectOnec(base){ ensureState(); DB.integrations.onec={...DB.integrations.onec,connected:true,base,lastSync:null}; closeM(); await afterStateChange(); }
 async function intConnect(key){ if(!DB.integrations)ensureState();
   if(key==='bank'){ bankConnectModal(); return; }
   if(key==='onec'){ onecConnectModal(); return; }
@@ -999,11 +1002,13 @@ async function intConnect(key){ if(!DB.integrations)ensureState();
   await afterStateChange();
 }
 function export1C(){
+  const sc=syncScope('onec');
+  if(!sc.rent && !sc.expenses && !sc.salaries) return alert('Для 1С не выбран ни один тип документов.\nНажмите «⚙ Что синхронизировать» на карточке 1С.');
   const rows=[['Тип документа','Дата','Период','Контрагент/Сотрудник','Объект','Помещение','Назначение','Сумма','Статус']];
-  DB.payments.forEach(p=>{const c=contractOf(p.contract);if(!c)return;const t=tenantOf(c.tenant);const u=unitOf(c.unit);
+  if(sc.rent) DB.payments.forEach(p=>{const c=contractOf(p.contract);if(!c)return;const t=tenantOf(c.tenant);const u=unitOf(c.unit);
     rows.push(['Аренда (начисление)',p.paidDate||'',p.period,t?t.name:'',(buildingOf(u&&u.building)?.name)||'',c.unit,'Аренда за '+p.period,p.amount,p.status]);});
-  DB.expenses.forEach(e=>rows.push(['Расход на содержание','',e.period||'',e.vendor||'',(buildingOf(e.building)?.name)||'','',e.category,e.amount,e.status]));
-  (DB.salaries||[]).forEach(s=>{const u=userOf(s.user_id);rows.push(['Зарплата',s.paidDate||'',s.period,u?u.full_name:'','','','ФОТ '+s.period,s.amount,s.status]);});
+  if(sc.expenses) DB.expenses.forEach(e=>rows.push(['Расход на содержание','',e.period||'',e.vendor||'',(buildingOf(e.building)?.name)||'','',e.category,e.amount,e.status]));
+  if(sc.salaries) (DB.salaries||[]).forEach(s=>{const u=userOf(s.user_id);rows.push(['Зарплата',s.paidDate||'',s.period,u?u.full_name:'','','','ФОТ '+s.period,s.amount,s.status]);});
   const csv='﻿'+rows.map(r=>r.map(x=>String(x==null?'':x).replace(/[;\n]/g,' ')).join(';')).join('\n');
   const fname='1c_export_'+TODAY.toISOString().slice(0,10)+'.csv';
   const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));a.download=fname;a.click();
@@ -1017,29 +1022,60 @@ function logSync(key,icon,title,dir,text,count,sum,items){
   DB.integrations.log.unshift({ts:new Date().toISOString(),key,icon,title,dir,text,count:count||0,sum:sum||0,items:items||[]});
   DB.integrations.log=DB.integrations.log.slice(0,50);
 }
+// какие типы документов можно выбрать для синхронизации
+const SYNC_DOCS={
+  bank:[['rent','Поступления — платежи аренды'],['expenses','Списания — расходы на содержание']],
+  onec:[['rent','Аренда (платежи)'],['expenses','Расходы на содержание'],['salaries','Зарплата (ФОТ)']],
+};
+const syncScope=key=>((DB.integrations&&DB.integrations[key]&&DB.integrations[key].scope)||{});
+function scopeSummary(key){ const sc=syncScope(key); const on=(SYNC_DOCS[key]||[]).filter(([k])=>sc[k]).map(([,l])=>l);
+  return on.length?esc(on.join(', ')):'<span style="color:var(--red)">ничего не выбрано</span>'; }
+function syncScopeModal(key){
+  const sc=syncScope(key); const docs=SYNC_DOCS[key]||[];
+  openM(`<div class="modal-h"><h3>Что синхронизировать — ${key==='bank'?'Банк':'1С'}</h3><span class="x" onclick="closeM()">×</span></div>
+  <div class="modal-b"><div class="t-sub" style="margin-bottom:12px">Отметьте типы документов, которые участвуют в синхронизации и выгрузке:</div>
+  ${docs.map(([k,label])=>`<label style="display:flex;align-items:center;gap:10px;padding:9px 2px;cursor:pointer;border-bottom:1px solid var(--line)">
+    <input type="checkbox" class="sc-doc" data-k="${k}" ${sc[k]?'checked':''}> <span>${label}</span></label>`).join('')}
+  </div>
+  <div class="modal-f"><button class="btn ghost" onclick="closeM()">Отмена</button><button class="btn" onclick="saveSyncScope('${key}')">Сохранить</button></div>`);
+}
+async function saveSyncScope(key){ ensureState();
+  const sc={}; document.querySelectorAll('.sc-doc').forEach(c=>{ sc[c.dataset.k]=c.checked; });
+  DB.integrations[key]={...DB.integrations[key],scope:sc};
+  closeM(); await afterStateChange(); }
 async function intSync(key){
   const now=new Date().toISOString();
   if(key==='bank'){
-    const unpaid=DB.payments.filter(p=>p.amount-p.paid>0); const sum=unpaid.reduce((s,p)=>s+(p.amount-p.paid),0);
-    if(!unpaid.length){ DB.integrations.bank={...DB.integrations.bank,lastSync:now};
-      logSync('bank','🏦','Банк','in','Сверка выписки: новых поступлений нет',0,0,[]);
-      await afterStateChange(); return alert('Синхронизация завершена. Новых поступлений для сверки нет.'); }
-    if(!confirm(`Из банковской выписки найдено ${unpaid.length} поступлений, совпадающих с начислениями аренды, на сумму ${money(sum)}.\n\nЗачесть их как оплаченные?`))return;
+    const sc=syncScope('bank');
+    if(!sc.rent && !sc.expenses) return alert('Для банка не выбран ни один тип документов.\nНажмите «⚙ Что синхронизировать» на карточке банка.');
+    const rentList=sc.rent?DB.payments.filter(p=>p.amount-p.paid>0):[];
+    const expList=sc.expenses?DB.expenses.filter(e=>e.status!=='paid'):[];
+    const total=rentList.length+expList.length;
+    const sum=rentList.reduce((s,p)=>s+(p.amount-p.paid),0)+expList.reduce((s,e)=>s+(Number(e.amount)||0),0);
+    if(!total){ DB.integrations.bank={...DB.integrations.bank,lastSync:now};
+      logSync('bank','🏦','Банк','in','Сверка выписки: новых операций нет',0,0,[]);
+      await afterStateChange(); return alert('Синхронизация завершена. Новых операций для сверки нет.'); }
+    const what=[sc.rent?'поступления аренды':'',sc.expenses?'списания расходов':''].filter(Boolean).join(' + ');
+    if(!confirm(`Из банковской выписки найдено ${total} операций на ${money(sum)} (${what}).\n\nОтметить их проведёнными?`))return;
     const items=[];
-    unpaid.forEach(p=>{ const add=p.amount-p.paid; p.paid=p.amount; p.status='paid'; p.paidDate=TODAY.toISOString().slice(0,10);
+    rentList.forEach(p=>{ const add=p.amount-p.paid; p.paid=p.amount; p.status='paid'; p.paidDate=TODAY.toISOString().slice(0,10);
       (p.transactions=p.transactions||[]).push({amount:add,date:p.paidDate,method:'bank',bank:true});
       const c=contractOf(p.contract); const t=c&&tenantOf(c.tenant);
-      items.push(`${p.period} · ${t?t.name:('Договор '+p.contract)} · +${money(add)}`); });
+      items.push(`Аренда · ${p.period} · ${t?t.name:('Договор '+p.contract)} · +${money(add)}`); });
+    expList.forEach(e=>{ e.status='paid'; items.push(`Расход · ${e.category||'—'} · −${money(e.amount)}`); });
     DB.integrations.bank={...DB.integrations.bank,lastSync:now};
-    logSync('bank','🏦','Банк','in',`Зачтено ${unpaid.length} поступлений из выписки`,unpaid.length,sum,items);
-    await afterStateChange(); return alert(`Готово. Зачтено ${unpaid.length} поступлений на ${money(sum)}.`);
+    logSync('bank','🏦','Банк','in',`Проведено ${total} операций из выписки`,total,sum,items);
+    await afterStateChange(); return alert(`Готово. Проведено ${total} операций на ${money(sum)}.`);
   }
   if(key==='onec'){
-    const docs=DB.payments.length+DB.expenses.length+(DB.salaries||[]).length;
+    const sc=syncScope('onec'); const items=[]; const parts=[]; let docs=0;
+    if(sc.rent){ docs+=DB.payments.length; items.push(`Аренда: ${DB.payments.length}`); parts.push('аренда'); }
+    if(sc.expenses){ docs+=DB.expenses.length; items.push(`Расходы: ${DB.expenses.length}`); parts.push('расходы'); }
+    if(sc.salaries){ docs+=(DB.salaries||[]).length; items.push(`ФОТ: ${(DB.salaries||[]).length}`); parts.push('ФОТ'); }
+    if(!parts.length) return alert('Для 1С не выбран ни один тип документов.\nНажмите «⚙ Что синхронизировать» на карточке 1С.');
     DB.integrations.onec={...DB.integrations.onec,lastSync:now};
-    logSync('onec','🧾','1С: Бухгалтерия','out',`Подготовлено к обмену документов: ${docs} (аренда + расходы + ФОТ)`,docs,0,
-      [`Аренда: ${DB.payments.length}`,`Расходы: ${DB.expenses.length}`,`ФОТ: ${(DB.salaries||[]).length}`]);
-    await afterStateChange(); return alert(`Синхронизация с 1С завершена.\nК обмену готово документов: ${docs} (аренда + расходы + ФОТ).\nДля файла выгрузки нажмите «Выгрузить в 1С (CSV)».`);
+    logSync('onec','🧾','1С: Бухгалтерия','out',`Подготовлено к обмену: ${docs} (${parts.join(' + ')})`,docs,0,items);
+    await afterStateChange(); return alert(`Синхронизация с 1С завершена.\nК обмену готово документов: ${docs} (${parts.join(' + ')}).\nДля файла выгрузки нажмите «Выгрузить в 1С (CSV)».`);
   }
   if(key==='energy'||key==='water'){
     const field=key==='energy'?'electricity':'water'; let n=0; let sum=0;
