@@ -47,6 +47,10 @@ const canEdit = m => ME && ME.permissions.edit.includes(m);
 const fmt=n=>new Intl.NumberFormat('ru-RU').format(Math.round(n));
 const money=n=>fmt(n)+' ₽';
 const esc=s=>(s==null?'':String(s)).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+// безопасная внешняя ссылка: только http(s)/mailto, иначе пусто (защита от javascript:/data:text/html)
+const safeUrl=u=>{ const s=String(u||'').trim(); return /^(https?:\/\/|mailto:)/i.test(s)?s:''; };
+// ячейка CSV: экранирование + защита от формульных инъекций в Excel (ведущие = + - @)
+const csvCell=v=>{ let s=String(v==null?'':v); if(/^[=+\-@\t\r]/.test(s)) s="'"+s; return '"'+s.replace(/"/g,'""')+'"'; };
 const tenantOf=id=>DB.tenants.find(t=>t.id===id);
 const unitOf=id=>DB.units.find(u=>u.id===id);
 const contractOf=id=>DB.contracts.find(c=>c.id===id);
@@ -412,7 +416,7 @@ function startPolling(){ stopPolling(); pollTimer=setInterval(silentRefresh, 300
 function stopPolling(){ if(pollTimer)clearInterval(pollTimer); pollTimer=null; }
 async function silentRefresh(){
   if(!ME) return;
-  if(document.getElementById('modalBg').classList.contains('show')) return; // не мешаем вводу
+  if(document.getElementById('modalBg')?.classList.contains('show')) return; // не мешаем вводу
   try{
     const b=await api('/api/bootstrap'); DB=b.state; TASKS=b.tasks; USERS=b.users; ROLES=b.roles; ensureState(); applyRoleOverrides(); resetAuditBaseline();
     updateBadges();
@@ -441,7 +445,7 @@ const DASH_CATALOG={
   adsKpi:{label:'KPI · Реклама',span:1,build:()=>{const ls=(DB.listings||[]).filter(a=>SCOPE==='all'||a.building===SCOPE);const act=ls.filter(a=>a.status==='active').length;const v=ls.reduce((s,a)=>s+(a.views||0),0);return kpi('Объявления','#22a7f0','📣',act+' активн.','👁 '+fmt(v)+' просмотров','');}},
   chIncome:{label:'График · Доходы и расходы',span:2,build:()=>`<div class="card"><div class="panel-title"><h3>Доходы и расходы</h3><span class="muted">тыс ₽ · 6 мес</span></div><canvas id="chIncome" height="120"></canvas></div>`,draw:drawIncome},
   chOcc:{label:'График · Структура площадей',span:1,build:()=>`<div class="card"><div class="panel-title"><h3>Структура площадей</h3><span class="muted">м²</span></div><canvas id="chOcc" height="120"></canvas></div>`,draw:drawOcc},
-  overdue:{label:'Виджет · Просроченные платежи',span:2,build:()=>{const o=sPayments().filter(p=>p.status==='overdue').map(p=>{const c=contractOf(p.contract);return{name:tenantOf(c.tenant).name,unit:c.unit,amount:p.amount-p.paid};});
+  overdue:{label:'Виджет · Просроченные платежи',span:2,build:()=>{const o=sPayments().filter(p=>p.status==='overdue').map(p=>{const c=contractOf(p.contract);const t=c&&tenantOf(c.tenant);return{name:t?t.name:'—',unit:c?c.unit:'—',amount:p.amount-p.paid};});
     return dashCard('⚠️ Просроченные платежи',o.length,dashRows(o.map(x=>`<tr><td><div class="t-strong">${esc(x.name)}</div><div class="t-sub">Помещение ${esc(x.unit)}</div></td><td style="text-align:right"><span class="pill red">${money(x.amount)}</span></td></tr>`),'Нет просрочек'));}},
   tasks:{label:'Виджет · Ближайшие задачи',span:2,build:()=>{const t=TASKS.filter(x=>x.status!=='done').sort((a,b)=>daysLeft(a.due)-daysLeft(b.due)).slice(0,5);
     return dashCard('Ближайшие задачи',t.length,dashRows(t.map(x=>`<tr><td><div class="t-strong">${esc(x.title)}</div><div class="t-sub">${esc(x.assignee_name||'—')} · ${esc(x.unit)}</div></td><td style="text-align:right">${prioPill(x.priority)}<div class="t-sub" style="margin-top:4px">${dueLabel(x.due)}</div></td></tr>`),'Нет задач'));}},
@@ -639,9 +643,9 @@ function buildingHeader(b, count){
 }
 function unitTile(u){
   const st=unitStatus(u); const cls={occupied:'u-occ',free:'u-free',reserved:'u-res',debt:'u-debt'}[st];
-  const ten=u.tenant?tenantOf(u.tenant).name:(st==='reserved'?'Бронь':'Свободно');
-  return `<div class="unit ${cls}" onclick="unitInfo('${u.id}')"><span class="bar"></span>
-    <div class="u-id">${u.id}${u.ownership==='sold'?' 🏷':''}</div><div class="u-area">${u.type} · ${u.area} м²</div><div class="u-ten">${esc(ten)}</div>
+  const ten=u.tenant?(tenantOf(u.tenant)||{}).name:(st==='reserved'?'Бронь':'Свободно');
+  return `<div class="unit ${cls}" onclick="unitInfo('${esc(u.id)}')"><span class="bar"></span>
+    <div class="u-id">${esc(u.id)}${u.ownership==='sold'?' 🏷':''}</div><div class="u-area">${esc(u.type)} · ${u.area} м²</div><div class="u-ten">${esc(ten)}</div>
     <div class="u-ten" style="color:var(--muted2);font-size:10.5px;margin-top:5px">📎 ${(u.documents||[]).length} док.${u.ownership==='sold'?' · сторонний собств.':''}</div></div>`;
 }
 function miniStat(label,v,color){return `<div class="card"><div class="label" style="color:var(--muted);font-size:12px">${label}</div><div style="font-size:24px;font-weight:750;margin-top:4px;color:${color?'var(--'+color+')':'var(--txt)'}">${v}</div></div>`;}
@@ -894,7 +898,7 @@ function tasks(){
 function prioPill(p){const m={high:['red','Высокий'],medium:['amber','Средний'],low:['gray','Низкий']};const x=m[p]||['gray',p];return `<span class="pill ${x[0]}">${x[1]}</span>`;}
 function prioWord(p){return {high:'Высокий',medium:'Средний',low:'Низкий'}[p]||p;}
 function dueLabel(d){const dl=daysLeft(d);if(d==null||dl===9999)return '<span class="t-sub">без срока</span>';if(dl<0)return `<span style="color:var(--red)">просрочено ${-dl} дн</span>`;if(dl===0)return '<span style="color:var(--amber)">сегодня</span>';if(dl<=3)return `<span style="color:var(--amber)">через ${dl} дн</span>`;return `через ${dl} дн`;}
-async function advanceTask(id){const t=TASKS.find(t=>t.id===id);const next=t.status==='open'?'in_progress':'done';
+async function advanceTask(id){const t=TASKS.find(t=>t.id===id);if(!t)return;const next=t.status==='open'?'in_progress':'done';
   try{ await api('/api/tasks/'+id,'PATCH',{status:next}); await reloadTasks(); render(); }catch(e){alert(e.message);} }
 async function reloadTasks(){ TASKS=await api('/api/tasks'); }
 
@@ -1218,7 +1222,7 @@ function ads(){
       return `<tr>
         <td><span class="pill" style="background:${pl[1]}22;color:${pl[1]}">${pl[0]}</span></td>
         <td class="t-sub">${esc(b?b.name:a.building)}${a.unit?' · '+esc(a.unit):''}</td>
-        <td class="t-strong" style="cursor:pointer" onclick="listingInfo('${a.id}')">${esc(a.title)}${a.documents&&a.documents.length?` 📎${a.documents.length}`:''}${a.url?` <a href="${esc(a.url)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" style="font-size:12px">↗</a>`:''}</td>
+        <td class="t-strong" style="cursor:pointer" onclick="listingInfo('${a.id}')">${esc(a.title)}${a.documents&&a.documents.length?` 📎${a.documents.length}`:''}${safeUrl(a.url)?` <a href="${esc(safeUrl(a.url))}" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()" style="font-size:12px">↗</a>`:''}</td>
         <td>${money(a.price)}</td><td>👁 ${fmt(a.views||0)}</td><td>📞 ${a.leads||0}</td>
         <td>${listingStatusPill(a.status)}${a.lastSync?`<div class="t-sub">синх. ${fmtDateTime(a.lastSync)}</div>`:''}</td>
         ${ed?`<td><button class="btn ghost sm" onclick="delListing('${a.id}')">🗑</button></td>`:''}</tr>`;}).join(''):`<tr><td colspan="8" class="empty">Объявлений нет</td></tr>`}
@@ -1314,7 +1318,7 @@ function listingInfo(id){ const a=(DB.listings||[]).find(x=>x.id===id); if(!a)re
     ${infoRow('Просмотры / заявки',`👁 ${fmt(a.views||0)} · 📞 ${a.leads||0}`)}
     ${a.posted?infoRow('Размещено',fmtD(a.posted)):''}
     ${a.lastSync?infoRow('Синхронизация',fmtDateTime(a.lastSync)):''}
-    ${a.url?infoRow('Ссылка',`<a href="${esc(a.url)}" target="_blank" rel="noopener">открыть ↗</a>`):''}
+    ${safeUrl(a.url)?infoRow('Ссылка',`<a href="${esc(safeUrl(a.url))}" target="_blank" rel="noopener noreferrer">открыть ↗</a>`):(a.url?infoRow('Ссылка',esc(a.url)+' (небезопасная ссылка)'):'')}
     <div style="margin-top:12px">${docsBlock('listing',id,a.documents)}</div>
   </div>
   <div class="modal-f">${ed?`<button class="btn ghost" onclick="listingModal('${id}')">✎ Редактировать</button>`:''}<div class="spacer"></div><button class="btn" onclick="closeM()">Закрыть</button></div>`);
@@ -1429,8 +1433,8 @@ function reports(){
 }
 function exportCSV(){
   let rows=[['Объект','Арендатор','Помещение','Период','Начислено','Оплачено','Задолженность','Статус']];
-  sPayments().forEach(p=>{const c=contractOf(p.contract);const b=buildingOf(unitOf(c.unit)?.building);rows.push([b?b.name:'',tenantOf(c.tenant).name,c.unit,p.period,p.amount,p.paid,p.amount-p.paid,p.status]);});
-  const csv='﻿'+rows.map(r=>r.join(';')).join('\n');
+  sPayments().forEach(p=>{const c=contractOf(p.contract);if(!c)return;const b=buildingOf(unitOf(c.unit)?.building);const t=tenantOf(c.tenant);rows.push([b?b.name:'',t?t.name:'',c.unit,p.period,p.amount,p.paid,p.amount-p.paid,p.status]);});
+  const csv='﻿'+rows.map(r=>r.map(csvCell).join(';')).join('\n');
   const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));a.download='otchet_arenda_2026-06.csv';a.click();
 }
 async function resetDemo(){ if(!confirm('Сбросить все данные (помещения, договоры, платежи, задачи) к демо? Пользователи сохранятся.'))return;
@@ -1730,7 +1734,7 @@ function export1C(){
     rows.push(['Аренда (начисление)',p.paidDate||'',p.period,t?t.name:'',(buildingOf(u&&u.building)?.name)||'',c.unit,'Аренда за '+p.period,p.amount,p.status]);});
   if(sc.expenses) DB.expenses.filter(e=>passScope(sc,'expense',e)).forEach(e=>rows.push(['Расход на содержание','',e.period||'',e.vendor||'',(buildingOf(e.building)?.name)||'','',e.category,e.amount,e.status]));
   if(sc.salaries) (DB.salaries||[]).filter(s=>passScope(sc,'salary',s)).forEach(s=>{const u=userOf(s.user_id);rows.push(['Зарплата',s.paidDate||'',s.period,u?u.full_name:'','','','ФОТ '+s.period,s.amount,s.status]);});
-  const csv='﻿'+rows.map(r=>r.map(x=>String(x==null?'':x).replace(/[;\n]/g,' ')).join(';')).join('\n');
+  const csv='﻿'+rows.map(r=>r.map(csvCell).join(';')).join('\n');
   const fname='1c_export_'+TODAY.toISOString().slice(0,10)+'.csv';
   const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));a.download=fname;a.click();
   logSync('onec','⤓','Выгрузка в 1С','out',`Сформирован файл ${fname} — строк: ${rows.length-1}`,rows.length-1,0,
@@ -2017,15 +2021,20 @@ function docsBlock(type,id,docs){
     <button class="btn ghost sm" onclick="openDoc('${type}','${id}',${i})">Открыть</button>
     ${canEditDocs(type)?`<span class="trash" onclick="delDoc('${type}','${id}',${i})" title="Удалить">🗑</span>`:''}</div>`).join(''):'<div class="empty" style="padding:16px">Документы не прикреплены</div>'}`;
 }
-function downloadDoc(d){const a=document.createElement('a');a.href=d.url;a.download=d.name||'file';document.body.appendChild(a);a.click();a.remove();}
-function openDoc(type,id,i){const e=docEntity(type,id);const d=e.documents[i];
+const SAFE_DOC_MIME=/^(application\/pdf|image\/(png|jpe?g|gif|webp))$/i;
+function downloadDoc(d){ const url=String(d.url||''); // только безопасные источники
+  if(!(url.startsWith('data:')&&SAFE_DOC_MIME.test(url.slice(5).split(/[;,]/)[0])) && !safeUrl(url)){ alert('Этот файл нельзя открыть в браузере (небезопасный формат).'); return; }
+  const a=document.createElement('a');a.href=url;a.download=d.name||'file';a.rel='noopener';document.body.appendChild(a);a.click();a.remove();}
+function openDoc(type,id,i){const e=docEntity(type,id); const d=e&&e.documents&&e.documents[i]; if(!d){ return alert('Документ не найден.'); }
   if(d.url&&d.url.startsWith('data:')){ // загруженный файл
     const mime=d.url.slice(5).split(/[;,]/)[0];
-    if(/^(application\/pdf|image\/(png|jpe?g|gif|webp))$/i.test(mime)){ // безопасно показать в новой вкладке
+    if(SAFE_DOC_MIME.test(mime)){ // безопасно показать в новой вкладке (pdf/картинки)
       fetch(d.url).then(r=>r.blob()).then(b=>window.open(URL.createObjectURL(b),'_blank')).catch(()=>downloadDoc(d));
-    } else { downloadDoc(d); } // прочие типы — только скачивание (не выполняем в браузере)
+    } else { downloadDoc(d); } // прочие типы — только скачивание (svg/html не открываем)
     return; }
-  if(d.url){ window.open(d.url,'_blank','noopener,noreferrer'); return; }
+  const safe=safeUrl(d.url);
+  if(safe){ window.open(safe,'_blank','noopener,noreferrer'); return; }
+  if(d.url){ return alert('Ссылка на документ небезопасна (разрешены только http/https). Откройте через «Редактировать».'); }
   alert('Документ «'+d.name+'»: файл не прикреплён и ссылка не указана. Откройте документ через «Редактировать» и приложите файл.');
 }
 let _docFile=null;

@@ -16,7 +16,6 @@ import {
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PUBLIC = join(__dirname, 'public');
 const PORT = process.env.PORT || 4000;
-const OPERATIONAL = ['objects','tenants','contracts','payments','utilities'];
 
 seed();
 
@@ -71,6 +70,20 @@ const liteUser = u => u && ({
   role:u.role, roleTitle:(ROLES[u.role]||{}).title, active:!!u.active,
   permissions: perms(u.role)
 });
+// карта: коллекция состояния → модуль прав (для серверной авторизации записи/чтения)
+const STATE_MOD = { buildings:'objects', units:'objects', tenants:'tenants', contracts:'contracts',
+  payments:'payments', utilities:'utilities', expenses:'utilities', salaries:'salaries',
+  requests:'requests', equipment:'upkeep', listings:'ads', signage:'ads',
+  budgets:'budget', penaltyRate:'budget', integrations:'integrations' };
+const isFull = role => role==='admin' || role==='owner';
+// убираем из состояния разделы, которые роль не имеет права видеть (защита чтения)
+function filterStateForRole(state, role){
+  if(isFull(role)) return state;
+  const s = {...state};
+  if(!canView(role,'salaries')) s.salaries = [];
+  if(!canView(role,'budget')) s.budgets = {};
+  return s;
+}
 // роли, которые можно выбрать при самостоятельной регистрации (без привилегированных)
 const SELF_ROLES = ['leasing','accountant','maintenance'];
 // Самостоятельная регистрация по умолчанию ВЫКЛЮЧЕНА (безопасность боевого режима).
@@ -169,26 +182,35 @@ async function api(req, res, url){
     return send(res,200,{
       user: publicUser(me),
       roles: ROLES,
-      state, tasks, users
+      state: filterStateForRole(state, me.role), tasks, users
     });
   }
 
   // ---- общее состояние (помещения/арендаторы/договоры/платежи/коммуналка/расходы) ----
   if(path==='/api/state'){
+    const cur = JSON.parse(db.prepare(`SELECT json FROM state WHERE key='main'`).get().json);
     if(method==='GET'){
-      return send(res,200, JSON.parse(db.prepare(`SELECT json FROM state WHERE key='main'`).get().json));
+      return send(res,200, filterStateForRole(cur, me.role));
     }
     if(method==='POST'){
-      const hasEdit = OPERATIONAL.some(m=>canEdit(me.role,m));
-      if(!hasEdit) return send(res,403,{error:'Нет прав на изменение данных'});
       const b = await readBody(req);
       const REQ = ['buildings','units','tenants','contracts','payments','utilities','expenses','history'];
       const okShape = b && REQ.every(k => k in b) &&
-        ['buildings','units','tenants','contracts','payments','utilities','expenses','history'].every(k => Array.isArray(b[k])) &&
+        REQ.every(k => Array.isArray(b[k])) &&
         b.units.length > 0 && b.buildings.length > 0; // защита от случайной перезаписи пустыми данными
       if(!okShape) return send(res,400,{error:'Некорректная структура данных состояния'});
+      // СЕРВЕРНАЯ авторизация: роль не может изменять разделы, на которые у неё нет права edit.
+      // Для защищённых коллекций сохраняем серверное (текущее) значение, игнорируя присланное.
+      let toSave = b;
+      if(!isFull(me.role)){
+        const merged = {...b};
+        for(const [k,mod] of Object.entries(STATE_MOD)){ if(!canEdit(me.role, mod)) merged[k] = cur[k]; }
+        merged.settings = cur.settings;     // оформление меняет только админ
+        merged.roleMatrix = cur.roleMatrix; // права меняет только админ
+        toSave = merged;
+      }
       db.prepare(`UPDATE state SET json=?, updated_at=?, updated_by=? WHERE key='main'`)
-        .run(JSON.stringify(b), new Date().toISOString(), me.email);
+        .run(JSON.stringify(toSave), new Date().toISOString(), me.email);
       return send(res,200,{ ok:true });
     }
   }
@@ -312,11 +334,7 @@ http.createServer(async (req,res)=>{
     send(res,500,{error:'Внутренняя ошибка сервера'});
   }
 }).listen(PORT, '0.0.0.0', ()=>{
-  console.log(`\n  СИТИ SRM (серверная версия) — http://localhost:${PORT}\n`);
-  console.log('  Демо-аккаунты (email / пароль):');
-  console.log('   admin@citisrm.ru / admin123   — Администратор (полный доступ)');
-  console.log('   owner@citisrm.ru / owner123   — Собственник (только чтение)');
-  console.log('   lease@citisrm.ru / lease123   — Отдел аренды');
-  console.log('   buh@citisrm.ru   / buh123     — Бухгалтер');
-  console.log('   exp@citisrm.ru   / exp123     — Эксплуатация\n');
+  console.log(`\n  СИТИ SRM (серверная версия) — http://localhost:${PORT}`);
+  if(!process.env.SEED_PASSWORD) console.warn('  ⚠ SEED_PASSWORD не задан — используются демо-пароли. Для боевого режима задайте SEED_PASSWORD.');
+  console.log('');
 });

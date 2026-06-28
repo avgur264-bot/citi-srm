@@ -1,0 +1,7 @@
+# Клиентские данные и секреты — НИКОГДА не коммитить в git!
+# (содержат SEED_PASSWORD клиентов и их базы)
+clients/
+proxy/sites/
+backups/
+*.env
+.env
