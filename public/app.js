@@ -122,6 +122,8 @@ function ensureState(){
   if(typeof S.logo!=='string') S.logo='';
   if(!S.modules || typeof S.modules!=='object') S.modules={};
   if(!Array.isArray(S.expenseCats)) S.expenseCats=['Клининг','Охрана','Электроэнергия','Водоснабжение','Отопление','Текущий ремонт','Вывоз мусора','Обслуживание лифтов'];
+  if(!Array.isArray(S.unitTypes)) S.unitTypes=['Офис','Ритейл','Кафе','Коворкинг','Склад'];
+  if(!Array.isArray(S.payMethodsExtra)) S.payMethodsExtra=[];
 }
 /* ---- брендинг и модули из настроек клиента ---- */
 const isAdmin = ()=> ME && (ME.role==='admin'||ME.role==='owner');
@@ -558,6 +560,10 @@ function payments(){
   }).join('') || '<div class="card"><div class="empty">Объекты не найдены</div></div>';
 }
 const PAY_METHODS={cash:'Наличные',bank:'Безналичный',card:'Карта',transfer:'Перевод'};
+// встроенные способы + добавленные клиентом в настройках
+function payMethods(){ const m={...PAY_METHODS}; (stg().payMethodsExtra||[]).forEach(x=>{const k=String(x).trim(); if(k)m[k]=k;}); return m; }
+const payLabel=k=>payMethods()[k]||k;
+const payMethodOpts=(sel='bank')=>Object.entries(payMethods()).map(([k,v])=>`<option value="${esc(k)}"${k===sel?' selected':''}>${esc(v)}</option>`).join('');
 function pTx(p){ if(p.transactions&&p.transactions.length) return p.transactions; if(p.paid>0) return [{amount:p.paid,date:p.paidDate||p.due,method:'bank',legacy:true}]; return []; }
 function paymentRow(p){const c=contractOf(p.contract);const t=tenantOf(c.tenant);const bal=p.amount-p.paid;
   return `<tr><td class="t-strong">${esc(t.name)}</td><td>${c.unit}</td><td>${p.period}</td><td>${money(p.amount)}</td>
@@ -574,11 +580,11 @@ function payModal(id){const p=DB.payments.find(x=>x.id===id);if(!p)return;const 
     ${infoRow('Арендатор',esc(t.name))}${infoRow('Помещение',c.unit)}
     ${infoRow('Начислено',money(p.amount))}${infoRow('Оплачено',money(p.paid))}${infoRow('Остаток',rem>0?`<span style="color:var(--red)">${money(rem)}</span>`:'<span style="color:var(--green)">0 ₽</span>')}
     <div class="sec-h">История платежей <button class="btn ghost sm" ${p.paid>0?'':'disabled'} onclick="printReceipt('${p.id}')">🖶 Квитанция (итог)</button></div>
-    ${tx.length?tx.map((x,i)=>`<div class="doc"><div class="di">💳</div><div style="flex:1;min-width:0"><div class="t-strong">${money(x.amount)} · ${PAY_METHODS[x.method]||x.method}</div><div class="t-sub">${x.date?fmtD(x.date):'—'}</div></div><button class="btn ghost sm" onclick="printReceipt('${p.id}',${i})">🖶</button></div>`).join(''):'<div class="empty" style="padding:14px">Оплат ещё не было</div>'}
+    ${tx.length?tx.map((x,i)=>`<div class="doc"><div class="di">💳</div><div style="flex:1;min-width:0"><div class="t-strong">${money(x.amount)} · ${esc(payLabel(x.method))}</div><div class="t-sub">${x.date?fmtD(x.date):'—'}</div></div><button class="btn ghost sm" onclick="printReceipt('${p.id}',${i})">🖶</button></div>`).join(''):'<div class="empty" style="padding:14px">Оплат ещё не было</div>'}
     ${editable?`<div class="sec-h">Внести оплату</div>
     <div class="row2"><div class="field"><label>Сумма, ₽</label><input id="pay-amt" type="number" value="${rem}"></div>
       <div class="field"><label>Дата</label><input id="pay-date" type="date" value="${TODAY.toISOString().slice(0,10)}"></div></div>
-    <div class="field"><label>Способ оплаты</label><select id="pay-method">${Object.entries(PAY_METHODS).map(([k,v])=>`<option value="${k}"${k==='bank'?' selected':''}>${v}</option>`).join('')}</select></div>
+    <div class="field"><label>Способ оплаты</label><select id="pay-method">${payMethodOpts('bank')}</select></div>
     <div class="t-sub">Можно внести частично — статус обновится автоматически (Частично / Оплачен).</div>`:''}
   </div>
   <div class="modal-f">${editable?`<button class="btn ghost" onclick="closeM()">Отмена</button><button class="btn" onclick="savePay('${id}')">Зачесть оплату</button>`:'<button class="btn" onclick="closeM()">Закрыть</button>'}</div>`);}
@@ -622,7 +628,7 @@ function printReceipt(pid, txIndex){
     ${row('Назначение','Аренда за '+p.period)}
     <hr>
     ${row('Сумма платежа',money(x.amount),'big')}
-    ${row('Способ оплаты',PAY_METHODS[x.method]||x.method)}
+    ${row('Способ оплаты',esc(payLabel(x.method)))}
     <hr>
     ${row('Начислено за период',money(p.amount))}
     ${row('Оплачено всего',money(p.paid))}
@@ -836,7 +842,7 @@ async function saveSalary(uid){const amt=+val('s-amt')||0;const per=val('s-per')
 function salPayModal(id){const r=(DB.salaries||[]).find(s=>s.id===id);if(!r)return;const u=userOf(r.user_id);const rem=r.amount-r.paid;
   openM(`<div class="modal-h"><h3>Выплата зарплаты</h3><span class="x" onclick="closeM()">×</span></div>
   <div class="modal-b">${infoRow('Сотрудник',esc(u?u.full_name:''))}${infoRow('Период',fmtPeriod(r.period))}${infoRow('Начислено',money(r.amount))}${infoRow('Выплачено',money(r.paid))}${infoRow('Остаток',money(rem))}
-  <div class="row2" style="margin-top:12px"><div class="field"><label>Сумма выплаты, ₽</label><input id="sp-amt" type="number" value="${rem}"></div><div class="field"><label>Способ</label><select id="sp-method">${Object.entries(PAY_METHODS).map(([k,v])=>`<option value="${k}"${k==='bank'?' selected':''}>${v}</option>`).join('')}</select></div></div></div>
+  <div class="row2" style="margin-top:12px"><div class="field"><label>Сумма выплаты, ₽</label><input id="sp-amt" type="number" value="${rem}"></div><div class="field"><label>Способ</label><select id="sp-method">${payMethodOpts('bank')}</select></div></div></div>
   <div class="modal-f"><button class="btn ghost" onclick="closeM()">Отмена</button><button class="btn" onclick="saveSalPay('${id}')">Выплатить</button></div>`);}
 async function saveSalPay(id){const r=(DB.salaries||[]).find(s=>s.id===id);if(!r)return;const add=+val('sp-amt')||0;if(add<=0)return alert('Укажите сумму');
   r.paid=Math.min(r.amount,r.paid+add);r.paidDate=TODAY.toISOString().slice(0,10);r.method=val('sp-method');r.status=r.paid>=r.amount?'paid':'partial';
@@ -879,9 +885,14 @@ function settingsPage(){
       <div class="t-sub" style="margin-top:10px">«Дашборд» и «Настройки» скрыть нельзя. Права ролей действуют поверх этих настроек.</div>
     </div>
     <div class="card">
-      <div class="sec-h">Справочник: категории расходов</div>
-      <div class="t-sub" style="margin-bottom:8px">По одной категории в строке. Подсказываются при добавлении расхода.</div>
-      <textarea id="s-expcats" rows="9" class="search" style="width:100%;resize:vertical;font-family:inherit">${esc((s.expenseCats||[]).join('\n'))}</textarea>
+      <div class="sec-h">Справочники</div>
+      <div class="t-sub" style="margin-bottom:10px">По одному значению в строке. Используются в выпадающих списках и подсказках.</div>
+      <div class="field"><label>Категории расходов</label>
+        <textarea id="s-expcats" rows="6" class="search" style="width:100%;resize:vertical;font-family:inherit">${esc((s.expenseCats||[]).join('\n'))}</textarea></div>
+      <div class="field"><label>Типы помещений</label>
+        <textarea id="s-unittypes" rows="4" class="search" style="width:100%;resize:vertical;font-family:inherit">${esc((s.unitTypes||[]).join('\n'))}</textarea></div>
+      <div class="field"><label>Доп. способы оплаты <span class="t-sub">(к встроенным: Наличные, Безналичный, Карта, Перевод)</span></label>
+        <textarea id="s-paymethods" rows="3" class="search" style="width:100%;resize:vertical;font-family:inherit" placeholder="Например: СБП&#10;Взаимозачёт">${esc((s.payMethodsExtra||[]).join('\n'))}</textarea></div>
     </div>
   </div>
   <div style="margin-top:16px;display:flex;gap:10px"><button class="btn" onclick="saveSettings()">💾 Сохранить настройки</button>
@@ -902,7 +913,10 @@ async function saveSettings(){
   S.accent=(useAccent && /^#[0-9a-fA-F]{6}$/.test(ac))?ac:'';
   S.logo=_logoData||'';
   const mods={}; document.querySelectorAll('.s-mod').forEach(c=>{ mods[c.dataset.k]=c.checked; }); S.modules=mods;
-  S.expenseCats=(val('s-expcats')||'').split('\n').map(x=>x.trim()).filter(Boolean);
+  const lines=id=>(val(id)||'').split('\n').map(x=>x.trim()).filter(Boolean);
+  S.expenseCats=lines('s-expcats');
+  S.unitTypes=lines('s-unittypes');
+  S.payMethodsExtra=lines('s-paymethods');
   await afterStateChange();
   applyAccent(); showApp();
 }
@@ -1050,7 +1064,7 @@ function unitModal(presetBuilding){const def=presetBuilding||(SCOPE!=='all'?SCOP
   openM(`<div class="modal-h"><h3>Новое помещение</h3><span class="x" onclick="closeM()">×</span></div>
   <div class="modal-b"><div class="field"><label>Объект</label><select id="f-building">${buildingsList().map(b=>`<option value="${b.id}"${b.id===def?' selected':''}>${esc(b.name)}</option>`).join('')}</select></div>
   <div class="row2"><div class="field"><label>Номер</label><input id="f-id" placeholder="3-03"></div><div class="field"><label>Этаж</label><input id="f-floor" type="number" value="1"></div></div>
-  <div class="row2"><div class="field"><label>Площадь, м²</label><input id="f-area" type="number" value="100"></div><div class="field"><label>Тип</label><select id="f-type"><option>Офис</option><option>Ритейл</option><option>Кафе</option><option>Коворкинг</option><option>Склад</option></select></div></div></div>
+  <div class="row2"><div class="field"><label>Площадь, м²</label><input id="f-area" type="number" value="100"></div><div class="field"><label>Тип</label><select id="f-type">${(stg().unitTypes||['Офис','Склад']).map(t=>`<option>${esc(t)}</option>`).join('')}</select></div></div></div>
   <div class="modal-f"><button class="btn ghost" onclick="closeM()">Отмена</button><button class="btn" onclick="saveUnit()">Добавить</button></div>`);}
 async function saveUnit(){const id=val('f-id').trim().replace(/[<>"'`&]/g,''); if(!id)return alert('Укажите номер');
   if(unitOf(id))return alert('Помещение с номером '+id+' уже существует');
