@@ -149,7 +149,16 @@ function applyAccent(){ const a=stg().accent; const r=document.documentElement;
 async function loadData(){
   const b = await api('/api/bootstrap');
   ME=b.user; ROLES=b.roles; DB=b.state; TASKS=b.tasks; USERS=b.users;
-  ensureState(); resetAuditBaseline();
+  ensureState(); applyRoleOverrides(); resetAuditBaseline();
+}
+// применяем настроенную клиентом матрицу прав поверх ролей по умолчанию (admin/owner всегда полные)
+function applyRoleOverrides(){
+  const ov=DB&&DB.roleMatrix; if(!ov||typeof ov!=='object')return;
+  Object.entries(ov).forEach(([role,perm])=>{ if(role==='admin'||role==='owner'||!ROLES[role]||!perm)return;
+    if(Array.isArray(perm.view)) ROLES[role].view=perm.view.slice();
+    if(Array.isArray(perm.edit)) ROLES[role].edit=perm.edit.slice(); });
+  if(ME && ROLES[ME.role] && ME.role!=='admin' && ME.role!=='owner')
+    ME.permissions={view:ROLES[ME.role].view.slice(),edit:ROLES[ME.role].edit.slice()};
 }
 
 /* ============================================================
@@ -329,6 +338,7 @@ function auditDiff(prev,curr){ const out=[];
   if(JSON.stringify(prev.budgets)!==JSON.stringify(curr.budgets)) out.push('Бюджеты: изменены');
   if(JSON.stringify(prev.settings)!==JSON.stringify(curr.settings)) out.push('Настройки системы: изменены');
   if(prev.penaltyRate!==curr.penaltyRate) out.push('Ставка пени: изменена');
+  if(JSON.stringify(prev.roleMatrix)!==JSON.stringify(curr.roleMatrix)) out.push('Права доступа (роли): изменены');
   return out; }
 function recordAudit(){ if(!ME||!DB) return; ensureState();
   const curr=stripAudit(DB);
@@ -348,7 +358,7 @@ async function silentRefresh(){
   if(!ME) return;
   if(document.getElementById('modalBg').classList.contains('show')) return; // не мешаем вводу
   try{
-    const b=await api('/api/bootstrap'); DB=b.state; TASKS=b.tasks; USERS=b.users; ROLES=b.roles; ensureState(); resetAuditBaseline();
+    const b=await api('/api/bootstrap'); DB=b.state; TASKS=b.tasks; USERS=b.users; ROLES=b.roles; ensureState(); applyRoleOverrides(); resetAuditBaseline();
     updateBadges();
     if(['dashboard','tasks','employees','payments','salaries','integrations'].includes(current)) render();
     else { const bell=document.querySelector('.topbar .bell'); /* обновим только бейдж колокольчика */ }
@@ -1252,18 +1262,35 @@ function employees(){
       ${u.id!==ME.id?`<button class="btn ghost sm" onclick="delUser(${u.id})">🗑</button>`:''}</td>`:''}</tr>`;
   }).join('')}
   </tbody></table></div>
-  <div class="card" style="margin-top:18px"><div class="panel-title"><h3>Матрица прав доступа</h3><span class="muted">по ролям</span></div>
+  <div class="card" style="margin-top:18px"><div class="panel-title"><h3>Матрица прав доступа</h3>
+    ${isAdmin()?(_permEditing?`<span style="display:flex;gap:8px"><button class="btn ghost sm" onclick="cancelPermEdit()">Отмена</button><button class="btn sm" onclick="savePermEdit()">💾 Сохранить права</button></span>`:`<button class="btn ghost sm" onclick="startPermEdit()">✎ Изменить права</button>`):'<span class="muted">по ролям</span>'}</div>
   ${permMatrix()}</div>`);
 }
-function permMatrix(){
-  const mods=[['objects','Объекты'],['tenants','Аренд.'],['contracts','Догов.'],['payments','Платежи'],['utilities','Комм.'],['tasks','Задачи'],['reports','Отчёты'],['employees','Сотруд.']];
-  const roles=Object.entries(ROLES);
-  return `<div style="overflow-x:auto"><table><thead><tr><th>Роль</th>${mods.map(m=>`<th style="text-align:center">${m[1]}</th>`).join('')}</tr></thead><tbody>
-  ${roles.map(([k,r])=>`<tr><td><span class="pill role-${k}">${esc(r.title)}</span></td>
-    ${mods.map(([mk])=>{const e=r.edit.includes(mk),v=r.view.includes(mk);
-      return `<td style="text-align:center">${e?'<span title="Редактирование" style="color:var(--green)">✎</span>':v?'<span title="Просмотр" style="color:var(--muted)">👁</span>':'<span style="color:var(--muted2)">—</span>'}</td>`;}).join('')}</tr>`).join('')}
-  </tbody></table></div><div class="t-sub" style="margin-top:10px">✎ — редактирование · 👁 — только просмотр · — нет доступа</div>`;
+const PERM_MODS=[['objects','Объекты'],['tenants','Аренд.'],['contracts','Догов.'],['payments','Платежи'],['utilities','Комм.'],['salaries','ФОТ'],['budget','Бюджет'],['tasks','Задачи'],['requests','Заявки'],['upkeep','ТО'],['ads','Реклама'],['reports','Отчёты'],['integrations','Синхр.'],['employees','Сотруд.']];
+const PERM_ROLES_EDITABLE=['manager','accountant','leasing','maintenance'];
+let _permEditing=false,_permWork=null;
+function permState(role,mod){ // 'edit' | 'view' | 'none'
+  if(_permEditing&&_permWork[role]){ return _permWork[role].edit.has(mod)?'edit':_permWork[role].view.has(mod)?'view':'none'; }
+  const r=ROLES[role]; return r.edit.includes(mod)?'edit':r.view.includes(mod)?'view':'none';
 }
+function permIcon(s){ return s==='edit'?'<span title="Редактирование" style="color:var(--green)">✎</span>':s==='view'?'<span title="Просмотр" style="color:var(--muted)">👁</span>':'<span style="color:var(--muted2)">—</span>'; }
+function permMatrix(){
+  const roles=Object.keys(ROLES);
+  return `<div style="overflow-x:auto"><table><thead><tr><th>Роль</th>${PERM_MODS.map(m=>`<th style="text-align:center">${m[1]}</th>`).join('')}</tr></thead><tbody>
+  ${roles.map(k=>{ const r=ROLES[k]; const locked=(k==='admin'||k==='owner'); const editable=_permEditing&&!locked;
+    return `<tr><td><span class="pill role-${k}">${esc(r.title)}</span>${locked&&_permEditing?'<div class="t-sub">всегда полный</div>':''}</td>
+    ${PERM_MODS.map(([mk])=>{const s=locked?'edit':permState(k,mk);
+      return `<td style="text-align:center${editable?';cursor:pointer;user-select:none':''}"${editable?` onclick="cyclePerm('${k}','${mk}')"`:''}>${permIcon(s)}</td>`;}).join('')}</tr>`;}).join('')}
+  </tbody></table></div>
+  <div class="t-sub" style="margin-top:10px">✎ — редактирование · 👁 — только просмотр · — нет доступа${_permEditing?' · нажимайте на ячейку, чтобы переключать (нет → просмотр → редактирование). Администратор и Собственник всегда с полным доступом.':''}</div>`;
+}
+function startPermEdit(){ _permWork={}; PERM_ROLES_EDITABLE.forEach(r=>{ if(ROLES[r]) _permWork[r]={view:new Set(ROLES[r].view),edit:new Set(ROLES[r].edit)}; }); _permEditing=true; render(); }
+function cancelPermEdit(){ _permEditing=false; _permWork=null; render(); }
+function cyclePerm(role,mod){ const w=_permWork[role]; if(!w)return; const v=w.view.has(mod),e=w.edit.has(mod);
+  if(!v&&!e){ w.view.add(mod); } else if(v&&!e){ w.view.add(mod); w.edit.add(mod); } else { w.view.delete(mod); w.edit.delete(mod); } render(); }
+async function savePermEdit(){ ensureState(); const mx={};
+  PERM_ROLES_EDITABLE.forEach(r=>{ const w=_permWork[r]; if(!w)return; const edit=[...w.edit]; const view=[...new Set([...w.view,...w.edit,'dashboard'])]; mx[r]={view,edit}; });
+  DB.roleMatrix=mx; _permEditing=false; _permWork=null; recordAudit(); await saveState(); applyRoleOverrides(); render(); alert('Права доступа сохранены.'); }
 async function delUser(id){ if(!confirm('Удалить сотрудника? Его задачи останутся без исполнителя.'))return;
   try{ await api('/api/users/'+id,'DELETE'); USERS=await api('/api/users'); await reloadTasks(); render(); }catch(e){alert(e.message);} }
 
