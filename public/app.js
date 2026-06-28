@@ -218,7 +218,7 @@ async function logout(){ try{await api('/api/auth/logout','POST');}catch{} stopP
    APP SHELL
    ============================================================ */
 const NAV=[
-  {group:'Обзор',items:[['dashboard','▦','Дашборд']]},
+  {group:'Обзор',items:[['dashboard','▦','Дашборд'],['alerts','🔔','Центр сроков']]},
   {group:'Управление',items:[['objects','🏢','Объекты и занятость'],['tenants','👥','Арендаторы'],['contracts','📄','Договоры']]},
   {group:'Финансы',items:[['payments','💳','Платежи аренды'],['utilities','⚡','Коммуналка и расходы'],['salaries','💼','Зарплата (ФОТ)'],['budget','📈','Бюджет и долги']]},
   {group:'Операции',items:[['tasks','✓','Задачи'],['requests','🛠','Заявки'],['upkeep','🧰','Плановое ТО'],['employees','🧑‍💼','Сотрудники'],['reports','📊','Отчёты']]},
@@ -227,7 +227,7 @@ const NAV=[
 ];
 // модули, которые можно включать/выключать в настройках (без dashboard и settings)
 const TOGGLEABLE=[['objects','Объекты и занятость'],['tenants','Арендаторы'],['contracts','Договоры'],['payments','Платежи аренды'],['utilities','Коммуналка и расходы'],['salaries','Зарплата (ФОТ)'],['budget','Бюджет и долги'],['tasks','Задачи'],['requests','Заявки на обслуживание'],['upkeep','Плановое ТО'],['employees','Сотрудники'],['reports','Отчёты'],['integrations','Синхронизация']];
-const navVisible = k => (k==='settings') ? isAdmin() : (canView(k) && modOn(k));
+const navVisible = k => (k==='settings') ? isAdmin() : (k==='alerts') ? true : (canView(k) && modOn(k));
 const PAGE_TITLES={dashboard:'Дашборд',objects:'Объекты',tenants:'Арендаторы',contracts:'Договоры',payments:'Платежи',utilities:'Коммуналка',tasks:'Задачи',employees:'Сотрудники',reports:'Отчёты'};
 
 function showApp(){
@@ -271,7 +271,7 @@ function renderScopeSelector(){
   </select>`;
 }
 
-const PAGES={dashboard,objects,tenants,contracts,payments,utilities,salaries,tasks,requests,upkeep,budget,employees,reports,integrations,settings:settingsPage};
+const PAGES={dashboard,alerts,objects,tenants,contracts,payments,utilities,salaries,tasks,requests,upkeep,budget,employees,reports,integrations,settings:settingsPage};
 function render(){ updateBadges(); const m=document.getElementById('main'); if(!m)return; m.innerHTML=''; (PAGES[current]||dashboard)(); }
 function el(html){ const d=document.createElement('div'); d.className='page'; d.innerHTML=html; document.getElementById('main').appendChild(d); return d; }
 function head(title,sub,actions=''){ return `<div class="topbar"><div><h1>${title}</h1><div class="sub">${sub}</div></div><div class="spacer"></div>${actions}${bellHTML()}</div>`; }
@@ -287,16 +287,16 @@ function updateBadges(){
 
 /* ---------- Напоминания (колокольчик) ---------- */
 function bellHTML(){
-  const rem=myReminders();
+  const al=buildAlerts(); const top=al.slice(0,12); const dang=al.filter(a=>a.level==='danger').length;
   return `<div style="position:relative">
-    <div class="bell" onclick="toggleNotif(event)">🔔${rem.length?`<span class="cnt">${rem.length}</span>`:''}</div>
+    <div class="bell" onclick="toggleNotif(event)">🔔${al.length?`<span class="cnt"${dang?' style="background:var(--red)"':''}>${al.length}</span>`:''}</div>
     <div class="notif" id="notif">
-      <div class="notif-h">Напоминания о сроках${rem.length?` · ${rem.length}`:''}</div>
-      ${rem.length? rem.map(t=>{const dl=daysLeft(t.due);
-        return `<div class="notif-i" onclick="gotoTasks()">
-          <div class="t-strong" style="margin-bottom:3px">${esc(t.title)}</div>
-          <div class="t-sub">📍 ${esc(t.unit)} · ${prioWord(t.priority)} · ${dueLabel(t.due)}</div></div>`;}).join('')
-        : '<div class="empty" style="padding:24px">Нет срочных задач 🎉</div>'}
+      <div class="notif-h">Сроки и уведомления${al.length?` · ${al.length}`:''}</div>
+      ${top.length? top.map(a=>`<div class="notif-i" onclick="gotoPage('${a.page}')">
+          <div class="t-strong" style="margin-bottom:3px"><span style="color:${alertColor(a.level)}">${a.icon}</span> ${esc(a.title)}</div>
+          <div class="t-sub">${a.cat} · ${a.sub}</div></div>`).join('')
+        : '<div class="empty" style="padding:24px">Срочных событий нет 🎉</div>'}
+      ${al.length>12?`<div class="notif-i" onclick="gotoPage('alerts')" style="text-align:center;color:var(--accent2)">Ещё ${al.length-12} → весь центр сроков</div>`:(al.length?`<div class="notif-i" onclick="gotoPage('alerts')" style="text-align:center;color:var(--accent2)">Открыть центр сроков →</div>`:'')}
     </div></div>`;
 }
 function toggleNotif(e){ e.stopPropagation(); document.getElementById('notif').classList.toggle('show'); }
@@ -975,6 +975,52 @@ function penaltyModal(){
   <div class="modal-f"><button class="btn ghost" onclick="closeM()">Отмена</button><button class="btn" onclick="savePenalty()">Сохранить</button></div>`);
 }
 async function savePenalty(){ ensureState(); DB.penaltyRate=+val('pen-rate')||0; closeM(); await afterStateChange(); }
+
+/* ============================================================
+   ЦЕНТР СРОКОВ И АВТО-АЛЕРТЫ (агрегатор по всем модулям)
+   ============================================================ */
+function buildAlerts(){
+  if(!DB) return [];
+  const A=[]; const inS=b=>SCOPE==='all'||b===SCOPE;
+  // Просроченные платежи
+  DB.payments.filter(p=>p.amount-p.paid>0 && daysLeft(p.due)<0).forEach(p=>{ const b=paymentBuilding(p); if(!inS(b))return;
+    const c=contractOf(p.contract); const t=c&&tenantOf(c.tenant); const dl=daysLeft(p.due);
+    A.push({level:'danger',icon:'💳',cat:'Платежи',title:`Просрочка оплаты: ${t?t.name:('договор '+p.contract)}`,sub:`${money(p.amount-p.paid)} · просрочено ${-dl} дн`,page:'payments',sort:dl}); });
+  // Договоры на исходе (≤60 дн) или истёкшие
+  DB.contracts.forEach(c=>{ if(c.status==='ended')return; const u=unitOf(c.unit); const b=u&&u.building; if(!inS(b))return;
+    const dl=c.end?daysLeft(c.end):9999; if(dl>60)return; const t=tenantOf(c.tenant);
+    A.push({level:dl<0?'danger':dl<=30?'warn':'info',icon:'📄',cat:'Договоры',title:`Договор ${dl<0?'истёк':'истекает'}: ${t?t.name:c.id}`,sub:`${esc(c.unit)} · ${c.end?fmtD(c.end):''} · ${dueLabel(c.end)}`,page:'contracts',sort:dl}); });
+  // Плановое ТО просрочено/скоро (≤30 дн)
+  (DB.equipment||[]).forEach(e=>{ if(!inS(e.building))return; const dl=daysLeft(e.nextService); if(e.nextService==null||dl===9999||dl>30)return;
+    A.push({level:dl<0?'danger':'warn',icon:'🧰',cat:'Плановое ТО',title:`ТО ${dl<0?'просрочено':'скоро'}: ${e.name}`,sub:`${e.nextService?fmtD(e.nextService):''} · ${dueLabel(e.nextService)}`,page:'upkeep',sort:dl}); });
+  // Заявки на обслуживание срочные (≤3 дн или просрочено)
+  (DB.requests||[]).filter(r=>r.status==='new'||r.status==='in_progress').forEach(r=>{ if(!inS(r.building))return; const dl=daysLeft(r.due); if(dl>3)return;
+    A.push({level:dl<0?'danger':'warn',icon:'🛠',cat:'Заявки',title:`Заявка: ${r.title}`,sub:`${esc(r.category||'')} · ${dueLabel(r.due)}`,page:'requests',sort:dl}); });
+  // Задачи срочные
+  (TASKS||[]).filter(t=>t.status!=='done' && daysLeft(t.due)<=3).forEach(t=>{ const dl=daysLeft(t.due);
+    A.push({level:dl<0?'danger':'warn',icon:'✓',cat:'Задачи',title:t.title,sub:`${esc(t.unit||'')} · ${dueLabel(t.due)}`,page:'tasks',sort:dl}); });
+  return A.sort((x,y)=>x.sort-y.sort);
+}
+const alertColor=l=>l==='danger'?'var(--red)':l==='warn'?'var(--amber)':'var(--accent2)';
+function gotoPage(p){ document.getElementById('notif')?.classList.remove('show'); current=p; markActive(); render(); closeNav(); }
+function alerts(){
+  const all=buildAlerts();
+  const dang=all.filter(a=>a.level==='danger').length, warn=all.filter(a=>a.level==='warn').length;
+  const cats=[...new Set(all.map(a=>a.cat))];
+  el(head('Центр сроков и уведомлений',`${all.length} событий требуют внимания · ${scopeSub()}`,'')+
+  `<div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(160px,1fr));margin-bottom:16px">
+    <div class="card"><div class="t-sub">Всего событий</div><div style="font-size:26px;font-weight:700">${all.length}</div></div>
+    <div class="card"><div class="t-sub">🔴 Критичные</div><div style="font-size:26px;font-weight:700;color:var(--red)">${dang}</div></div>
+    <div class="card"><div class="t-sub">🟡 Предупреждения</div><div style="font-size:26px;font-weight:700;color:var(--amber)">${warn}</div></div>
+  </div>
+  ${all.length? cats.map(cat=>{ const items=all.filter(a=>a.cat===cat);
+    return `<div class="card" style="margin-bottom:14px"><div class="sec-h">${esc(cat)} · ${items.length}</div>
+      ${items.map(a=>`<div class="doc" style="border-left:3px solid ${alertColor(a.level)};border-radius:8px;padding:10px 12px;margin-bottom:8px;cursor:pointer" onclick="gotoPage('${a.page}')">
+        <div class="di" style="font-size:17px">${a.icon}</div>
+        <div style="flex:1;min-width:0"><div class="t-strong">${esc(a.title)}</div><div class="t-sub">${a.sub}</div></div>
+        <span class="t-sub">→</span></div>`).join('')}</div>`;
+  }).join('') : '<div class="card"><div class="empty" style="padding:30px">Срочных событий нет — всё под контролем 🎉</div></div>'}`);
+}
 
 /* ============================================================
    СОТРУДНИКИ / ПОЛЬЗОВАТЕЛИ
