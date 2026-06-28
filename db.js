@@ -16,15 +16,15 @@ db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;');
 // view  — какие модули видны (read)
 // edit  — какие модули можно изменять (write)
 // Модули: dashboard, objects, tenants, contracts, payments, utilities, tasks, reports, employees
-const ALL = ['dashboard','objects','tenants','contracts','payments','utilities','tasks','requests','reports','employees','salaries','integrations'];
+const ALL = ['dashboard','objects','tenants','contracts','payments','utilities','tasks','requests','upkeep','reports','employees','salaries','integrations'];
 
 export const ROLES = {
   admin:       { title:'Администратор',             view: ALL, edit: ALL },
   owner:       { title:'Собственник / Руководитель', view: ALL, edit: ALL },
-  manager:     { title:'Управляющий объектом',       view: ALL, edit: ['dashboard','objects','tenants','contracts','payments','utilities','tasks','requests','reports','salaries','integrations'] },
-  accountant:  { title:'Бухгалтер / Финансист',      view: ['dashboard','objects','tenants','contracts','payments','utilities','tasks','requests','reports','salaries','integrations'], edit: ['payments','utilities','salaries','integrations'] },
+  manager:     { title:'Управляющий объектом',       view: ALL, edit: ['dashboard','objects','tenants','contracts','payments','utilities','tasks','requests','upkeep','reports','salaries','integrations'] },
+  accountant:  { title:'Бухгалтер / Финансист',      view: ['dashboard','objects','tenants','contracts','payments','utilities','tasks','requests','upkeep','reports','salaries','integrations'], edit: ['payments','utilities','salaries','integrations'] },
   leasing:     { title:'Отдел аренды',               view: ['dashboard','objects','tenants','contracts','payments','tasks','requests'], edit: ['objects','tenants','contracts','tasks','requests'] },
-  maintenance: { title:'Эксплуатация',               view: ['dashboard','objects','utilities','tasks','requests'], edit: ['utilities','tasks','requests'] },
+  maintenance: { title:'Эксплуатация',               view: ['dashboard','objects','utilities','tasks','requests','upkeep'], edit: ['utilities','tasks','requests','upkeep'] },
 };
 export const ROLE_KEYS = Object.keys(ROLES);
 export const perms = role => ROLES[role] || ROLES.maintenance;
@@ -272,6 +272,12 @@ function buildSeedState(){
       {id:'r1',building:'b1',unit:'2-01',tenant:'t1',title:'Не работает кондиционер',category:'Климат / вентиляция',priority:'high',status:'in_progress',assignee_id:6,created_by:1,created_at:'2026-06-25T09:00:00.000Z',due:'2026-06-28',done_at:null,note:'Арендатор жалуется на жару, температура не опускается ниже 26°.'},
       {id:'r2',building:'b1',unit:'3-02',tenant:'t3',title:'Протечка в санузле',category:'Сантехника',priority:'high',status:'new',assignee_id:null,created_by:1,created_at:'2026-06-27T14:30:00.000Z',due:'2026-06-29',done_at:null,note:'Капает под раковиной.'},
       {id:'r3',building:'b2',unit:'4-01',tenant:null,title:'Перегорела лампа в коридоре',category:'Электрика',priority:'low',status:'done',assignee_id:6,created_by:6,created_at:'2026-06-20T08:00:00.000Z',due:'2026-06-22',done_at:'2026-06-21T12:00:00.000Z',note:''},
+    ],
+    equipment:[
+      {id:'eq1',building:'b1',name:'Пассажирский лифт №1',type:'Лифт',location:'Подъезд 1',vendor:'ООО «ЛифтСервис»',intervalMonths:3,lastService:'2026-04-10',nextService:'2026-07-10',note:''},
+      {id:'eq2',building:'b1',name:'Система вентиляции',type:'Вентиляция / кондиционирование',location:'Кровля',vendor:'ООО «КлиматПро»',intervalMonths:6,lastService:'2025-12-15',nextService:'2026-06-15',note:'Замена фильтров при ТО'},
+      {id:'eq3',building:'b1',name:'Пожарная сигнализация',type:'Пожарная сигнализация',location:'Все этажи',vendor:'ЧОП «Барьер»',intervalMonths:12,lastService:'2026-06-01',nextService:'2027-06-01',note:''},
+      {id:'eq4',building:'b2',name:'Грузовой лифт',type:'Лифт',location:'Склад',vendor:'ООО «ЛифтСервис»',intervalMonths:3,lastService:'2026-03-20',nextService:'2026-06-20',note:''},
     ],
   };
   // обогащение помещений: документы, форма владения, ответственное лицо

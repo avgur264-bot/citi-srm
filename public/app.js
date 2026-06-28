@@ -107,6 +107,7 @@ function ensureState(){
   if(!DB) return;
   if(!Array.isArray(DB.salaries)) DB.salaries=[];
   if(!Array.isArray(DB.requests)) DB.requests=[];
+  if(!Array.isArray(DB.equipment)) DB.equipment=[];
   if(!DB.integrations) DB.integrations={};
   const I=DB.integrations;
   if(!I.bank) I.bank={connected:false,name:'',lastSync:null};
@@ -218,12 +219,12 @@ const NAV=[
   {group:'Обзор',items:[['dashboard','▦','Дашборд']]},
   {group:'Управление',items:[['objects','🏢','Объекты и занятость'],['tenants','👥','Арендаторы'],['contracts','📄','Договоры']]},
   {group:'Финансы',items:[['payments','💳','Платежи аренды'],['utilities','⚡','Коммуналка и расходы'],['salaries','💼','Зарплата (ФОТ)']]},
-  {group:'Операции',items:[['tasks','✓','Задачи'],['requests','🛠','Заявки'],['employees','🧑‍💼','Сотрудники'],['reports','📊','Отчёты']]},
+  {group:'Операции',items:[['tasks','✓','Задачи'],['requests','🛠','Заявки'],['upkeep','🧰','Плановое ТО'],['employees','🧑‍💼','Сотрудники'],['reports','📊','Отчёты']]},
   {group:'Интеграции',items:[['integrations','🔗','Синхронизация']]},
   {group:'Администрирование',items:[['settings','⚙','Настройки']]},
 ];
 // модули, которые можно включать/выключать в настройках (без dashboard и settings)
-const TOGGLEABLE=[['objects','Объекты и занятость'],['tenants','Арендаторы'],['contracts','Договоры'],['payments','Платежи аренды'],['utilities','Коммуналка и расходы'],['salaries','Зарплата (ФОТ)'],['tasks','Задачи'],['requests','Заявки на обслуживание'],['employees','Сотрудники'],['reports','Отчёты'],['integrations','Синхронизация']];
+const TOGGLEABLE=[['objects','Объекты и занятость'],['tenants','Арендаторы'],['contracts','Договоры'],['payments','Платежи аренды'],['utilities','Коммуналка и расходы'],['salaries','Зарплата (ФОТ)'],['tasks','Задачи'],['requests','Заявки на обслуживание'],['upkeep','Плановое ТО'],['employees','Сотрудники'],['reports','Отчёты'],['integrations','Синхронизация']];
 const navVisible = k => (k==='settings') ? isAdmin() : (canView(k) && modOn(k));
 const PAGE_TITLES={dashboard:'Дашборд',objects:'Объекты',tenants:'Арендаторы',contracts:'Договоры',payments:'Платежи',utilities:'Коммуналка',tasks:'Задачи',employees:'Сотрудники',reports:'Отчёты'};
 
@@ -268,7 +269,7 @@ function renderScopeSelector(){
   </select>`;
 }
 
-const PAGES={dashboard,objects,tenants,contracts,payments,utilities,salaries,tasks,requests,employees,reports,integrations,settings:settingsPage};
+const PAGES={dashboard,objects,tenants,contracts,payments,utilities,salaries,tasks,requests,upkeep,employees,reports,integrations,settings:settingsPage};
 function render(){ updateBadges(); const m=document.getElementById('main'); if(!m)return; m.innerHTML=''; (PAGES[current]||dashboard)(); }
 function el(html){ const d=document.createElement('div'); d.className='page'; d.innerHTML=html; document.getElementById('main').appendChild(d); return d; }
 function head(title,sub,actions=''){ return `<div class="topbar"><div><h1>${title}</h1><div class="sub">${sub}</div></div><div class="spacer"></div>${actions}${bellHTML()}</div>`; }
@@ -279,6 +280,7 @@ function updateBadges(){
   setB('payments', DB.payments.filter(p=>p.amount-p.paid>0).length);
   setB('tasks', TASKS.filter(t=>t.status!=='done').length);
   setB('requests', (DB.requests||[]).filter(r=>r.status==='new'||r.status==='in_progress').length);
+  setB('upkeep', (DB.equipment||[]).filter(e=>daysLeft(e.nextService)<0).length);
 }
 
 /* ---------- Напоминания (колокольчик) ---------- */
@@ -830,6 +832,74 @@ function requestInfo(id){
     ${ed&&reqOpen(r)?`<button class="btn" onclick="advanceRequest('${r.id}');closeM()">${r.status==='new'?'→ В работу':'✓ Выполнено'}</button>`:'<button class="btn ghost" onclick="closeM()">Закрыть</button>'}
   </div>`);
 }
+
+/* ============================================================
+   ПЛАНОВОЕ ТО ОБОРУДОВАНИЯ
+   ============================================================ */
+const EQUIP_TYPES=['Лифт','Вентиляция / кондиционирование','Пожарная сигнализация','Система отопления','Электрощитовая','Водоснабжение','Видеонаблюдение','Системы доступа','Прочее'];
+function addMonths(dateStr,m){ const d=new Date(dateStr); if(isNaN(d))return ''; d.setMonth(d.getMonth()+(+m||0)); return d.toISOString().slice(0,10); }
+function upkeepStatus(eq){ const dl=daysLeft(eq.nextService); if(eq.nextService==null||dl===9999) return ['gray','Не задано','—']; if(dl<0) return ['red','Просрочено',`${-dl} дн назад`]; if(dl<=30) return ['amber','Скоро',`через ${dl} дн`]; return ['green','В графике',`через ${dl} дн`]; }
+const sEquip=()=>(DB.equipment||[]).filter(e=>SCOPE==='all'||e.building===SCOPE);
+function upkeep(){
+  const list=sEquip().slice().sort((a,b)=>String(a.nextService||'9999').localeCompare(String(b.nextService||'9999')));
+  const overdue=list.filter(e=>daysLeft(e.nextService)<0).length;
+  const soon=list.filter(e=>{const d=daysLeft(e.nextService);return d>=0&&d<=30;}).length;
+  const ed=canEdit('upkeep');
+  el(head('Плановое ТО оборудования',`${list.length} ед. · просрочено: ${overdue} · в ближайшие 30 дн: ${soon} · ${scopeSub()}`,
+    ed?`<button class="btn" onclick="equipModal()">+ Оборудование</button>`:'')+
+  `<div class="card" style="padding:0;overflow-x:auto"><table><thead><tr><th>Оборудование</th><th>Объект</th><th>Тип</th><th>Подрядчик</th><th>Интервал</th><th>Последнее ТО</th><th>Следующее ТО</th><th>Статус</th>${ed?'<th></th>':''}</tr></thead><tbody>
+  ${list.length?list.map(e=>{const b=buildingOf(e.building);const st=upkeepStatus(e);
+    return `<tr>
+      <td class="t-strong" style="cursor:pointer" onclick="equipModal('${e.id}')">${esc(e.name)}${e.location?`<div class="t-sub">${esc(e.location)}</div>`:''}</td>
+      <td class="t-sub">${esc(b?b.name:e.building)}</td>
+      <td class="t-sub">${esc(e.type||'—')}</td>
+      <td class="t-sub">${esc(e.vendor||'—')}</td>
+      <td class="t-sub">${e.intervalMonths?e.intervalMonths+' мес':'—'}</td>
+      <td class="t-sub">${e.lastService?fmtD(e.lastService):'—'}</td>
+      <td><b>${e.nextService?fmtD(e.nextService):'—'}</b><div class="t-sub">${st[2]}</div></td>
+      <td><span class="pill ${st[0]}">${st[1]}</span></td>
+      ${ed?`<td><button class="btn ghost sm" onclick="markServiced('${e.id}')">✓ Отметить ТО</button></td>`:''}
+    </tr>`;}).join(''):`<tr><td colspan="9" class="empty">Оборудование не добавлено</td></tr>`}
+  </tbody></table></div>`);
+}
+function equipModal(id){
+  const e=id?(DB.equipment||[]).find(x=>x.id===id):null;
+  const def=e?e.building:(SCOPE!=='all'?SCOPE:(buildingsList()[0]||{}).id);
+  openM(`<div class="modal-h"><h3>${e?'Оборудование':'Новое оборудование'}</h3><span class="x" onclick="closeM()">×</span></div>
+  <div class="modal-b">
+    <div class="field"><label>Название</label><input id="eq-name" value="${e?esc(e.name):''}" placeholder="Пассажирский лифт №1"></div>
+    <div class="row2">
+      <div class="field"><label>Объект</label><select id="eq-building">${buildingsList().map(b=>`<option value="${b.id}"${b.id===def?' selected':''}>${esc(b.name)}</option>`).join('')}</select></div>
+      <div class="field"><label>Тип</label><select id="eq-type">${EQUIP_TYPES.map(t=>`<option${e&&e.type===t?' selected':''}>${t}</option>`).join('')}</select></div>
+    </div>
+    <div class="row2">
+      <div class="field"><label>Размещение</label><input id="eq-loc" value="${e?esc(e.location||''):''}" placeholder="Подъезд 1 / кровля"></div>
+      <div class="field"><label>Подрядчик ТО</label><input id="eq-vendor" value="${e?esc(e.vendor||''):''}" placeholder="ООО «ЛифтСервис»"></div>
+    </div>
+    <div class="row2">
+      <div class="field"><label>Интервал ТО, мес</label><input id="eq-interval" type="number" min="1" value="${e?e.intervalMonths||12:12}"></div>
+      <div class="field"><label>Последнее ТО</label><input id="eq-last" type="date" value="${e&&e.lastService?e.lastService:''}"></div>
+    </div>
+    <div class="field"><label>Следующее ТО <span class="t-sub">(если пусто — посчитается от последнего + интервал)</span></label><input id="eq-next" type="date" value="${e&&e.nextService?e.nextService:''}"></div>
+    <div class="field"><label>Примечание</label><textarea id="eq-note" rows="2" class="search" style="width:100%;resize:vertical;font-family:inherit">${e?esc(e.note||''):''}</textarea></div>
+  </div>
+  <div class="modal-f">${e?`<button class="btn ghost sm" onclick="delEquip('${e.id}')">🗑 Удалить</button>`:''}<div class="spacer"></div><button class="btn ghost" onclick="closeM()">Отмена</button><button class="btn" onclick="saveEquip(${e?`'${e.id}'`:''})">${e?'Сохранить':'Добавить'}</button></div>`);
+}
+async function saveEquip(id){
+  const name=val('eq-name').trim(); if(!name)return alert('Укажите название оборудования');
+  ensureState(); const interval=+val('eq-interval')||12; const last=val('eq-last')||null;
+  let next=val('eq-next')||null; if(!next && last) next=addMonths(last,interval);
+  const data={building:val('eq-building'),name,type:val('eq-type'),location:val('eq-loc').trim(),vendor:val('eq-vendor').trim(),intervalMonths:interval,lastService:last,nextService:next,note:val('eq-note').trim()};
+  if(id){const e=DB.equipment.find(x=>x.id===id); if(e)Object.assign(e,data);}
+  else DB.equipment.push({id:'eq'+Date.now(),...data});
+  closeM(); await afterStateChange();
+}
+async function markServiced(id){ const e=(DB.equipment||[]).find(x=>x.id===id); if(!e)return;
+  const today=TODAY.toISOString().slice(0,10);
+  if(!confirm(`Отметить, что ТО «${e.name}» выполнено сегодня?\nСледующее ТО запланируется через ${e.intervalMonths||12} мес.`))return;
+  e.lastService=today; e.nextService=addMonths(today,e.intervalMonths||12);
+  await afterStateChange(); }
+async function delEquip(id){ if(!confirm('Удалить оборудование из реестра?'))return; DB.equipment=(DB.equipment||[]).filter(x=>x.id!==id); closeM(); await afterStateChange(); }
 
 /* ============================================================
    СОТРУДНИКИ / ПОЛЬЗОВАТЕЛИ
