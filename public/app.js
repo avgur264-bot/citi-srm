@@ -113,9 +113,10 @@ function ensureState(){
   if(!I.water) I.water={connected:false,lastSync:null};
   if(!I.onec) I.onec={connected:false,base:'',lastSync:null};
   if(!Array.isArray(I.log)) I.log=[];
-  // что именно синхронизировать (по типам документов)
+  // что именно синхронизировать (по типам документов + фильтры по объекту и периоду)
   if(!I.bank.scope || typeof I.bank.scope!=='object') I.bank.scope={rent:true,expenses:false};
   if(!I.onec.scope || typeof I.onec.scope!=='object') I.onec.scope={rent:true,expenses:true,salaries:true};
+  [I.bank.scope,I.onec.scope].forEach(sc=>{ if(typeof sc.building!=='string')sc.building='all'; if(typeof sc.periodFrom!=='string')sc.periodFrom=''; if(typeof sc.periodTo!=='string')sc.periodTo=''; });
   // Настройки клиента (брендинг, модули, справочники) — у каждого своя база.
   if(!DB.settings || typeof DB.settings!=='object') DB.settings={};
   const S=DB.settings;
@@ -1005,10 +1006,10 @@ function export1C(){
   const sc=syncScope('onec');
   if(!sc.rent && !sc.expenses && !sc.salaries) return alert('Для 1С не выбран ни один тип документов.\nНажмите «⚙ Что синхронизировать» на карточке 1С.');
   const rows=[['Тип документа','Дата','Период','Контрагент/Сотрудник','Объект','Помещение','Назначение','Сумма','Статус']];
-  if(sc.rent) DB.payments.forEach(p=>{const c=contractOf(p.contract);if(!c)return;const t=tenantOf(c.tenant);const u=unitOf(c.unit);
+  if(sc.rent) DB.payments.filter(p=>passScope(sc,'rent',p)).forEach(p=>{const c=contractOf(p.contract);if(!c)return;const t=tenantOf(c.tenant);const u=unitOf(c.unit);
     rows.push(['Аренда (начисление)',p.paidDate||'',p.period,t?t.name:'',(buildingOf(u&&u.building)?.name)||'',c.unit,'Аренда за '+p.period,p.amount,p.status]);});
-  if(sc.expenses) DB.expenses.forEach(e=>rows.push(['Расход на содержание','',e.period||'',e.vendor||'',(buildingOf(e.building)?.name)||'','',e.category,e.amount,e.status]));
-  if(sc.salaries) (DB.salaries||[]).forEach(s=>{const u=userOf(s.user_id);rows.push(['Зарплата',s.paidDate||'',s.period,u?u.full_name:'','','','ФОТ '+s.period,s.amount,s.status]);});
+  if(sc.expenses) DB.expenses.filter(e=>passScope(sc,'expense',e)).forEach(e=>rows.push(['Расход на содержание','',e.period||'',e.vendor||'',(buildingOf(e.building)?.name)||'','',e.category,e.amount,e.status]));
+  if(sc.salaries) (DB.salaries||[]).filter(s=>passScope(sc,'salary',s)).forEach(s=>{const u=userOf(s.user_id);rows.push(['Зарплата',s.paidDate||'',s.period,u?u.full_name:'','','','ФОТ '+s.period,s.amount,s.status]);});
   const csv='﻿'+rows.map(r=>r.map(x=>String(x==null?'':x).replace(/[;\n]/g,' ')).join(';')).join('\n');
   const fname='1c_export_'+TODAY.toISOString().slice(0,10)+'.csv';
   const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));a.download=fname;a.click();
@@ -1028,19 +1029,38 @@ const SYNC_DOCS={
   onec:[['rent','Аренда (платежи)'],['expenses','Расходы на содержание'],['salaries','Зарплата (ФОТ)']],
 };
 const syncScope=key=>((DB.integrations&&DB.integrations[key]&&DB.integrations[key].scope)||{});
+// объект документа: аренда → через договор/помещение; расход → e.building; ФОТ → нет объекта
+function syncBuildingOf(kind,doc){ if(kind==='rent'){const c=contractOf(doc.contract);const u=c&&unitOf(c.unit);return u?u.building:null;} if(kind==='expense') return doc.building||null; return null; }
+function passScope(sc,kind,doc){
+  if(sc.building && sc.building!=='all' && kind!=='salary'){ if(syncBuildingOf(kind,doc)!==sc.building) return false; }
+  const per=doc.period; if(per){ if(sc.periodFrom && per<sc.periodFrom) return false; if(sc.periodTo && per>sc.periodTo) return false; }
+  return true;
+}
 function scopeSummary(key){ const sc=syncScope(key); const on=(SYNC_DOCS[key]||[]).filter(([k])=>sc[k]).map(([,l])=>l);
-  return on.length?esc(on.join(', ')):'<span style="color:var(--red)">ничего не выбрано</span>'; }
+  if(!on.length) return '<span style="color:var(--red)">ничего не выбрано</span>';
+  let extra=''; if(sc.building&&sc.building!=='all'){ const b=buildingOf(sc.building); extra+=` · объект: ${esc(b?b.name:sc.building)}`; }
+  if(sc.periodFrom||sc.periodTo) extra+=` · период: ${sc.periodFrom?fmtPeriod(sc.periodFrom):'…'}–${sc.periodTo?fmtPeriod(sc.periodTo):'…'}`;
+  return esc(on.join(', '))+extra; }
 function syncScopeModal(key){
   const sc=syncScope(key); const docs=SYNC_DOCS[key]||[];
   openM(`<div class="modal-h"><h3>Что синхронизировать — ${key==='bank'?'Банк':'1С'}</h3><span class="x" onclick="closeM()">×</span></div>
   <div class="modal-b"><div class="t-sub" style="margin-bottom:12px">Отметьте типы документов, которые участвуют в синхронизации и выгрузке:</div>
   ${docs.map(([k,label])=>`<label style="display:flex;align-items:center;gap:10px;padding:9px 2px;cursor:pointer;border-bottom:1px solid var(--line)">
     <input type="checkbox" class="sc-doc" data-k="${k}" ${sc[k]?'checked':''}> <span>${label}</span></label>`).join('')}
+  <div class="sec-h" style="margin-top:16px">Фильтры</div>
+  <div class="field"><label>Объект</label><select id="sc-building">
+    <option value="all"${(!sc.building||sc.building==='all')?' selected':''}>Все объекты</option>
+    ${buildingsList().map(b=>`<option value="${b.id}"${sc.building===b.id?' selected':''}>${esc(b.name)}</option>`).join('')}</select>
+    <div class="t-sub" style="margin-top:4px">Зарплата (ФОТ) общая по компании — фильтр по объекту на неё не влияет.</div></div>
+  <div class="row2"><div class="field"><label>Период с</label><input id="sc-from" type="month" value="${esc(sc.periodFrom||'')}"></div>
+    <div class="field"><label>Период по</label><input id="sc-to" type="month" value="${esc(sc.periodTo||'')}"></div></div>
+  <div class="t-sub">Пустой период = без ограничения по датам.</div>
   </div>
   <div class="modal-f"><button class="btn ghost" onclick="closeM()">Отмена</button><button class="btn" onclick="saveSyncScope('${key}')">Сохранить</button></div>`);
 }
 async function saveSyncScope(key){ ensureState();
   const sc={}; document.querySelectorAll('.sc-doc').forEach(c=>{ sc[c.dataset.k]=c.checked; });
+  sc.building=val('sc-building')||'all'; sc.periodFrom=val('sc-from')||''; sc.periodTo=val('sc-to')||'';
   DB.integrations[key]={...DB.integrations[key],scope:sc};
   closeM(); await afterStateChange(); }
 async function intSync(key){
@@ -1048,8 +1068,8 @@ async function intSync(key){
   if(key==='bank'){
     const sc=syncScope('bank');
     if(!sc.rent && !sc.expenses) return alert('Для банка не выбран ни один тип документов.\nНажмите «⚙ Что синхронизировать» на карточке банка.');
-    const rentList=sc.rent?DB.payments.filter(p=>p.amount-p.paid>0):[];
-    const expList=sc.expenses?DB.expenses.filter(e=>e.status!=='paid'):[];
+    const rentList=sc.rent?DB.payments.filter(p=>p.amount-p.paid>0 && passScope(sc,'rent',p)):[];
+    const expList=sc.expenses?DB.expenses.filter(e=>e.status!=='paid' && passScope(sc,'expense',e)):[];
     const total=rentList.length+expList.length;
     const sum=rentList.reduce((s,p)=>s+(p.amount-p.paid),0)+expList.reduce((s,e)=>s+(Number(e.amount)||0),0);
     if(!total){ DB.integrations.bank={...DB.integrations.bank,lastSync:now};
@@ -1069,9 +1089,9 @@ async function intSync(key){
   }
   if(key==='onec'){
     const sc=syncScope('onec'); const items=[]; const parts=[]; let docs=0;
-    if(sc.rent){ docs+=DB.payments.length; items.push(`Аренда: ${DB.payments.length}`); parts.push('аренда'); }
-    if(sc.expenses){ docs+=DB.expenses.length; items.push(`Расходы: ${DB.expenses.length}`); parts.push('расходы'); }
-    if(sc.salaries){ docs+=(DB.salaries||[]).length; items.push(`ФОТ: ${(DB.salaries||[]).length}`); parts.push('ФОТ'); }
+    if(sc.rent){ const n=DB.payments.filter(p=>passScope(sc,'rent',p)).length; docs+=n; items.push(`Аренда: ${n}`); parts.push('аренда'); }
+    if(sc.expenses){ const n=DB.expenses.filter(e=>passScope(sc,'expense',e)).length; docs+=n; items.push(`Расходы: ${n}`); parts.push('расходы'); }
+    if(sc.salaries){ const n=(DB.salaries||[]).filter(s=>passScope(sc,'salary',s)).length; docs+=n; items.push(`ФОТ: ${n}`); parts.push('ФОТ'); }
     if(!parts.length) return alert('Для 1С не выбран ни один тип документов.\nНажмите «⚙ Что синхронизировать» на карточке 1С.');
     DB.integrations.onec={...DB.integrations.onec,lastSync:now};
     logSync('onec','🧾','1С: Бухгалтерия','out',`Подготовлено к обмену: ${docs} (${parts.join(' + ')})`,docs,0,items);
