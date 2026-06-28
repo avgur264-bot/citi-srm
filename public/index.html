@@ -224,18 +224,29 @@ tbody tr:last-child td{border-bottom:none}
   .topbar h1{font-size:18px}
   .panel-title{flex-wrap:wrap;gap:8px}
   .grid[style*="grid-template-columns"]{grid-template-columns:1fr!important}
-  .grid[style*="repeat(4"], .grid[style*="repeat(3"]{grid-template-columns:repeat(2,1fr)!important}
+  .grid[style*="repeat(4"], .grid[style*="repeat(3"]{grid-template-columns:repeat(2,minmax(0,1fr))!important}
   #board{grid-template-columns:1fr!important}
-  .card{overflow-x:auto}
-  table{min-width:480px}
+  #dashGrid{grid-template-columns:repeat(2,minmax(0,1fr))!important}  /* дашборд — 2 колонки: KPI по половине, графики/виджеты на всю ширину (span 2) */
+  .grid>*{min-width:0}        /* разрешаем элементам сетки сжиматься (иначе графики вылезают за экран) */
+  #dashGrid canvas{max-width:100%}
+  .card{overflow-x:auto;-webkit-overflow-scrolling:touch}
+  table{min-width:520px}
   .search{width:100%}
-  .modal{width:100%}
+  .toolbar{flex-wrap:wrap}
+  input,select,textarea,.field input,.field select,.field textarea,.search{font-size:16px!important}   /* iOS не зумит поля при фокусе, если шрифт ≥16px */
+  .btn{padding:10px 15px}                  /* удобные тап-цели */
+  .btn.sm{padding:8px 11px;font-size:12.5px}
+  .modal-bg{padding:10px}
+  .modal{width:100%;max-height:92vh}
+  .modal-f{position:sticky;bottom:0;background:var(--panel2);flex-wrap:wrap}  /* кнопка «Сохранить» всегда видна */
   .legend{font-size:11px;gap:10px}
 }
 @media(max-width:520px){
-  .kpis{grid-template-columns:1fr}
+  .kpis{grid-template-columns:repeat(2,1fr)}
   .row2{grid-template-columns:1fr}
   .legend{display:none}
+  .modal-h{padding:14px 16px}.modal-b{padding:16px 16px}.modal-f{padding:12px 16px}
+  .topbar h1{font-size:17px}
 }
 </style>
 </head>
