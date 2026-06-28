@@ -112,6 +112,8 @@ function ensureState(){
   if(typeof DB.penaltyRate!=='number') DB.penaltyRate=0.1;
   if(!Array.isArray(DB.listings)) DB.listings=[];
   if(!Array.isArray(DB.signage)) DB.signage=[];
+  DB.listings.forEach(a=>{ if(!Array.isArray(a.documents)) a.documents=[]; });
+  DB.signage.forEach(s=>{ if(!Array.isArray(s.documents)) s.documents=[]; });
   if(!Array.isArray(DB.audit)) DB.audit=[];
   if(!DB.integrations) DB.integrations={};
   const I=DB.integrations;
@@ -1082,7 +1084,7 @@ function ads(){
       return `<tr>
         <td><span class="pill" style="background:${pl[1]}22;color:${pl[1]}">${pl[0]}</span></td>
         <td class="t-sub">${esc(b?b.name:a.building)}${a.unit?' · '+esc(a.unit):''}</td>
-        <td class="t-strong" style="cursor:pointer" onclick="listingModal('${a.id}')">${esc(a.title)}${a.url?` <a href="${esc(a.url)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" style="font-size:12px">↗</a>`:''}</td>
+        <td class="t-strong" style="cursor:pointer" onclick="listingInfo('${a.id}')">${esc(a.title)}${a.documents&&a.documents.length?` 📎${a.documents.length}`:''}${a.url?` <a href="${esc(a.url)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" style="font-size:12px">↗</a>`:''}</td>
         <td>${money(a.price)}</td><td>👁 ${fmt(a.views||0)}</td><td>📞 ${a.leads||0}</td>
         <td>${listingStatusPill(a.status)}${a.lastSync?`<div class="t-sub">синх. ${fmtDateTime(a.lastSync)}</div>`:''}</td>
         ${ed?`<td><button class="btn ghost sm" onclick="delListing('${a.id}')">🗑</button></td>`:''}</tr>`;}).join(''):`<tr><td colspan="8" class="empty">Объявлений нет</td></tr>`}
@@ -1097,7 +1099,7 @@ function ads(){
       return `<tr>
         <td>${s.owner==='self'?'<span class="pill" style="background:rgba(106,168,255,.18);color:var(--accent2)">Собственник</span>':`<span class="t-strong">${esc(t?t.name:'Арендатор')}</span>`}</td>
         <td class="t-sub">${esc(b?b.name:s.building||'—')}${s.unit?' · '+esc(s.unit):''}</td>
-        <td class="t-sub">${esc(s.kind||'—')}</td><td class="t-sub">${esc(s.permitNo||'—')}</td>
+        <td class="t-strong" style="cursor:pointer" onclick="signageInfo('${s.id}')">${esc(s.kind||'—')}${s.documents&&s.documents.length?` 📎${s.documents.length}`:''}</td><td class="t-sub">${esc(s.permitNo||'—')}</td>
         <td class="t-sub">${s.issued?fmtD(s.issued):'—'}</td>
         <td><b>${s.expiry?fmtD(s.expiry):'—'}</b><div class="t-sub">${st[2]}</div></td>
         <td><span class="pill ${st[0]}">${st[1]}</span></td>
@@ -1133,7 +1135,7 @@ async function saveListing(id){
   const title=val('ad-title').trim(); if(!title)return alert('Укажите заголовок объявления'); ensureState();
   const data={platform:val('ad-platform'),status:val('ad-status'),title,building:val('ad-building'),unit:val('ad-unit').trim(),price:+val('ad-price')||0,url:val('ad-url').trim()};
   if(id){const a=DB.listings.find(x=>x.id===id); if(a)Object.assign(a,data);}
-  else DB.listings.unshift({id:'ad'+Date.now(),...data,views:0,leads:0,posted:TODAY.toISOString().slice(0,10),lastSync:null});
+  else DB.listings.unshift({id:'ad'+Date.now(),...data,views:0,leads:0,posted:TODAY.toISOString().slice(0,10),lastSync:null,documents:[]});
   closeM(); await afterStateChange();
 }
 async function delListing(id){ if(!confirm('Удалить объявление?'))return; DB.listings=(DB.listings||[]).filter(x=>x.id!==id); closeM(); await afterStateChange(); }
@@ -1167,6 +1169,37 @@ async function saveSignage(id){
   closeM(); await afterStateChange();
 }
 async function delSignage(id){ if(!confirm('Удалить разрешение?'))return; DB.signage=(DB.signage||[]).filter(x=>x.id!==id); closeM(); await afterStateChange(); }
+function listingInfo(id){ const a=(DB.listings||[]).find(x=>x.id===id); if(!a)return; const pl=adPlatform(a.platform); const b=buildingOf(a.building); const ed=canEdit('ads');
+  openM(`<div class="modal-h"><h3>Объявление</h3><span class="x" onclick="closeM()">×</span></div>
+  <div class="modal-b">
+    <div class="t-strong" style="font-size:16px;margin-bottom:10px">${esc(a.title)}</div>
+    ${infoRow('Площадка',esc(pl[0]))}
+    ${infoRow('Объект',esc(b?b.name:a.building)+(a.unit?' · '+esc(a.unit):''))}
+    ${infoRow('Цена',money(a.price))}
+    ${infoRow('Статус',listingStatusPill(a.status))}
+    ${infoRow('Просмотры / заявки',`👁 ${fmt(a.views||0)} · 📞 ${a.leads||0}`)}
+    ${a.posted?infoRow('Размещено',fmtD(a.posted)):''}
+    ${a.lastSync?infoRow('Синхронизация',fmtDateTime(a.lastSync)):''}
+    ${a.url?infoRow('Ссылка',`<a href="${esc(a.url)}" target="_blank" rel="noopener">открыть ↗</a>`):''}
+    <div style="margin-top:12px">${docsBlock('listing',id,a.documents)}</div>
+  </div>
+  <div class="modal-f">${ed?`<button class="btn ghost" onclick="listingModal('${id}')">✎ Редактировать</button>`:''}<div class="spacer"></div><button class="btn" onclick="closeM()">Закрыть</button></div>`);
+}
+function signageInfo(id){ const s=(DB.signage||[]).find(x=>x.id===id); if(!s)return; const st=signageStatus(s); const b=buildingOf(s.building); const t=s.tenant&&tenantOf(s.tenant); const ed=canEdit('ads');
+  openM(`<div class="modal-h"><h3>Разрешение на рекламу</h3><span class="x" onclick="closeM()">×</span></div>
+  <div class="modal-b">
+    <div class="t-strong" style="font-size:16px;margin-bottom:10px">${esc(s.kind||'Вывеска')}</div>
+    ${infoRow('Чьё',s.owner==='self'?'Собственник (своя реклама)':(t?esc(t.name):'Арендатор'))}
+    ${infoRow('Объект',esc(b?b.name:s.building||'—')+(s.unit?' · '+esc(s.unit):''))}
+    ${infoRow('№ разрешения',esc(s.permitNo||'—'))}
+    ${infoRow('Выдано',s.issued?fmtD(s.issued):'—')}
+    ${infoRow('Действует до',(s.expiry?fmtD(s.expiry):'—')+' · '+st[2])}
+    ${infoRow('Статус',`<span class="pill ${st[0]}">${st[1]}</span>`)}
+    ${s.note?infoRow('Примечание',esc(s.note)):''}
+    <div style="margin-top:12px">${docsBlock('signage',id,s.documents)}</div>
+  </div>
+  <div class="modal-f">${ed?`<button class="btn ghost" onclick="signageModal('${id}')">✎ Редактировать</button>`:''}<div class="spacer"></div><button class="btn" onclick="closeM()">Закрыть</button></div>`);
+}
 
 /* ============================================================
    СОТРУДНИКИ / ПОЛЬЗОВАТЕЛИ
@@ -1750,9 +1783,10 @@ async function saveUser(id){
 /* info-модалки */
 const DOC_TYPES={plan:'План помещения',contract:'Договор аренды',ownership:'Право собственности / ЕГРН',act:'Акт приёма-передачи',sale:'Договор купли-продажи',owner:'Документы собственника',req:'Реквизиты / уставные',other:'Прочее'};
 function docIcon(t){return {plan:'📐',contract:'📄',ownership:'🏷️',act:'🧾',sale:'📑',owner:'👥',req:'📋',other:'📎'}[t]||'📎';}
-function docEntity(type,id){return type==='unit'?unitOf(id):tenantOf(id);}
-function backToInfo(type,id){return type==='unit'?`unitInfo('${id}')`:`tenantInfo('${id}')`;}
-function canEditDocs(type){return type==='unit'?canEdit('objects'):canEdit('tenants');}
+function docEntity(type,id){return ({unit:()=>unitOf(id),tenant:()=>tenantOf(id),listing:()=>(DB.listings||[]).find(x=>x.id===id),signage:()=>(DB.signage||[]).find(x=>x.id===id)}[type]||(()=>null))();}
+function reopenInfo(type,id){({unit:unitInfo,tenant:tenantInfo,listing:listingInfo,signage:signageInfo}[type]||(()=>{}))(id);}
+function backToInfo(type,id){return `reopenInfo('${type}','${id}')`;}
+function canEditDocs(type){return (type==='unit')?canEdit('objects'):(type==='tenant')?canEdit('tenants'):canEdit('ads');}
 function docsBlock(type,id,docs){
   return `<div class="sec-h">Связанные документы ${canEditDocs(type)?`<button class="btn sm" onclick="addDocModal('${type}','${id}')">+ Документ</button>`:''}</div>
   ${(docs&&docs.length)?docs.map((d,i)=>`<div class="doc"><div class="di">${docIcon(d.type)}</div>
@@ -1792,9 +1826,9 @@ async function saveDoc(type,id){const e=docEntity(type,id);if(!e)return;if(!e.do
   const name=val('d-name')||(_docFile&&_docFile.name)||'Документ.pdf';
   if(!_docFile && !val('d-url')){ if(!confirm('Файл не выбран и ссылка не указана — прикрепить только запись о документе?'))return; }
   e.documents.push({name,type:val('d-type'),kind:DOC_TYPES[val('d-type')],date:val('d-date')||null,url,uploaded:!!_docFile});
-  _docFile=null; await saveState(); render(); (type==='unit'?unitInfo:tenantInfo)(id);}
+  _docFile=null; await saveState(); render(); reopenInfo(type,id);}
 async function delDoc(type,id,i){const e=docEntity(type,id);if(!e||!e.documents)return;if(!confirm('Удалить документ «'+e.documents[i].name+'»?'))return;
-  e.documents.splice(i,1); await saveState(); render(); (type==='unit'?unitInfo:tenantInfo)(id);}
+  e.documents.splice(i,1); await saveState(); render(); reopenInfo(type,id);}
 function unitInfo(id){const u=unitOf(id);const c=DB.contracts.find(c=>c.unit===id);const t=u.tenant?tenantOf(u.tenant):null;const r=u.responsible||{};
   openM(`<div class="modal-h"><h3>Помещение ${u.id}</h3><span class="x" onclick="closeM()">×</span></div>
   <div class="modal-b">
