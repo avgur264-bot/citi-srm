@@ -1591,8 +1591,8 @@ function settingsPage(){
     </div>
   </div>
   <div class="card" style="margin-top:16px">
-    <div class="sec-h">📨 Уведомления в Telegram (утренняя сводка)</div>
-    <div class="t-sub" style="margin-bottom:10px">Бот будет каждый день в заданное время присылать сводку: просроченные платежи, задачи на сегодня, истекающие договоры, плановое ТО, открытые заявки.</div>
+    <div class="sec-h" style="display:flex;align-items:center;justify-content:space-between"><span>📨 Уведомления в Telegram</span><button class="btn ghost sm" onclick="botHelp()">ℹ️ Как настроить бота</button></div>
+    <div class="t-sub" style="margin-bottom:10px">Бот присылает сводку утром и/или мгновенные оповещения о новых заявках и задачах. Не знаете, как подключить — нажмите «ℹ️ Как настроить бота».</div>
     <label style="display:flex;align-items:center;gap:10px;padding:6px 0;cursor:pointer"><input type="checkbox" id="s-tg-on" ${s.notify?.telegram?.enabled?'checked':''}> Включить ежедневную сводку (по времени)</label>
     <label style="display:flex;align-items:center;gap:10px;padding:6px 0;cursor:pointer"><input type="checkbox" id="s-tg-instant" ${s.notify?.telegram?.instant?'checked':''}> Мгновенные оповещения о новых заявках и задачах</label>
     <div class="row2"><div class="field"><label>Токен бота (от @BotFather)</label><input id="s-tg-token" value="${esc(s.notify?.telegram?.token||'')}" placeholder="123456:ABC-..."></div>
@@ -1603,6 +1603,25 @@ function settingsPage(){
   </div>
   <div style="margin-top:16px;display:flex;gap:10px"><button class="btn" onclick="saveSettings()">💾 Сохранить настройки</button>
     <span class="t-sub" style="align-self:center">Изменения видят все пользователи этого клиента.</span></div>`);
+}
+function botHelp(){
+  const steps=[
+    'Откройте Telegram и в поиске найдите <b>@BotFather</b> (official, с галочкой). Напишите ему <b>/newbot</b>.',
+    'Придумайте имя бота (любое) и логин — он должен заканчиваться на <b>bot</b> (например <i>citisrm_alerts_bot</i>). BotFather пришлёт <b>токен</b> вида <code>123456789:AAH...xyz</code> — скопируйте его.',
+    'Найдите своего нового бота по логину и нажмите <b>«Запустить» / Start</b> (или напишите ему любое сообщение). Без этого бот не сможет вам писать.',
+    'Узнайте свой <b>Chat ID</b>: напишите боту <b>@userinfobot</b> — он пришлёт ваш ID (число, например 123456789).',
+    'Если хотите слать в <b>рабочую группу</b>: добавьте своего бота в группу, затем добавьте туда же <b>@getidsbot</b> — он покажет ID группы (начинается с <b>-100…</b>).',
+    'Вернитесь в СИТИ SRM → «Настройки» → раздел Telegram. Вставьте <b>токен</b> и <b>Chat ID</b>, выберите время сводки, включите нужные галочки.',
+    'Нажмите <b>«Сохранить и отправить тест сейчас»</b> — в чат с ботом должна прийти тестовая сводка. Готово!'
+  ];
+  openM(`<div class="modal-h"><h3>📨 Как настроить Telegram-бота</h3><span class="x" onclick="closeM()">×</span></div>
+  <div class="modal-b">
+    <div class="t-sub" style="margin-bottom:12px">Пошагово, для новичка. Займёт ~5 минут, всё бесплатно.</div>
+    <ol style="margin:0;padding-left:20px;display:flex;flex-direction:column;gap:10px;line-height:1.55">${steps.map(s=>`<li>${s}</li>`).join('')}</ol>
+    <div class="card" style="margin-top:14px;background:var(--bg2)"><div class="t-strong" style="margin-bottom:4px">Если тест не пришёл:</div>
+      <div class="t-sub">• Проверьте, что вы нажали Start/написали боту хотя бы раз.<br>• Токен скопирован полностью, без пробелов.<br>• Chat ID — это число (для группы — с минусом, начинается на -100).<br>• Для группы бот должен быть её участником.</div></div>
+  </div>
+  <div class="modal-f"><button class="btn" onclick="closeM()">Понятно</button></div>`);
 }
 async function testNotify(){ ensureState();
   DB.settings.notify={telegram:{enabled:document.getElementById('s-tg-on').checked,instant:!!document.getElementById('s-tg-instant')?.checked,token:val('s-tg-token').trim(),chatId:val('s-tg-chat').trim(),time:val('s-tg-time')||'08:00'}};
