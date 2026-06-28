@@ -4,7 +4,7 @@
 // Без внешних зависимостей: node:http + node:sqlite + node:crypto.
 // ============================================================
 import http from 'node:http';
-import { readFile, writeFile, mkdir } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, statfs } from 'node:fs/promises';
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, extname, normalize, sep } from 'node:path';
@@ -247,14 +247,14 @@ async function api(req, res, url){
         REQ.every(k => Array.isArray(b[k])) &&
         b.units.length > 0 && b.buildings.length > 0; // защита от случайной перезаписи пустыми данными
       if(!okShape) return send(res,400,{error:'Некорректная структура данных состояния'});
-      // СЕРВЕРНАЯ авторизация: роль не может изменять разделы, на которые у неё нет права edit.
-      // Для защищённых коллекций сохраняем серверное (текущее) значение, игнорируя присланное.
+      // СЕРВЕРНАЯ авторизация (БЕЛЫЙ список): для не-админа начинаем с текущего состояния
+      // и накладываем ТОЛЬКО те коллекции, которые роли разрешено редактировать. Всё прочее
+      // (settings, roleMatrix, history, _secret и любые неучтённые ключи) остаётся серверным.
       let toSave = b;
       if(!isFull(me.role)){
-        const merged = {...b};
-        for(const [k,mod] of Object.entries(STATE_MOD)){ if(!canEdit(me.role, mod)) merged[k] = cur[k]; }
-        merged.settings = cur.settings;     // оформление меняет только админ
-        merged.roleMatrix = cur.roleMatrix; // права меняет только админ
+        const merged = {...cur};
+        for(const [k,mod] of Object.entries(STATE_MOD)){ if(canEdit(me.role, mod)) merged[k] = b[k]; }
+        if(Array.isArray(b.audit)) merged.audit = b.audit; // журнал действий дописывают все роли
         toSave = merged;
       }
       db.prepare(`UPDATE state SET json=?, updated_at=?, updated_by=? WHERE key='main'`)
@@ -379,6 +379,8 @@ async function api(req, res, url){
     const base64 = b.dataUrl.split(',')[1] || '';
     const buf = Buffer.from(base64, 'base64');
     if(buf.length > 4*1024*1024) return send(res,413,{error:'Файл больше 4 МБ'});
+    // защита от заполнения диска: не принимаем, если свободно меньше 500 МБ
+    try{ const s = await statfs(FILES_PATH); if(s.bsize*s.bavail < 500*1024*1024) return send(res,507,{error:'Недостаточно места на диске'}); }catch{}
     const folder = sanitizeRel(b.folder || 'misc');
     const safeName = sanSeg(b.name || 'file').slice(0,80) || 'file';
     const fname = Date.now() + '_' + safeName;
@@ -398,7 +400,13 @@ async function api(req, res, url){
     if(!abs.startsWith(FILES_PATH + sep)) { res.writeHead(403); return res.end('Forbidden'); }
     try{
       const data = await readFile(abs);
-      res.writeHead(200, { 'Content-Type': MIME[extname(abs).toLowerCase()] || 'application/octet-stream', 'Cache-Control':'private, max-age=3600' });
+      const ct = MIME[extname(abs).toLowerCase()];
+      // безопасно показывать в браузере только pdf/картинки; остальное — только скачивание
+      const inlineOk = /^(application\/pdf|image\/(png|jpe?g|gif|webp))$/i.test(ct||'');
+      const headers = { 'Content-Type': ct || 'application/octet-stream', 'Cache-Control':'private, max-age=3600',
+        'X-Content-Type-Options':'nosniff' };
+      if(!inlineOk) headers['Content-Disposition'] = 'attachment';
+      res.writeHead(200, headers);
       return res.end(data);
     }catch{ res.writeHead(404); return res.end('Not found'); }
   }

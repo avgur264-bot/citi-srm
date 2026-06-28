@@ -2,6 +2,7 @@
 # Резервные копии ВСЕХ клиентов: база (через sqlite .backup) + файлы документов.
 # Кладёт в ./backups/<дата>/<клиент>.db и <клиент>-files.tar.gz. Хранит последние 14 дней.
 set -euo pipefail
+umask 077   # копии (хэши паролей, токены, перс. данные) — доступны только root
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 STAMP="$(date +%Y-%m-%d_%H%M)"
 DEST="$ROOT/backups/$STAMP"
