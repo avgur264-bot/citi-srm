@@ -666,12 +666,20 @@ function planModal(bid){
   const tile=u=>{const st=unitStatus(u);const c=PLAN_COL[st]||PLAN_COL.free;
     return `<div onmouseenter="planHover('${esc(u.id)}')" onclick="closeM();unitInfo('${esc(u.id)}')" title="Помещение ${esc(u.id)} — клик для подробностей" style="background:${c}1f;border:2px solid ${c};border-radius:9px;padding:9px 11px;min-width:92px;cursor:pointer">
       <div class="t-strong">${esc(u.id)}</div><div class="t-sub">${u.area} м²</div><div style="font-size:11px;color:${c};font-weight:700;margin-top:2px">${PLAN_LBL[st]}</div></div>`;};
+  // миграция старого одиночного плана (data:image) в общий список файлов
+  if(b.plan && /^data:image\//.test(b.plan)){ if(!Array.isArray(b.planDocs)) b.planDocs=[]; b.planDocs.push({name:'План объекта',img:true,url:b.plan}); delete b.plan; saveState(); }
+  const pd=Array.isArray(b.planDocs)?b.planDocs:[];
   openM(`<div class="modal-h"><h3>📐 План — ${esc(b.name)}</h3><span class="x" onclick="closeM()">×</span></div>
   <div class="modal-b">
-    ${/^data:image\//.test(b.plan||'')?`<img src="${b.plan}" alt="План объекта" style="width:100%;border-radius:10px;border:1px solid var(--line2);margin-bottom:12px">`:''}
-    ${ed?`<div class="field"><label>${b.plan?'Заменить план':'Загрузить план объекта (PNG/JPG, до 3 МБ)'}</label>
-      <input type="file" accept="image/png,image/jpeg" onchange="onPlanFile('${bid}',this)" style="font-size:13px;padding:8px;border:1px dashed var(--line2);border-radius:9px;background:var(--bg2);width:100%">
-      ${b.plan?`<button class="btn ghost sm" style="margin-top:6px" onclick="delPlan('${bid}')">Убрать план</button>`:''}</div>`:''}
+    ${pd.length?`<div class="sec-h" style="margin-top:0">Планы объекта (${pd.length})</div>
+      <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:12px">${pd.map((d,i)=>d.img?
+        `<div><img src="${esc(d.url)}" alt="${esc(d.name)}" style="width:100%;border-radius:10px;border:1px solid var(--line2)">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-top:4px"><span class="t-sub">${esc(d.name)}</span>${ed?`<button class="btn ghost sm" onclick="delPlanDoc('${bid}',${i})">🗑 Убрать</button>`:''}</div></div>`
+        : `<div class="doc"><div class="di">📄</div><div style="flex:1;min-width:0"><div class="t-strong">${esc(d.name)}</div><div class="t-sub">PDF / документ</div></div>
+          <button class="btn ghost sm" onclick="openPlanFile('${bid}',${i})">Открыть</button>${ed?`<button class="btn ghost sm" onclick="delPlanDoc('${bid}',${i})">🗑</button>`:''}</div>`
+      ).join('')}</div>`:''}
+    ${ed?`<div class="field"><label>${pd.length?'Добавить ещё файлы плана':'Загрузить план объекта'} <span class="t-sub">— PNG, JPG, WEBP или PDF, можно несколько файлов, до 12 МБ каждый</span></label>
+      <input type="file" accept="image/png,image/jpeg,image/webp,application/pdf" multiple onchange="onPlanFiles('${bid}',this)" style="font-size:13px;padding:8px;border:1px dashed var(--line2);border-radius:9px;background:var(--bg2);width:100%"></div>`:''}
     <div class="sec-h">Схема занятости</div>
     <div style="display:flex;gap:14px;flex-wrap:wrap;margin-bottom:12px;font-size:12px">${Object.entries(PLAN_LBL).map(([k,l])=>`<span style="display:inline-flex;align-items:center;gap:5px"><i style="width:12px;height:12px;border-radius:3px;background:${PLAN_COL[k]};display:inline-block"></i>${l}</span>`).join('')}</div>
     ${floors.length?floors.map(f=>`<div style="margin-bottom:12px"><div class="t-sub" style="margin-bottom:6px">Этаж ${f}</div>
@@ -689,11 +697,28 @@ function planHover(id){ const u=unitOf(id); const box=document.getElementById('p
     ${r.name?`<div class="t-sub">Ответственный: ${esc(r.name)}${r.phone?' · '+esc(r.phone):''}</div>`:''}
     <div class="t-sub" style="margin-top:6px;color:var(--accent2)">Клик по помещению — открыть полную карточку →</div>`;
 }
-async function onPlanFile(bid,input){ const f=input.files&&input.files[0]; if(!f)return;
-  if(!/^image\/(png|jpeg)$/.test(f.type)){ alert('Только PNG или JPG.'); input.value=''; return; }
-  if(f.size>3*1024*1024){ alert('Файл больше 3 МБ — выберите меньше.'); input.value=''; return; }
-  const r=new FileReader(); r.onload=async()=>{ const b=buildingOf(bid); if(b){ b.plan=String(r.result||''); await afterStateChange(); planModal(bid); } }; r.readAsDataURL(f); }
-async function delPlan(bid){ if(!confirm('Убрать загруженный план объекта?'))return; const b=buildingOf(bid); if(b){ delete b.plan; await afterStateChange(); planModal(bid); } }
+// загрузка плана: несколько файлов, PNG/JPG/WEBP/PDF, через файловое хранилище (в демо — data URL)
+async function onPlanFiles(bid,input){ const files=input.files?[...input.files]:[]; if(!files.length)return; const b=buildingOf(bid); if(!b)return;
+  if(!Array.isArray(b.planDocs)) b.planDocs=[]; let added=0;
+  for(const f of files){
+    if(!/^(image\/(png|jpe?g|webp)|application\/pdf)$/i.test(f.type)){ alert('«'+f.name+'»: подходят только PNG, JPG, WEBP или PDF.'); continue; }
+    if(f.size>12*1024*1024){ alert('«'+f.name+'» больше 12 МБ — выберите файл поменьше.'); continue; }
+    const data=await new Promise(res=>{ const r=new FileReader(); r.onload=()=>res(String(r.result||'')); r.onerror=()=>res(''); r.readAsDataURL(f); });
+    if(!data) continue;
+    let url=data, stored='embed'; const img=/^image\//i.test(f.type);
+    try{ const r=await api('/api/files','POST',{folder:bid+'/plan',name:f.name,dataUrl:data}); url=r.url; stored=r.stored||'file'; }
+    catch(err){ alert('Не удалось загрузить «'+f.name+'»: '+(err.message||err)); continue; }
+    b.planDocs.push({name:f.name,url,stored,img}); added++;
+  }
+  input.value='';
+  if(added){ await afterStateChange(); }
+  planModal(bid);
+}
+function openPlanFile(bid,i){ const b=buildingOf(bid); const d=((b&&b.planDocs)||[])[i]; if(!d)return; const url=d.url||'';
+  if(url.startsWith('data:')){ fetch(url).then(r=>r.blob()).then(bl=>window.open(URL.createObjectURL(bl),'_blank')).catch(()=>{}); return; }
+  const s=safeUrl(url); if(s) window.open(s,'_blank','noopener'); else alert('Файл недоступен для открытия.'); }
+async function delPlanDoc(bid,i){ const b=buildingOf(bid); if(!b||!Array.isArray(b.planDocs))return; const d=b.planDocs[i]; if(!d)return;
+  if(!confirm('Убрать «'+(d.name||'файл')+'» из плана объекта?'))return; b.planDocs.splice(i,1); await afterStateChange(); planModal(bid); }
 
 /* ---------- универсальная сворачиваемая секция (для арендаторов/договоров по объектам) ---------- */
 const expandedSections = new Set();

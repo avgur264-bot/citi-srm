@@ -252,7 +252,7 @@ function parseCookies(req){
 }
 function readBody(req){
   return new Promise((resolve)=>{
-    let data=''; req.on('data',c=>{ data+=c; if(data.length>1e7) req.destroy(); });
+    let data=''; req.on('data',c=>{ data+=c; if(data.length>2.2e7) req.destroy(); });
     req.on('end',()=>{ try{ resolve(data?JSON.parse(data):{}); }catch{ resolve({}); } });
   });
 }
@@ -479,7 +479,7 @@ async function api(req, res, url){
       return send(res,403,{error:'Тип файла запрещён (html/svg/скрипты)'});
     const base64 = b.dataUrl.split(',')[1] || '';
     const buf = Buffer.from(base64, 'base64');
-    if(buf.length > 4*1024*1024) return send(res,413,{error:'Файл больше 4 МБ'});
+    if(buf.length > 12*1024*1024) return send(res,413,{error:'Файл больше 12 МБ'});
     // защита от заполнения диска: не принимаем, если свободно меньше 500 МБ
     try{ const s = await statfs(FILES_PATH); if(s.bsize*s.bavail < 500*1024*1024) return send(res,507,{error:'Недостаточно места на диске'}); }catch{}
     const folder = sanitizeRel(b.folder || 'misc');
