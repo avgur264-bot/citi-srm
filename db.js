@@ -82,6 +82,8 @@ CREATE TABLE IF NOT EXISTS state(
 // ============================================================
 // Наполнение демо-данными (один раз)
 // ============================================================
+// Демо-данные сидятся по умолчанию; SEED_DEMO=0 → чистая боевая база (для нового клиента).
+const SEED_DEMO = process.env.SEED_DEMO !== '0';
 function seedUsers(){
   const count = db.prepare('SELECT COUNT(*) n FROM users').get().n;
   if(count > 0) return;
@@ -91,26 +93,42 @@ function seedUsers(){
   // Боевой режим: если задан SEED_PASSWORD, все стартовые учётки получают этот
   // сильный пароль (его выдаёт new-client.sh). Иначе — простые демо-пароли (для теста/демо).
   const SEED_PW = process.env.SEED_PASSWORD;
-  const demo = [
-    ['admin@citisrm.ru','admin123','Минин Сергей','Управляющий объектом','admin','+7 901 770-88-07'],
-    ['owner@citisrm.ru','owner123','Иванов Иван','Собственник','owner','+7 916 700-80-90'],
+  // Боевая (чистая) база: SEED_DEMO=0 → только администратор и собственник, без демо-сотрудников.
+  const demoUsers = [
+    ['admin@citisrm.ru','admin123','Администратор','Администратор','admin','+7 900 000-00-00'],
+    ['owner@citisrm.ru','owner123','Собственник','Руководитель','owner','+7 900 000-00-01'],
     ['manager@citisrm.ru','manager123','Зайцева Ольга','Управляющий объектом','manager','+7 917 880-99-08'],
     ['lease@citisrm.ru','lease123','Лебедева Анна','Менеджер по аренде','leasing','+7 925 110-22-01'],
     ['buh@citisrm.ru','buh123','Карпов Дмитрий','Главный бухгалтер','accountant','+7 903 330-44-03'],
     ['exp@citisrm.ru','exp123','Сидоров Павел','Инженер эксплуатации','maintenance','+7 909 660-77-06'],
   ];
-  for(const [email,pw,name,pos,role,phone] of demo)
+  const list = SEED_DEMO ? demoUsers : demoUsers.slice(0,2); // в боевой базе — только admin+owner
+  for(const [email,pw,name,pos,role,phone] of list)
     ins.run(email, hashPassword(SEED_PW || pw), name, pos, role, phone, now);
 }
 
+// Минимальная чистая база для боевого клиента: 1 объект-заготовка + 1 помещение, всё прочее пусто.
+function buildEmptyState(){
+  return {
+    buildings:[{id:'b1', name:'Мой объект (переименуйте)', address:'Укажите адрес'}],
+    units:[{id:'1-01', building:'b1', floor:1, area:100, type:'Офис', tenant:null, status:'free', ownership:'own', owner:null, responsible:null, documents:[]}],
+    tenants:[], contracts:[], payments:[], utilities:[], expenses:[], salaries:[],
+    requests:[], equipment:[], listings:[], signage:[],
+    history:['Янв','Фев','Мар','Апр','Май','Июн'].map(m=>({m, income:0, expense:0})),
+    integrations:{ bank:{connected:false,name:'',lastSync:null}, energy:{connected:false,lastSync:null}, water:{connected:false,lastSync:null}, onec:{connected:false,base:'',lastSync:null} },
+    budgets:{}, penaltyRate:0.1, audit:[],
+  };
+}
 function seedState(){
   const exists = db.prepare(`SELECT 1 FROM state WHERE key='main'`).get();
   if(exists) return;
+  const state = SEED_DEMO ? buildSeedState() : buildEmptyState();
   db.prepare(`INSERT INTO state(key,json,updated_at,updated_by) VALUES('main',?,?, 'seed')`)
-    .run(JSON.stringify(buildSeedState()), new Date().toISOString());
+    .run(JSON.stringify(state), new Date().toISOString());
 }
 
 function seedTasks(){
+  if(!SEED_DEMO) return; // боевая база — без демо-задач
   const count = db.prepare('SELECT COUNT(*) n FROM tasks').get().n;
   if(count > 0) return;
   const now = new Date().toISOString();
