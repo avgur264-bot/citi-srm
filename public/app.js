@@ -151,6 +151,7 @@ function ensureState(){
   // автоматизации (по умолчанию ВЫКЛ — ничего не делают «сюрпризом»)
   if(!S.autoRent || typeof S.autoRent!=='object') S.autoRent={enabled:false,accrualDay:1,dueDay:5};
   if(!S.autoRemind || typeof S.autoRemind!=='object') S.autoRemind={enabled:false,everyDays:7};
+  if(!S.autoIndex || typeof S.autoIndex!=='object') S.autoIndex={enabled:false};
   // тарифы для расчёта коммуналки по показаниям счётчиков
   if(!S.tariffs || typeof S.tariffs!=='object') S.tariffs={electricity:6.5,water:45,heating:2200};
 }
@@ -289,7 +290,7 @@ function showApp(){
     ${quickAddItems().length?`<div class="fab-add" title="Быстро добавить" onclick="quickAddMenu()">+</div>`:''}
   </div>`;
   document.querySelectorAll('.nav-item[data-page]').forEach(n=>n.onclick=()=>{ current=n.dataset.page; markActive(); render(); closeNav(); });
-  updateThemeBtns(); renderScopeSelector(); markActive(); render(); startPolling();
+  updateThemeBtns(); renderScopeSelector(); markActive(); render(); startPolling(); maybeWizard();
 }
 function toggleNav(){ document.getElementById('sidebar')?.classList.toggle('open'); document.getElementById('scrim')?.classList.toggle('show'); }
 function closeNav(){ document.getElementById('sidebar')?.classList.remove('open'); document.getElementById('scrim')?.classList.remove('show'); }
@@ -401,7 +402,7 @@ function help(){
       <span class="t-sub">→</span></div>`).join('')}</div>`; }).join('');
   el(head('Помощь и инструкция','Как пользоваться СИТИ SRM','')+
   `<div class="card" style="margin-bottom:16px"><div style="line-height:1.6"><b>СИТИ SRM</b> — система управления коммерческой недвижимостью: объекты и помещения, арендаторы и договоры, платежи и расходы, задачи, заявки на обслуживание, плановое ТО, бюджет, реклама, отчёты и интеграции. Всё привязано к объектам — переключатель «Все объекты» вверху слева фильтрует данные по выбранному зданию.</div></div>
-  <div class="card" style="margin-bottom:16px"><div class="sec-h">🚀 Быстрый старт (для нового пользователя)</div>
+  <div class="card" style="margin-bottom:16px"><div class="sec-h" style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap"><span>🚀 Быстрый старт (для нового пользователя)</span>${isAdmin()?`<span><button class="btn sm" onclick="startWizard()">▶ Запустить мастер</button> <button class="btn ghost sm" onclick="importModal('units')">⤓ Импорт из CSV</button></span>`:''}</div>
     <ol style="margin:6px 0 0;padding-left:20px;display:flex;flex-direction:column;gap:8px;line-height:1.5">${steps.map(s=>`<li>${esc(s)}</li>`).join('')}</ol></div>
   <div class="card" style="margin-bottom:16px"><div class="sec-h">📚 Разделы системы <span class="t-sub">— нажмите, чтобы перейти</span></div>${sections}</div>
   <div class="card"><div class="sec-h">💡 Полезные подсказки</div>
@@ -613,7 +614,7 @@ function objects(){
   const bs = SCOPE==='all'? buildingsList() : [buildingOf(SCOPE)].filter(Boolean);
   const us=sUnits();
   el(head('Объекты и занятость', scopeSub(),
-    canEdit('objects')?`<button class="btn ghost" onclick="buildingModal()">+ Объект</button> <button class="btn" onclick="unitModal()">+ Помещение</button>`:'')+
+    canEdit('objects')?`<button class="btn ghost" onclick="importModal('units')">⤓ Импорт</button> <button class="btn ghost" onclick="buildingModal()">+ Объект</button> <button class="btn" onclick="unitModal()">+ Помещение</button>`:'')+
   `<div class="grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:18px">
     ${miniStat('Объектов',bs.length,'violet')}
     ${miniStat('Помещений',us.length)}
@@ -735,7 +736,7 @@ function miniStat(label,v,color){return `<div class="card"><div class="label" st
    АРЕНДАТОРЫ
    ============================================================ */
 function tenants(){
-  el(head('Арендаторы',`${sTenants().length} компаний · ${scopeSub()}`, canEdit('tenants')?`<button class="btn" onclick="tenantModal()">+ Арендатор</button>`:'')+
+  el(head('Арендаторы',`${sTenants().length} компаний · ${scopeSub()}`, canEdit('tenants')?`<button class="btn ghost" onclick="importModal('tenants')">⤓ Импорт</button> <button class="btn" onclick="tenantModal()">+ Арендатор</button>`:'')+
   `<div class="toolbar"><input class="search" id="tsearch" placeholder="Поиск по названию, ИНН..." oninput="renderTenants()"></div>
   <div id="tbcards"></div>`);
   renderTenants();
@@ -1821,6 +1822,7 @@ function settingsPage(){
     </div>
     <label style="display:flex;align-items:center;gap:10px;padding:10px 0 7px;cursor:pointer;border-top:1px solid var(--line);margin-top:10px"><input type="checkbox" id="s-autoremind" ${s.autoRemind?.enabled?'checked':''}> <span><b>Авто-напоминания должникам</b><div class="t-sub">По просроченным платежам система готовит сводку должников (и шлёт в Telegram, если подключён). Не чаще одного напоминания на долг в заданное число дней.</div></span></label>
     <div class="field" style="max-width:240px"><label>Не чаще, чем раз в (дней)</label><input id="s-autoremind-days" type="number" min="1" max="90" value="${Math.max(1,+s.autoRemind?.everyDays||7)}"></div>
+    <label style="display:flex;align-items:center;gap:10px;padding:10px 0 7px;cursor:pointer;border-top:1px solid var(--line);margin-top:10px"><input type="checkbox" id="s-autoindex" ${s.autoIndex?.enabled?'checked':''}> <span><b>Автоиндексация ставок</b><div class="t-sub">В годовщину начала договора ставка повышается на заложенный % индексации. История изменений видна в карточке договора. По умолчанию выключено (повышение ставки — чувствительно).</div></span></label>
   </div>
   <div class="card" style="margin-top:16px">
     <div class="sec-h">📟 Тарифы для показаний счётчиков</div>
@@ -1883,8 +1885,145 @@ async function saveSettings(){
   if(document.getElementById('s-autorent')) S.autoRent={enabled:document.getElementById('s-autorent').checked,accrualDay:Math.min(28,Math.max(1,+val('s-autorent-day')||1)),dueDay:Math.min(28,Math.max(1,+val('s-autorent-due')||5))};
   if(document.getElementById('s-autoremind')) S.autoRemind={enabled:document.getElementById('s-autoremind').checked,everyDays:Math.max(1,+val('s-autoremind-days')||7)};
   if(document.getElementById('s-tar-electricity')) S.tariffs={electricity:+val('s-tar-electricity')||0,water:+val('s-tar-water')||0,heating:+val('s-tar-heating')||0};
+  if(document.getElementById('s-autoindex')) S.autoIndex={enabled:document.getElementById('s-autoindex').checked};
   await afterStateChange();
   applyAccent(); showApp();
+}
+/* ============================================================
+   C1. ИМПОРТ ИЗ CSV (объекты / помещения / арендаторы / договоры)
+   ============================================================ */
+const IMPORT_DEFS={
+  buildings:{title:'Объекты',cols:[{k:'name',label:'Название'},{k:'address',label:'Адрес'}],need:'objects'},
+  units:{title:'Помещения',cols:[{k:'id',label:'Номер'},{k:'building',label:'Объект'},{k:'floor',label:'Этаж'},{k:'area',label:'Площадь'},{k:'type',label:'Тип'}],need:'objects'},
+  tenants:{title:'Арендаторы',cols:[{k:'name',label:'Название'},{k:'inn',label:'ИНН'},{k:'contact',label:'Контакт'},{k:'phone',label:'Телефон'},{k:'email',label:'Email'},{k:'industry',label:'Отрасль'}],need:'tenants'},
+  contracts:{title:'Договоры',cols:[{k:'tenant',label:'Арендатор (название/ИНН)'},{k:'unit',label:'Помещение'},{k:'rate',label:'Ставка ₽/м²'},{k:'start',label:'Начало (ГГГГ-ММ-ДД)'},{k:'end',label:'Окончание (ГГГГ-ММ-ДД)'},{k:'indexation',label:'Индексация %'}],need:'contracts'},
+};
+function parseCSV(text){
+  const rows=[]; let i=0, field='', row=[], inQ=false; text=String(text||'').replace(/\r\n?/g,'\n');
+  while(i<text.length){ const ch=text[i];
+    if(inQ){ if(ch==='"'){ if(text[i+1]==='"'){field+='"';i+=2;continue;} inQ=false;i++;continue;} field+=ch;i++;continue; }
+    if(ch==='"'){ inQ=true;i++;continue; }
+    if(ch===','||ch===';'){ row.push(field);field='';i++;continue; }
+    if(ch==='\n'){ row.push(field);rows.push(row);row=[];field='';i++;continue; }
+    field+=ch;i++; }
+  if(field.length||row.length){ row.push(field);rows.push(row); }
+  return rows.filter(r=>r.some(c=>String(c).trim()!==''));
+}
+let _importPrep=null;
+function importModal(type){
+  type=type||'buildings'; const ed=canEdit(IMPORT_DEFS[type].need); if(!ed && !isAdmin()){ return alert('Недостаточно прав для импорта.'); }
+  _importPrep=null;
+  const opts=Object.entries(IMPORT_DEFS).filter(([k,d])=>canEdit(d.need)||isAdmin()).map(([k,d])=>`<option value="${k}"${k===type?' selected':''}>${d.title}</option>`).join('');
+  openM(`<div class="modal-h"><h3>⤓ Импорт из таблицы (CSV)</h3><span class="x" onclick="closeM()">×</span></div>
+  <div class="modal-b">
+    <div class="field"><label>Что импортируем</label><select id="imp-type" onchange="importModal(this.value)">${opts}</select></div>
+    <div class="t-sub" style="margin-bottom:8px">Скачайте шаблон, заполните в Excel/Google Таблицах, сохраните как <b>CSV</b> и загрузите сюда (или вставьте текстом). Импорт только добавляет новые строки; дубли по ключу пропускаются.</div>
+    <button class="btn ghost sm" onclick="downloadTemplate('${type}')">⤓ Скачать шаблон ${IMPORT_DEFS[type].title}</button>
+    <div class="field" style="margin-top:10px"><label>Файл CSV</label><input type="file" accept=".csv,text/csv" onchange="importFile(this)"></div>
+    <div class="field"><label>…или вставьте содержимое таблицы</label><textarea id="imp-text" rows="6" class="search" style="width:100%;resize:vertical;font-family:monospace;font-size:12px" placeholder="${IMPORT_DEFS[type].cols.map(c=>c.label).join(',')}"></textarea></div>
+    <button class="btn ghost" onclick="importPreview('${type}')">Проверить</button>
+    <div id="imp-preview" style="margin-top:12px"></div>
+  </div>
+  <div class="modal-f"><button class="btn ghost" onclick="closeM()">Закрыть</button><button class="btn" id="imp-apply" disabled onclick="importApply('${type}')">Импортировать</button></div>`);
+}
+function downloadTemplate(type){ const d=IMPORT_DEFS[type]; const header=d.cols.map(c=>c.label).join(',');
+  const sample={buildings:'БЦ Пример,"г. Москва, ул. Примерная, 1"',units:'1-01,БЦ Пример,1,100,Офис',tenants:'ООО Ромашка,7700000000,Иванов Иван,+7 900 000-00-00,mail@romashka.ru,IT',contracts:'ООО Ромашка,1-01,2200,2026-07-01,2029-06-30,6'}[type]||'';
+  const blob=new Blob(['﻿'+header+'\n'+sample+'\n'],{type:'text/csv;charset=utf-8'});
+  const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='shablon_'+type+'.csv'; a.click(); setTimeout(()=>URL.revokeObjectURL(a.href),2000);
+}
+function importFile(input){ const f=input.files&&input.files[0]; if(!f)return; if(f.size>2*1024*1024){alert('Файл больше 2 МБ');return;}
+  const r=new FileReader(); r.onload=()=>{ const ta=document.getElementById('imp-text'); if(ta)ta.value=String(r.result||''); }; r.readAsText(f,'utf-8'); }
+function importPreview(type){
+  const d=IMPORT_DEFS[type]; const rows=parseCSV(val('imp-text')); const box=document.getElementById('imp-preview'); const applyBtn=document.getElementById('imp-apply');
+  if(rows.length<2){ box.innerHTML='<div class="t-sub" style="color:var(--red)">Нет данных. Нужна строка заголовков и хотя бы одна строка.</div>'; applyBtn.disabled=true; return; }
+  const hdr=rows[0].map(h=>String(h).trim().toLowerCase());
+  const idx={}; d.cols.forEach(c=>{ idx[c.k]=hdr.findIndex(h=>h===c.k||h===c.label.toLowerCase()||h.startsWith(c.label.toLowerCase().split(' ')[0])); });
+  const toAdd=[], errors=[];
+  for(let r=1;r<rows.length;r++){ const row=rows[r]; const get=k=>idx[k]>=0?String(row[idx[k]]||'').trim():'';
+    const rec=buildImportRec(type,get,errors,r+1); if(rec) toAdd.push(rec); }
+  _importPrep={type,toAdd};
+  box.innerHTML=`<div class="card" style="background:var(--bg2)"><div class="t-strong">Будет добавлено: ${toAdd.length}</div>
+    ${errors.length?`<div class="t-sub" style="color:var(--amber);margin-top:6px">Пропущено строк: ${errors.length}<br>${errors.slice(0,8).map(esc).join('<br>')}${errors.length>8?'<br>…':''}</div>`:'<div class="t-sub" style="color:var(--green);margin-top:6px">Ошибок не найдено.</div>'}</div>`;
+  applyBtn.disabled = toAdd.length===0;
+}
+function buildImportRec(type,get,errors,line){
+  if(type==='buildings'){ const name=get('name'); if(!name){errors.push(`Строка ${line}: пустое название`);return null;}
+    if(buildingsList().some(b=>b.name.toLowerCase()===name.toLowerCase())){errors.push(`Строка ${line}: объект «${name}» уже есть`);return null;}
+    return {id:'b'+Date.now()+'_'+line,name,address:get('address')}; }
+  if(type==='units'){ const id=get('id'); if(!id){errors.push(`Строка ${line}: пустой номер`);return null;}
+    if(DB.units.some(u=>u.id===id)){errors.push(`Строка ${line}: помещение «${id}» уже есть`);return null;}
+    const bn=get('building'); const b=buildingsList().find(x=>x.name.toLowerCase()===bn.toLowerCase()||x.id===bn);
+    if(!b){errors.push(`Строка ${line}: объект «${bn}» не найден`);return null;}
+    return {id,building:b.id,floor:+get('floor')||1,area:+get('area')||0,type:get('type')||'Офис',tenant:null,status:'free',ownership:'own',owner:null,responsible:null,documents:[]}; }
+  if(type==='tenants'){ const name=get('name'); if(!name){errors.push(`Строка ${line}: пустое название`);return null;}
+    if(DB.tenants.some(t=>t.name.toLowerCase()===name.toLowerCase()||(get('inn')&&t.inn===get('inn')))){errors.push(`Строка ${line}: арендатор «${name}» уже есть`);return null;}
+    return {id:'t'+Date.now()+'_'+line,name,inn:get('inn'),contact:get('contact'),phone:get('phone'),email:get('email'),industry:get('industry')}; }
+  if(type==='contracts'){ const tn=get('tenant'); const un=get('unit');
+    const t=DB.tenants.find(x=>x.name.toLowerCase()===tn.toLowerCase()||x.inn===tn); if(!t){errors.push(`Строка ${line}: арендатор «${tn}» не найден`);return null;}
+    const u=DB.units.find(x=>x.id===un); if(!u){errors.push(`Строка ${line}: помещение «${un}» не найдено`);return null;}
+    if(DB.contracts.some(c=>c.unit===un&&c.status!=='ended')){errors.push(`Строка ${line}: по помещению «${un}» уже есть договор`);return null;}
+    const rate=+get('rate')||0; const start=get('start'),end=get('end');
+    return {id:'c'+Date.now()+'_'+line,tenant:t.id,unit:un,rate,start,end,deposit:rate*(u.area||0)*2,indexation:+get('indexation')||0,status:'active',_setTenant:t.id}; }
+  return null;
+}
+async function importApply(type){
+  if(!_importPrep||_importPrep.type!==type||!_importPrep.toAdd.length) return;
+  const add=_importPrep.toAdd;
+  if(type==='buildings') DB.buildings.push(...add);
+  else if(type==='units') DB.units.push(...add);
+  else if(type==='tenants') DB.tenants.push(...add);
+  else if(type==='contracts'){ add.forEach(c=>{ const u=unitOf(c.unit); if(u)u.tenant=c._setTenant; delete c._setTenant; }); DB.contracts.push(...add); }
+  _importPrep=null; closeM(); await afterStateChange();
+  alert(`Импортировано: ${add.length}. Готово.`);
+}
+
+/* ============================================================
+   C2. МАСТЕР ПЕРВОГО ЗАПУСКА (онбординг)
+   ============================================================ */
+const WIZ_KEY='citi_srm_wizard_done';
+let _wiz=null;
+function startWizard(){ _wiz={step:1,buildingId:(buildingsList()[0]||{}).id||null,unitId:null,tenantId:null}; wizardModal(); }
+function wizardModal(){
+  if(!_wiz) _wiz={step:1}; const s=_wiz.step, total=5;
+  const prog=`<div style="display:flex;gap:6px;margin-bottom:14px">${[1,2,3,4,5].map(i=>`<div style="flex:1;height:6px;border-radius:3px;background:${i<=s?'var(--accent)':'var(--line2)'}"></div>`).join('')}</div>`;
+  let body='';
+  if(s===1) body=`<div class="sec-h">Шаг 1 из ${total}: Объект</div><div class="t-sub" style="margin-bottom:8px">Добавьте первое здание.</div>
+    <div class="field"><label>Название объекта</label><input id="wz-bname" placeholder="БЦ «Пример»"></div>
+    <div class="field"><label>Адрес</label><input id="wz-baddr" placeholder="г. Москва, ул. …"></div>`;
+  else if(s===2) body=`<div class="sec-h">Шаг 2 из ${total}: Помещение</div>
+    <div class="field"><label>Номер помещения</label><input id="wz-uid" placeholder="1-01"></div>
+    <div class="row2"><div class="field"><label>Этаж</label><input id="wz-ufloor" type="number" value="1"></div><div class="field"><label>Площадь, м²</label><input id="wz-uarea" type="number" value="100"></div></div>
+    <div class="field"><label>Тип</label><input id="wz-utype" value="Офис"></div>`;
+  else if(s===3) body=`<div class="sec-h">Шаг 3 из ${total}: Арендатор</div>
+    <div class="field"><label>Название</label><input id="wz-tname" placeholder="ООО «Ромашка»"></div>
+    <div class="row2"><div class="field"><label>ИНН</label><input id="wz-tinn"></div><div class="field"><label>Контактное лицо</label><input id="wz-tcontact"></div></div>
+    <div class="field"><label>Телефон</label><input id="wz-tphone"></div>`;
+  else if(s===4) body=`<div class="sec-h">Шаг 4 из ${total}: Договор</div>
+    <div class="row2"><div class="field"><label>Ставка ₽/м²/мес</label><input id="wz-crate" type="number" value="2200"></div><div class="field"><label>Индексация %/год</label><input id="wz-cidx" type="number" value="6"></div></div>
+    <div class="row2"><div class="field"><label>Начало</label><input id="wz-cstart" type="date" value="${TODAY.toISOString().slice(0,10)}"></div><div class="field"><label>Окончание</label><input id="wz-cend" type="date" value="${addMonths(TODAY.toISOString().slice(0,10),36)}"></div></div>
+    <div class="t-sub">Свяжет созданные помещение и арендатора.</div>`;
+  else body=`<div style="text-align:center"><div style="font-size:42px">🎉</div><div class="t-strong" style="font-size:17px;margin:6px 0">Готово! Первый объект заведён.</div>
+    <div class="t-sub" style="line-height:1.7;text-align:left;margin-top:10px">Что делать каждый день:<br>• Открывайте <b>«Сегодня»</b> — все дела с действиями в один клик.<br>• Включите автоматизации в «Настройках» (автоначисление аренды, напоминания).<br>• Остальное загрузите пачкой через <b>«Импорт»</b> в разделах Объекты/Арендаторы.</div></div>`;
+  openM(`<div class="modal-h"><h3>🚀 Мастер первого запуска</h3><span class="x" onclick="wizClose()">×</span></div>
+  <div class="modal-b">${prog}${body}</div>
+  <div class="modal-f">
+    ${s<5?`<button class="btn ghost" onclick="wizClose()">Позже</button><div class="spacer"></div>${s<4?`<button class="btn ghost" onclick="wizSkip()">Пропустить</button>`:''}<button class="btn" onclick="wizNext()">${s===4?'Создать договор':'Далее →'}</button>`
+      :`<div class="spacer"></div><button class="btn ghost" onclick="importModal('units')">⤓ Импорт</button><button class="btn" onclick="wizClose();gotoPage('today')">Перейти к «Сегодня»</button>`}
+  </div>`);
+}
+async function wizNext(){ const s=_wiz.step;
+  if(s===1){ const name=val('wz-bname').trim(); if(!name) return alert('Укажите название объекта'); const id='b'+Date.now(); DB.buildings.push({id,name,address:val('wz-baddr').trim()}); _wiz.buildingId=id; }
+  if(s===2){ const id=val('wz-uid').trim(); if(!id) return alert('Укажите номер помещения'); if(DB.units.some(u=>u.id===id)) return alert('Такое помещение уже есть'); DB.units.push({id,building:_wiz.buildingId||(buildingsList()[0]||{}).id,floor:+val('wz-ufloor')||1,area:+val('wz-uarea')||0,type:val('wz-utype')||'Офис',tenant:null,status:'free',ownership:'own',owner:null,responsible:null,documents:[]}); _wiz.unitId=id; }
+  if(s===3){ const name=val('wz-tname').trim(); if(!name) return alert('Укажите название арендатора'); const id='t'+Date.now(); DB.tenants.push({id,name,inn:val('wz-tinn').trim(),contact:val('wz-tcontact').trim(),phone:val('wz-tphone').trim(),email:'',industry:''}); _wiz.tenantId=id; }
+  if(s===4){ if(_wiz.tenantId&&_wiz.unitId){ const u=unitOf(_wiz.unitId); const rate=+val('wz-crate')||0; DB.contracts.push({id:'c'+Date.now(),tenant:_wiz.tenantId,unit:_wiz.unitId,rate,start:val('wz-cstart'),end:val('wz-cend'),deposit:rate*(u?u.area:0)*2,indexation:+val('wz-cidx')||0,status:'active'}); if(u)u.tenant=_wiz.tenantId; } }
+  _wiz.step++; recordAudit(); await saveState(); wizardModal();
+}
+function wizSkip(){ _wiz.step++; wizardModal(); }
+function wizClose(){ try{ localStorage.setItem(WIZ_KEY,'1'); }catch{} closeM(); render(); }
+function maybeWizard(){
+  if(!isAdmin()) return; let done=false; try{ done=localStorage.getItem(WIZ_KEY)==='1'; }catch{}
+  if(done) return;
+  if((DB.tenants||[]).length===0 && (DB.contracts||[]).length===0) startWizard();
 }
 function integrations(){
   const I=DB.integrations||{};
@@ -2473,6 +2612,7 @@ async function delTenant(id){const t=tenantOf(id);if(!t)return;
   closeM(); await afterStateChange();}
 function contractInfo(id){const c=contractOf(id);const t=tenantOf(c.tenant);const u=unitOf(c.unit);
   openM(`<div class="modal-h"><h3>Договор ${c.id.toUpperCase()}</h3><span class="x" onclick="closeM()">×</span></div>
-  <div class="modal-b">${infoRow('Арендатор',esc(t.name))}${infoRow('Помещение',esc(c.unit)+' · '+esc(u.area)+' м²')}${infoRow('Ставка',fmt(c.rate)+' ₽/м²/мес')}${infoRow('Аренда/мес',money(monthlyRent(c)))}${infoRow('Депозит',money(c.deposit))}${infoRow('Индексация',c.indexation+'% / год')}${infoRow('Период',fmtD(c.start)+' — '+fmtD(c.end))}${infoRow('Осталось',daysLeft(c.end)+' дн')}</div>
-  <div class="modal-f"><button class="btn" onclick="closeM()">Закрыть</button></div>`);}
+  <div class="modal-b">${infoRow('Арендатор',esc(t.name))}${infoRow('Помещение',esc(c.unit)+' · '+esc(u.area)+' м²')}${infoRow('Ставка',fmt(c.rate)+' ₽/м²/мес')}${infoRow('Аренда/мес',money(monthlyRent(c)))}${infoRow('Депозит',money(c.deposit))}${infoRow('Индексация',c.indexation+'% / год')}${infoRow('Период',fmtD(c.start)+' — '+fmtD(c.end))}${infoRow('Осталось',daysLeft(c.end)+' дн')}
+  ${(Array.isArray(c.rateHistory)&&c.rateHistory.length)?`<div class="sec-h">История индексаций ставки</div>${c.rateHistory.slice().reverse().map(h=>`<div class="doc"><div class="di">📈</div><div style="flex:1;min-width:0"><div class="t-strong">${money(h.oldRate)} → ${money(h.newRate)} /м²</div><div class="t-sub">${h.date?fmtD(h.date):''}</div></div></div>`).join('')}`:''}</div>
+  <div class="modal-f">${canEdit('contracts')?`<button class="btn ghost" onclick="renewModal('${c.id}')">Продлить</button>`:''}<button class="btn" onclick="closeM()">Закрыть</button></div>`);}
 function infoRow(k,v){return `<div style="display:flex;justify-content:space-between;padding:9px 0;border-bottom:1px solid var(--line);gap:14px"><span class="t-sub">${k}</span><span class="t-strong" style="text-align:right">${v}</span></div>`;}

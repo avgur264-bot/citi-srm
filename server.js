@@ -176,12 +176,38 @@ function autoRemindDebtors(st, today){
   }
   return {sent:due.length};
 }
+// A2. Автоиндексация ставок: в годовщину начала договора повышаем ставку на indexation%. Анти-дубль по году в rateHistory.
+function autoIndexRates(st, today){
+  const cfg = st.settings && st.settings.autoIndex;
+  if(!cfg || !cfg.enabled) return {applied:0};
+  const y = today.getFullYear();
+  const tName = Object.fromEntries((st.tenants||[]).map(t=>[t.id,t.name]));
+  const out=[];
+  (st.contracts||[]).forEach(c=>{
+    if(c.status==='ended' || !c.indexation || !c.start) return;
+    const s=new Date(c.start); if(isNaN(s)) return;
+    if(s.getMonth()!==today.getMonth() || s.getDate()!==today.getDate()) return;   // не годовщина
+    if(s.getFullYear()>=y) return;                                                 // в год начала не индексируем
+    c.rateHistory = Array.isArray(c.rateHistory)?c.rateHistory:[];
+    if(c.rateHistory.some(h=>String(h.date||'').slice(0,4)===String(y))) return;   // уже индексировали в этом году
+    const oldRate=c.rate||0; const newRate=Math.round(oldRate*(1+(+c.indexation||0)/100));
+    if(newRate===oldRate) return;
+    c.rateHistory.push({date:today.toISOString().slice(0,10), oldRate, newRate});
+    c.rate=newRate;
+    out.push(`${tName[c.tenant]||c.id}: ${oldRate}→${newRate} ₽/м²`);
+  });
+  if(out.length){ const tg=st.settings&&st.settings.notify&&st.settings.notify.telegram;
+    if(tg&&tg.token&&tg.chatId) sendTelegram(tg.token, tg.chatId, `\u{1F4C8} Индексация ставок (${out.length})\n`+out.join('\n')); }
+  return {applied:out.length, list:out};
+}
 let _lastAuto=null;
 function runDailyAutomations(){
   const today=new Date(); const dstr=today.toISOString().slice(0,10);
   if(_lastAuto===dstr) return; _lastAuto=dstr;
   try{
     const st=loadMain(); const entries=[];
+    const idx=autoIndexRates(st, today);
+    if(idx.applied>0) entries.push(`Автоиндексация ставок: ${idx.applied} (${idx.list.join('; ')})`);
     const rent=autoAccrueRent(st, today);
     if(rent.created>0) entries.push(`Автоначисление аренды за ${rent.period}: ${rent.created} начисл.`);
     const rem=autoRemindDebtors(st, today);
