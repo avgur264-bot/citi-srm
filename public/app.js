@@ -64,7 +64,11 @@ const unitStatus=u=>{ if(!u.tenant) return u.status||'free';
   const c=DB.contracts.find(c=>c.unit===u.id&&c.status!=='ended');
   const p=DB.payments.find(p=>c&&p.contract===c.id&&p.status==='overdue');
   return p?'debt':'occupied'; };
-function monthlyRent(c){ const u=unitOf(c.unit); return u? c.rate*u.area : 0; }
+// ставка: 'sqm' — ₽/м²/мес (× площадь), 'flat' — фиксированная сумма за помещение/мес
+function monthlyRent(c){ if(!c) return 0; if(c.rateType==='flat') return +c.rate||0; const u=unitOf(c.unit); return u? c.rate*u.area : 0; }
+function rateTypeSelect(id,sel){ return `<select id="${id}" onchange="syncRateLbl('${id}')"><option value="sqm"${sel==='flat'?'':' selected'}>за м² в месяц</option><option value="flat"${sel==='flat'?' selected':''}>фикс. за помещение/мес</option></select>`; }
+function rateLblText(sel){ return sel==='flat'?'Ставка ₽/мес (за помещение)':'Ставка ₽/м²/мес'; }
+function syncRateLbl(selId){ const s=document.getElementById(selId); const lbl=document.getElementById(selId+'-lbl'); if(s&&lbl) lbl.textContent=rateLblText(s.value); }
 function daysLeft(d){ if(!d) return 9999; return Math.round((new Date(d)-TODAY)/864e5); }
 const val=id=>document.getElementById(id).value;
 const pct=(a,b)=>b?Math.round(a/b*100):0;
@@ -816,7 +820,7 @@ function contracts(){
 function contractRow(c){const t=tenantOf(c.tenant);const dl=daysLeft(c.end);
   const stPill=c.status==='expiring'||dl<90?`<span class="pill amber">Истекает (${dl} дн)</span>`:`<span class="pill green">Активен</span>`;
   return `<tr style="cursor:pointer" onclick="contractInfo('${c.id}')"><td><div class="t-strong">${c.id.toUpperCase()}</div><div class="t-sub">${esc(t.name)}</div></td>
-    <td>${c.unit}</td><td>${fmt(c.rate)}</td><td class="t-strong">${money(monthlyRent(c))}</td>
+    <td>${c.unit}</td><td>${fmt(c.rate)}<div class="t-sub">${c.rateType==='flat'?'₽/мес за помещ.':'₽/м²'}</div></td><td class="t-strong">${money(monthlyRent(c))}</td>
     <td><div>${fmtD(c.start)} —</div><div class="t-sub">${fmtD(c.end)}</div></td><td>${c.indexation}%/год</td><td>${stPill}</td></tr>`;
 }
 function fmtD(d){return new Date(d).toLocaleDateString('ru-RU',{day:'2-digit',month:'2-digit',year:'2-digit'});}
@@ -2104,7 +2108,8 @@ function wizardModal(){
     <div class="row2"><div class="field"><label>ИНН</label><input id="wz-tinn"></div><div class="field"><label>Контактное лицо</label><input id="wz-tcontact"></div></div>
     <div class="field"><label>Телефон</label><input id="wz-tphone"></div>`;
   else if(s===4) body=`<div class="sec-h">Шаг 4 из ${total}: Договор</div>
-    <div class="row2"><div class="field"><label>Ставка ₽/м²/мес</label><input id="wz-crate" type="number" value="2200"></div><div class="field"><label>Индексация %/год</label><input id="wz-cidx" type="number" value="6"></div></div>
+    <div class="row2"><div class="field"><label>Тип ставки</label>${rateTypeSelect('wz-cratetype','sqm')}</div><div class="field"><label id="wz-cratetype-lbl">Ставка ₽/м²/мес</label><input id="wz-crate" type="number" value="2200"></div></div>
+    <div class="field"><label>Индексация %/год</label><input id="wz-cidx" type="number" value="6"></div>
     <div class="row2"><div class="field"><label>Начало</label><input id="wz-cstart" type="date" value="${TODAY.toISOString().slice(0,10)}"></div><div class="field"><label>Окончание</label><input id="wz-cend" type="date" value="${addMonths(TODAY.toISOString().slice(0,10),36)}"></div></div>
     <div class="t-sub">Свяжет созданные помещение и арендатора.</div>`;
   else body=`<div style="text-align:center"><div style="font-size:42px">🎉</div><div class="t-strong" style="font-size:17px;margin:6px 0">Готово! Первый объект заведён.</div>
@@ -2120,7 +2125,7 @@ async function wizNext(){ const s=_wiz.step;
   if(s===1){ const name=val('wz-bname').trim(); if(!name) return alert('Укажите название объекта'); const id='b'+Date.now(); DB.buildings.push({id,name,address:val('wz-baddr').trim()}); _wiz.buildingId=id; }
   if(s===2){ const id=val('wz-uid').trim(); if(!id) return alert('Укажите номер помещения'); if(DB.units.some(u=>u.id===id)) return alert('Такое помещение уже есть'); DB.units.push({id,building:_wiz.buildingId||(buildingsList()[0]||{}).id,floor:+val('wz-ufloor')||1,area:+val('wz-uarea')||0,type:val('wz-utype')||'Офис',tenant:null,status:'free',ownership:'own',owner:null,responsible:null,documents:[]}); _wiz.unitId=id; }
   if(s===3){ const name=val('wz-tname').trim(); if(!name) return alert('Укажите название арендатора'); const id='t'+Date.now(); DB.tenants.push({id,name,inn:val('wz-tinn').trim(),contact:val('wz-tcontact').trim(),phone:val('wz-tphone').trim(),email:'',industry:''}); _wiz.tenantId=id; }
-  if(s===4){ if(_wiz.tenantId&&_wiz.unitId){ const u=unitOf(_wiz.unitId); const rate=+val('wz-crate')||0; DB.contracts.push({id:'c'+Date.now(),tenant:_wiz.tenantId,unit:_wiz.unitId,rate,start:val('wz-cstart'),end:val('wz-cend'),deposit:rate*(u?u.area:0)*2,indexation:+val('wz-cidx')||0,status:'active'}); if(u)u.tenant=_wiz.tenantId; } }
+  if(s===4){ if(_wiz.tenantId&&_wiz.unitId){ const u=unitOf(_wiz.unitId); const rate=+val('wz-crate')||0; const rt=val('wz-cratetype')||'sqm'; const monthly=rt==='flat'?rate:rate*(u?u.area:0); DB.contracts.push({id:'c'+Date.now(),tenant:_wiz.tenantId,unit:_wiz.unitId,rate,rateType:rt,start:val('wz-cstart'),end:val('wz-cend'),deposit:monthly*2,indexation:+val('wz-cidx')||0,status:'active'}); if(u)u.tenant=_wiz.tenantId; } }
   _wiz.step++; recordAudit(); await saveState(); wizardModal();
 }
 function wizSkip(){ _wiz.step++; wizardModal(); }
@@ -2448,7 +2453,8 @@ function tenantModal(presetBuilding){const def=presetBuilding||(SCOPE!=='all'?SC
   <div class="sec-h">Разместить в объекте <span class="t-sub" style="text-transform:none;letter-spacing:0">необязательно</span></div>
   <div class="row2"><div class="field"><label>Объект</label><select id="f-tbuilding" onchange="fillTenantUnits()">${buildingsList().map(b=>`<option value="${b.id}"${b.id===def?' selected':''}>${esc(b.name)}</option>`).join('')}</select></div>
     <div class="field"><label>Свободное помещение</label><select id="f-tunit"></select></div></div>
-  <div class="row2"><div class="field"><label>Ставка ₽/м²/мес</label><input id="f-trate" type="number" value="2200"></div><div class="field"><label>Договор до</label><input id="f-tend" type="date" value="2029-06-30"></div></div>
+  <div class="row2"><div class="field"><label>Тип ставки</label>${rateTypeSelect('f-tratetype','sqm')}</div><div class="field"><label id="f-tratetype-lbl">Ставка ₽/м²/мес</label><input id="f-trate" type="number" value="2200"></div></div>
+  <div class="field"><label>Договор до</label><input id="f-tend" type="date" value="2029-06-30"></div>
   </div>
   <div class="modal-f"><button class="btn ghost" onclick="closeM()">Отмена</button><button class="btn" onclick="saveTenant()">Добавить</button></div>`);
   fillTenantUnits();
@@ -2464,8 +2470,8 @@ async function saveTenant(){
   const id='t'+Date.now();
   DB.tenants.push({id,name:val('f-name'),contact:val('f-contact'),phone:val('f-phone'),email:val('f-email'),inn:val('f-inn'),industry:val('f-industry')});
   const uid=val('f-tunit');
-  if(uid){ const u=unitOf(uid); const rate=+val('f-trate')||0;
-    DB.contracts.push({id:'c'+Date.now(),tenant:id,unit:uid,rate,start:TODAY.toISOString().slice(0,10),end:val('f-tend')||'2029-06-30',deposit:rate*(u?u.area:0)*2,indexation:6,status:'active'});
+  if(uid){ const u=unitOf(uid); const rate=+val('f-trate')||0; const rt=val('f-tratetype')||'sqm'; const monthly=rt==='flat'?rate:rate*(u?u.area:0);
+    DB.contracts.push({id:'c'+Date.now(),tenant:id,unit:uid,rate,rateType:rt,start:TODAY.toISOString().slice(0,10),end:val('f-tend')||'2029-06-30',deposit:monthly*2,indexation:6,status:'active'});
     if(u) u.tenant=id;
   }
   closeM();await afterStateChange();
@@ -2475,11 +2481,13 @@ async function saveTenant(){
 function contractModal(){const free=sUnits().filter(u=>!u.tenant);const pool=free.length?free:sUnits();openM(`<div class="modal-h"><h3>Новый договор</h3><span class="x" onclick="closeM()">×</span></div>
   <div class="modal-b"><div class="field"><label>Арендатор</label><select id="f-ten">${DB.tenants.map(t=>`<option value="${t.id}">${esc(t.name)}</option>`).join('')}</select></div>
   <div class="field"><label>Помещение (свободные)</label><select id="f-unit">${pool.map(u=>`<option value="${u.id}">${u.id} · ${u.area} м² · ${esc(buildingOf(u.building)?.name||'')}</option>`).join('')}</select></div>
-  <div class="row2"><div class="field"><label>Ставка ₽/м²/мес</label><input id="f-rate" type="number" value="2200"></div><div class="field"><label>Индексация %/год</label><input id="f-idx" type="number" value="6"></div></div>
+  <div class="row2"><div class="field"><label>Тип ставки</label>${rateTypeSelect('f-ratetype','sqm')}</div><div class="field"><label id="f-ratetype-lbl">Ставка ₽/м²/мес</label><input id="f-rate" type="number" value="2200"></div></div>
+  <div class="row2"><div class="field"><label>Индексация %/год</label><input id="f-idx" type="number" value="6"></div><div class="field"></div></div>
   <div class="row2"><div class="field"><label>Начало</label><input id="f-start" type="date" value="2026-07-01"></div><div class="field"><label>Окончание</label><input id="f-end" type="date" value="2029-06-30"></div></div></div>
   <div class="modal-f"><button class="btn ghost" onclick="closeM()">Отмена</button><button class="btn" onclick="saveContract()">Создать</button></div>`);}
-async function saveContract(){const u=val('f-unit');const rate=+val('f-rate');const area=unitOf(u).area;
-  DB.contracts.push({id:'c'+Date.now(),tenant:val('f-ten'),unit:u,rate,start:val('f-start'),end:val('f-end'),deposit:rate*area*2,indexation:+val('f-idx'),status:'active'});
+async function saveContract(){const u=val('f-unit');const rate=+val('f-rate');const rt=val('f-ratetype')||'sqm';const area=unitOf(u).area;
+  const monthly=rt==='flat'?rate:rate*area;
+  DB.contracts.push({id:'c'+Date.now(),tenant:val('f-ten'),unit:u,rate,rateType:rt,start:val('f-start'),end:val('f-end'),deposit:monthly*2,indexation:+val('f-idx'),status:'active'});
   unitOf(u).tenant=val('f-ten');closeM();await afterStateChange();}
 
 /* платёж */
@@ -2739,7 +2747,7 @@ async function delTenant(id){const t=tenantOf(id);if(!t)return;
   closeM(); await afterStateChange();}
 function contractInfo(id){const c=contractOf(id);const t=tenantOf(c.tenant);const u=unitOf(c.unit);
   openM(`<div class="modal-h"><h3>Договор ${c.id.toUpperCase()}</h3><span class="x" onclick="closeM()">×</span></div>
-  <div class="modal-b">${infoRow('Арендатор',esc(t.name))}${infoRow('Помещение',esc(c.unit)+' · '+esc(u.area)+' м²')}${infoRow('Ставка',fmt(c.rate)+' ₽/м²/мес')}${infoRow('Аренда/мес',money(monthlyRent(c)))}${infoRow('Депозит',money(c.deposit))}${infoRow('Индексация',c.indexation+'% / год')}${infoRow('Период',fmtD(c.start)+' — '+fmtD(c.end))}${infoRow('Осталось',daysLeft(c.end)+' дн')}
+  <div class="modal-b">${infoRow('Арендатор',esc(t.name))}${infoRow('Помещение',esc(c.unit)+' · '+esc(u.area)+' м²')}${infoRow('Ставка',fmt(c.rate)+(c.rateType==='flat'?' ₽/мес (за помещение)':' ₽/м²/мес'))}${infoRow('Аренда/мес',money(monthlyRent(c)))}${infoRow('Депозит',money(c.deposit))}${infoRow('Индексация',c.indexation+'% / год')}${infoRow('Период',fmtD(c.start)+' — '+fmtD(c.end))}${infoRow('Осталось',daysLeft(c.end)+' дн')}
   ${(Array.isArray(c.rateHistory)&&c.rateHistory.length)?`<div class="sec-h">История индексаций ставки</div>${c.rateHistory.slice().reverse().map(h=>`<div class="doc"><div class="di">📈</div><div style="flex:1;min-width:0"><div class="t-strong">${money(h.oldRate)} → ${money(h.newRate)} /м²</div><div class="t-sub">${h.date?fmtD(h.date):''}</div></div></div>`).join('')}`:''}</div>
   <div class="modal-f">${canEdit('contracts')?`<button class="btn ghost" onclick="renewModal('${c.id}')">Продлить</button>`:''}<button class="btn" onclick="closeM()">Закрыть</button></div>`);}
 function infoRow(k,v){return `<div style="display:flex;justify-content:space-between;padding:9px 0;border-bottom:1px solid var(--line);gap:14px"><span class="t-sub">${k}</span><span class="t-strong" style="text-align:right">${v}</span></div>`;}

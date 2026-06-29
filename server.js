@@ -146,7 +146,7 @@ function autoAccrueRent(st, today){
     if(c.end && new Date(c.end) < new Date(period+'-01')) return;   // договор уже завершился
     if(has.has(c.id)) return;                                       // начисление за период уже есть
     const u = units[c.unit]; if(!u) return;
-    const amount = Math.round((c.rate||0)*(u.area||0)); if(amount<=0) return;
+    const amount = Math.round(c.rateType==='flat' ? (c.rate||0) : (c.rate||0)*(u.area||0)); if(amount<=0) return;
     st.payments.push({ id:'p'+Date.now()+'_'+c.id, contract:c.id, period, amount, due,
       paid:0, paidDate:null, status:(new Date(due)<today?'overdue':'pending'), auto:true });
     has.add(c.id); created++;
