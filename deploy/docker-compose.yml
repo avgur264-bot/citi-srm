@@ -9,8 +9,10 @@ services:
     environment:
       - PORT=4000
       - DB_PATH=/app/data/srm.db   # база на постоянном томе
+      - FILES_PATH=/app/files      # документы на постоянном томе
     volumes:
       - ./data:/app/data            # ← здесь физически лежит srm.db
+      - ./files:/app/files          # ← документы (переживают пересборку)
     expose:
       - "4000"               # порт виден только Caddy, наружу не открыт
     restart: unless-stopped

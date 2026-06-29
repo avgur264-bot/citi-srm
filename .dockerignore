@@ -5,8 +5,14 @@ node_modules
 .git
 .DS_Store
 deploy/data
+deploy/files
+deploy/files.*
 deploy/backups
 deploy/.env
+deploy/platform/clients
+deploy/platform/backups
+deploy/platform/proxy/sites
+files
 *.db
 *.db-wal
 *.db-shm
