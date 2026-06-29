@@ -76,7 +76,7 @@ const liteUser = u => u && ({
 });
 // карта: коллекция состояния → модуль прав (для серверной авторизации записи/чтения)
 const STATE_MOD = { buildings:'objects', units:'objects', tenants:'tenants', contracts:'contracts',
-  payments:'payments', utilities:'utilities', expenses:'utilities', salaries:'salaries',
+  payments:'payments', utilities:'utilities', expenses:'utilities', buildingMeters:'utilities', salaries:'salaries',
   requests:'requests', equipment:'upkeep', listings:'ads', signage:'ads',
   budgets:'budget', penaltyRate:'budget', integrations:'integrations' };
 const isFull = role => role==='admin' || role==='owner';

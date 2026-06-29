@@ -123,6 +123,7 @@ function ensureState(){
   if(!Array.isArray(DB.signage)) DB.signage=[];
   DB.listings.forEach(a=>{ if(!Array.isArray(a.documents)) a.documents=[]; });
   DB.signage.forEach(s=>{ if(!Array.isArray(s.documents)) s.documents=[]; });
+  if(!Array.isArray(DB.buildingMeters)) DB.buildingMeters=[];
   if(!Array.isArray(DB.audit)) DB.audit=[];
   if(!DB.integrations) DB.integrations={};
   const I=DB.integrations;
@@ -153,7 +154,8 @@ function ensureState(){
   if(!S.autoRemind || typeof S.autoRemind!=='object') S.autoRemind={enabled:false,everyDays:7};
   if(!S.autoIndex || typeof S.autoIndex!=='object') S.autoIndex={enabled:false};
   // тарифы для расчёта коммуналки по показаниям счётчиков
-  if(!S.tariffs || typeof S.tariffs!=='object') S.tariffs={electricity:6.5,water:45,heating:2200};
+  if(!S.tariffs || typeof S.tariffs!=='object') S.tariffs={electricity:6.5,water:45,heating:35};
+  if(+S.tariffs.heating>200) S.tariffs.heating=35; // миграция: раньше отопление было в ₽/Гкал, теперь ₽/м²
 }
 /* ---- брендинг и модули из настроек клиента ---- */
 const isAdmin = ()=> ME && (ME.role==='admin'||ME.role==='owner');
@@ -969,6 +971,7 @@ function utilities(){
       <div><div class="sec-h" style="margin-top:0">Коммунальные начисления</div>${utilTable(bu)}</div>
       <div><div class="sec-h" style="margin-top:0">Эксплуатационные расходы</div>${expenseTable(be)}</div>
     </div>
+    <div class="sec-h">🏢 Общедомовые приборы учёта (ОДПУ)</div>${odpuSummary(b.id, utilPeriod)}
     ${be.length?`<div class="sec-h">Структура расходов на содержание</div><canvas id="chExp-${b.id}" height="${Math.max(80,be.length*28)}"></canvas>`:''}`;
     return collapseCard('util-'+b.id, buildingHeader(b, `затраты ${money(tot)}`), body, false);
   }).join('') || '<div class="card"><div class="empty">Объекты не найдены</div></div>';
@@ -988,8 +991,10 @@ function expenseTable(list){
     </tbody></table></div>`;
 }
 function utilPill(s){const m={paid:['green','Оплачено'],invoiced:['blue','Выставлен'],overdue:['red','Просрочен'],planned:['gray','План']};const x=m[s]||['gray',s];return `<span class="pill ${x[0]}">${x[1]}</span>`;}
-/* ---------- A4. Показания счётчиков → автосумма коммуналки ---------- */
-const UTIL_KINDS=[['electricity','Электроэнергия','кВт·ч'],['water','Вода','м³'],['heating','Отопление','Гкал']];
+/* ---------- A4. Показания счётчиков → автосумма коммуналки ----------
+   mode 'meter' — по счётчику: (тек.−пред.)×тариф; mode 'area' — по площади: площадь×тариф (₽/м²). */
+const UTIL_KINDS=[['electricity','Электроэнергия','кВт·ч','meter'],['water','Вода','м³','meter'],['heating','Отопление','м²','area']];
+const utilKindMode=k=>(UTIL_KINDS.find(x=>x[0]===k)||[])[3]||'meter';
 function lastReading(unitId,kind,beforePeriod){
   const recs=(DB.utilities||[]).filter(u=>u.unit===unitId && u.readings && u.readings[kind] && (!beforePeriod || String(u.period)<beforePeriod))
     .sort((a,b)=>String(b.period).localeCompare(String(a.period)));
@@ -1006,12 +1011,15 @@ function readingsModal(){
       <div class="field"><label>Помещение</label><select id="rd-unit" onchange="rdPrefill()">${units.map(u=>`<option value="${esc(u.id)}">${esc(u.id)} · ${esc(u.type||'')}</option>`).join('')}</select></div>
     </div>
     <div class="field"><label>Период</label><input id="rd-period" type="month" value="${utilPeriod||TODAY.toISOString().slice(0,7)}" onchange="rdPrefill()"></div>
-    <div class="t-sub" style="margin-bottom:8px">Предыдущее показание подставляется из прошлого периода, тариф — из настроек. Сумма = (текущее − предыдущее) × тариф. Можно переопределить.</div>
-    ${UTIL_KINDS.map(([k,label,unit])=>`<div class="card" style="background:var(--bg2);margin-bottom:8px"><div class="t-strong" style="margin-bottom:6px">${label} <span class="t-sub">(${unit})</span></div>
+    <div class="t-sub" style="margin-bottom:8px">Электро/вода — по счётчику: (текущее − предыдущее) × тариф. Отопление — по площади помещения × тариф ₽/м². Тарифы берутся из «Настроек», можно переопределить.</div>
+    ${UTIL_KINDS.map(([k,label,unit,mode])=>`<div class="card" style="background:var(--bg2);margin-bottom:8px"><div class="t-strong" style="margin-bottom:6px">${label} <span class="t-sub">(${unit})</span></div>
       <div class="grid" style="grid-template-columns:repeat(3,1fr);gap:8px">
-        <div class="field" style="margin:0"><label>Предыдущее</label><input id="rd-${k}-prev" type="number" step="any" value="0" oninput="rdRecalc()"></div>
-        <div class="field" style="margin:0"><label>Текущее</label><input id="rd-${k}-cur" type="number" step="any" placeholder="0" oninput="rdRecalc()"></div>
-        <div class="field" style="margin:0"><label>Тариф ₽</label><input id="rd-${k}-tar" type="number" step="any" value="0" oninput="rdRecalc()"></div>
+        ${mode==='area'
+          ? `<div class="field" style="margin:0"><label>Площадь, м²</label><input id="rd-${k}-area" type="number" step="any" value="0" oninput="rdRecalc()"></div>
+             <div class="field" style="margin:0"><label>Тариф ₽/м²</label><input id="rd-${k}-tar" type="number" step="any" value="0" oninput="rdRecalc()"></div>`
+          : `<div class="field" style="margin:0"><label>Предыдущее</label><input id="rd-${k}-prev" type="number" step="any" value="0" oninput="rdRecalc()"></div>
+             <div class="field" style="margin:0"><label>Текущее</label><input id="rd-${k}-cur" type="number" step="any" placeholder="0" oninput="rdRecalc()"></div>
+             <div class="field" style="margin:0"><label>Тариф ₽</label><input id="rd-${k}-tar" type="number" step="any" value="0" oninput="rdRecalc()"></div>`}
       </div>
       <div class="t-sub" style="margin-top:6px">К начислению: <b id="rd-${k}-sum">0 ₽</b></div></div>`).join('')}
     <div class="sec-h" style="display:flex;justify-content:space-between"><span>Итого за период</span><b id="rd-total">0 ₽</b></div>
@@ -1021,25 +1029,97 @@ function readingsModal(){
 }
 function rdUnitsRefresh(){ const b=val('rd-building'); const sel=document.getElementById('rd-unit');
   sel.innerHTML=DB.units.filter(u=>u.building===b).map(u=>`<option value="${esc(u.id)}">${esc(u.id)} · ${esc(u.type||'')}</option>`).join(''); rdPrefill(); }
-function rdPrefill(){ const unit=val('rd-unit'); const period=val('rd-period'); const tariffs=(stg().tariffs)||{};
-  UTIL_KINDS.forEach(([k])=>{ const pe=document.getElementById('rd-'+k+'-prev'), te=document.getElementById('rd-'+k+'-tar');
-    if(pe) pe.value=lastReading(unit,k,period);
-    if(te) te.value=tariffs[k]||0; });
+function rdPrefill(){ const unit=val('rd-unit'); const period=val('rd-period'); const tariffs=(stg().tariffs)||{}; const u=unitOf(unit);
+  UTIL_KINDS.forEach(([k,,,mode])=>{ const te=document.getElementById('rd-'+k+'-tar'); if(te) te.value=tariffs[k]||0;
+    if(mode==='area'){ const ae=document.getElementById('rd-'+k+'-area'); if(ae) ae.value=(u&&u.area)||0; }
+    else { const pe=document.getElementById('rd-'+k+'-prev'); if(pe) pe.value=lastReading(unit,k,period); } });
   rdRecalc(); }
+function rdSum(k){ const tar=+val('rd-'+k+'-tar')||0;
+  if(utilKindMode(k)==='area'){ const area=+val('rd-'+k+'-area')||0; return Math.max(0,Math.round(area*tar)); }
+  const prev=+val('rd-'+k+'-prev')||0, cur=+val('rd-'+k+'-cur')||0; return Math.max(0,Math.round((cur-prev)*tar)); }
 function rdRecalc(){ let total=0;
-  UTIL_KINDS.forEach(([k])=>{ const prev=+val('rd-'+k+'-prev')||0, cur=+val('rd-'+k+'-cur')||0, tar=+val('rd-'+k+'-tar')||0;
-    const sum=Math.max(0,Math.round((cur-prev)*tar)); total+=sum;
-    const se=document.getElementById('rd-'+k+'-sum'); if(se)se.textContent=money(sum); });
+  UTIL_KINDS.forEach(([k])=>{ const sum=rdSum(k); total+=sum; const se=document.getElementById('rd-'+k+'-sum'); if(se)se.textContent=money(sum); });
   const te=document.getElementById('rd-total'); if(te)te.textContent=money(total); }
 async function saveReadings(){ const unit=val('rd-unit'); const period=val('rd-period'); if(!unit||!period) return alert('Выберите помещение и период');
   const readings={}, amt={};
-  UTIL_KINDS.forEach(([k])=>{ const prev=+val('rd-'+k+'-prev')||0, cur=+val('rd-'+k+'-cur')||0, tar=+val('rd-'+k+'-tar')||0;
-    readings[k]={prev,current:cur,tariff:tar}; amt[k]=Math.max(0,Math.round((cur-prev)*tar)); });
+  UTIL_KINDS.forEach(([k,,,mode])=>{ const tar=+val('rd-'+k+'-tar')||0; amt[k]=rdSum(k);
+    readings[k]= mode==='area' ? {area:+val('rd-'+k+'-area')||0,tariff:tar} : {prev:+val('rd-'+k+'-prev')||0,current:+val('rd-'+k+'-cur')||0,tariff:tar}; });
   let u=DB.utilities.find(x=>x.unit===unit && x.period===period);
   if(u){ u.electricity=amt.electricity; u.water=amt.water; u.heating=amt.heating; u.readings=readings; }
   else DB.utilities.push({id:'u'+Date.now(),unit,period,electricity:amt.electricity,water:amt.water,heating:amt.heating,status:'invoiced',readings});
   closeM(); await afterStateChange();
 }
+/* ---------- ОДПУ: общедомовые приборы учёта + сведение «Нагорело / Собрали / Разница» ---------- */
+function buildingMeter(bid,period){ return (DB.buildingMeters||[]).find(m=>m.building===bid && m.period===period)||null; }
+function odpuAccrued(m){ if(!m)return null; const e=m.electricity||{},w=m.water||{},h=m.heating||{};
+  return { electricity:Math.max(0,Math.round(((+e.cur||0)-(+e.prev||0))*(+e.tariff||0))),
+    water:Math.max(0,Math.round(((+w.cur||0)-(+w.prev||0))*(+w.tariff||0))),
+    heating:Math.max(0,Math.round((+h.area||0)*(+h.tariff||0))) }; }
+function odpuCollected(bid,period){ const us=DB.utilities.filter(u=>unitOf(u.unit)?.building===bid && u.period===period);
+  return { electricity:us.reduce((s,u)=>s+(+u.electricity||0),0), water:us.reduce((s,u)=>s+(+u.water||0),0), heating:us.reduce((s,u)=>s+(+u.heating||0),0) }; }
+function odpuSummary(bid,period){
+  if(!period) return '<div class="t-sub" style="padding:8px 0">Выберите конкретный период (вверху), чтобы свести общедомовые приборы учёта.</div>';
+  const m=buildingMeter(bid,period); const acc=odpuAccrued(m); const col=odpuCollected(bid,period); const ed=canEdit('utilities');
+  const rows=[['electricity','Электроэнергия'],['water','Вода'],['heating','Отопление']].map(([k,l])=>{
+    const a=acc?acc[k]:null; const c=col[k]||0; const diff=(a==null)?null:(a-c);
+    return `<tr><td class="t-strong">${l}</td><td>${a==null?'—':money(a)}</td><td>${money(c)}</td><td${diff!=null&&diff!==0?` style="color:${diff>0?'var(--amber)':'var(--green)'}"`:''}>${diff==null?'—':money(diff)}</td></tr>`;
+  }).join('');
+  const totA=acc?(acc.electricity+acc.water+acc.heating):null, totC=col.electricity+col.water+col.heating;
+  return `<table><thead><tr><th>Ресурс</th><th>Нагорело (ОДПУ)</th><th>Собрали (с помещений)</th><th>Разница</th></tr></thead><tbody>${rows}
+    <tr style="border-top:2px solid var(--line2)"><td class="t-strong">Итого</td><td><b>${totA==null?'—':money(totA)}</b></td><td><b>${money(totC)}</b></td><td><b${totA!=null&&(totA-totC)!==0?` style="color:${totA-totC>0?'var(--amber)':'var(--green)'}"`:''}>${totA==null?'—':money(totA-totC)}</b></td></tr></tbody></table>
+    <div class="t-sub" style="margin-top:6px">«Разница» — общедомовые нужды / потери (показания дома минус сумма по помещениям). ${ed?`<button class="btn ghost sm" style="margin-top:6px" onclick="buildingMeterModal('${bid}','${period}')">🏢 ${m?'Изменить показания ОДПУ':'Внести показания ОДПУ'}</button>`:''}</div>`;
+}
+function buildingMeterModal(bid,period){
+  if(!canEdit('utilities')) return; const b=buildingOf(bid); if(!b) return;
+  period=period||utilPeriod||TODAY.toISOString().slice(0,7);
+  const m=buildingMeter(bid,period); const tariffs=(stg().tariffs)||{};
+  const totalArea=DB.units.filter(u=>u.building===bid).reduce((s,u)=>s+(+u.area||0),0);
+  const e=(m&&m.electricity)||{}, w=(m&&m.water)||{}, h=(m&&m.heating)||{};
+  openM(`<div class="modal-h"><h3>🏢 ОДПУ — ${esc(b.name)}</h3><span class="x" onclick="closeM()">×</span></div>
+  <div class="modal-b">
+    <div class="field"><label>Период</label><input id="bm-period" type="month" value="${period}"></div>
+    <div class="t-sub" style="margin-bottom:8px">Показания общедомовых приборов учёта. «Нагорело» сравнивается с суммой по помещениям, разница — общедомовые нужды.</div>
+    <div class="card" style="background:var(--bg2);margin-bottom:8px"><div class="t-strong" style="margin-bottom:6px">Электроэнергия <span class="t-sub">(кВт·ч)</span></div>
+      <div class="grid" style="grid-template-columns:repeat(3,1fr);gap:8px">
+        <div class="field" style="margin:0"><label>Предыдущее</label><input id="bm-e-prev" type="number" step="any" value="${+e.prev||0}" oninput="bmRecalc()"></div>
+        <div class="field" style="margin:0"><label>Текущее</label><input id="bm-e-cur" type="number" step="any" value="${+e.cur||0}" oninput="bmRecalc()"></div>
+        <div class="field" style="margin:0"><label>Тариф ₽</label><input id="bm-e-tar" type="number" step="any" value="${+e.tariff||tariffs.electricity||0}" oninput="bmRecalc()"></div>
+      </div><div class="t-sub" style="margin-top:6px">Нагорело: <b id="bm-e-sum">0 ₽</b></div></div>
+    <div class="card" style="background:var(--bg2);margin-bottom:8px"><div class="t-strong" style="margin-bottom:6px">Вода <span class="t-sub">(м³)</span></div>
+      <div class="grid" style="grid-template-columns:repeat(3,1fr);gap:8px">
+        <div class="field" style="margin:0"><label>Предыдущее</label><input id="bm-w-prev" type="number" step="any" value="${+w.prev||0}" oninput="bmRecalc()"></div>
+        <div class="field" style="margin:0"><label>Текущее</label><input id="bm-w-cur" type="number" step="any" value="${+w.cur||0}" oninput="bmRecalc()"></div>
+        <div class="field" style="margin:0"><label>Тариф ₽</label><input id="bm-w-tar" type="number" step="any" value="${+w.tariff||tariffs.water||0}" oninput="bmRecalc()"></div>
+      </div><div class="t-sub" style="margin-top:6px">Нагорело: <b id="bm-w-sum">0 ₽</b></div></div>
+    <div class="card" style="background:var(--bg2);margin-bottom:8px"><div class="t-strong" style="margin-bottom:6px">Отопление <span class="t-sub">(м²)</span></div>
+      <div class="grid" style="grid-template-columns:repeat(2,1fr);gap:8px">
+        <div class="field" style="margin:0"><label>Площадь дома, м²</label><input id="bm-h-area" type="number" step="any" value="${+h.area||totalArea||0}" oninput="bmRecalc()"></div>
+        <div class="field" style="margin:0"><label>Тариф ₽/м²</label><input id="bm-h-tar" type="number" step="any" value="${+h.tariff||tariffs.heating||0}" oninput="bmRecalc()"></div>
+      </div><div class="t-sub" style="margin-top:6px">Нагорело: <b id="bm-h-sum">0 ₽</b></div></div>
+    <div class="sec-h" style="display:flex;justify-content:space-between"><span>Всего нагорело по дому</span><b id="bm-total">0 ₽</b></div>
+  </div>
+  <div class="modal-f">${m?`<button class="btn ghost sm" onclick="delBuildingMeter('${bid}','${period}')">🗑 Удалить</button>`:''}<div class="spacer"></div><button class="btn ghost" onclick="closeM()">Отмена</button><button class="btn" onclick="saveBuildingMeter('${bid}')">Сохранить</button></div>`);
+  bmRecalc();
+}
+function bmRecalc(){
+  const e=Math.max(0,Math.round(((+val('bm-e-cur')||0)-(+val('bm-e-prev')||0))*(+val('bm-e-tar')||0)));
+  const w=Math.max(0,Math.round(((+val('bm-w-cur')||0)-(+val('bm-w-prev')||0))*(+val('bm-w-tar')||0)));
+  const h=Math.max(0,Math.round((+val('bm-h-area')||0)*(+val('bm-h-tar')||0)));
+  const set=(id,v)=>{const el=document.getElementById(id);if(el)el.textContent=money(v);};
+  set('bm-e-sum',e);set('bm-w-sum',w);set('bm-h-sum',h);set('bm-total',e+w+h);
+}
+async function saveBuildingMeter(bid){ if(!Array.isArray(DB.buildingMeters)) DB.buildingMeters=[];
+  const period=val('bm-period'); if(!period) return alert('Укажите период');
+  const data={ building:bid, period,
+    electricity:{prev:+val('bm-e-prev')||0,cur:+val('bm-e-cur')||0,tariff:+val('bm-e-tar')||0},
+    water:{prev:+val('bm-w-prev')||0,cur:+val('bm-w-cur')||0,tariff:+val('bm-w-tar')||0},
+    heating:{area:+val('bm-h-area')||0,tariff:+val('bm-h-tar')||0} };
+  const ex=DB.buildingMeters.find(m=>m.building===bid && m.period===period);
+  if(ex) Object.assign(ex,data); else DB.buildingMeters.push({id:'bm'+Date.now(),...data});
+  closeM(); await afterStateChange();
+}
+async function delBuildingMeter(bid,period){ if(!confirm('Удалить показания ОДПУ за этот период?'))return;
+  DB.buildingMeters=(DB.buildingMeters||[]).filter(m=>!(m.building===bid && m.period===period)); closeM(); await afterStateChange(); }
 const EX_STATUS=[['planned','План'],['invoiced','Выставлен (счёт получен)'],['paid','Оплачено'],['overdue','Просрочен']];
 function expenseEdit(id){ const e=DB.expenses.find(x=>x.id===id); if(!e||!canEdit('utilities'))return; const b=buildingOf(e.building);
   openM(`<div class="modal-h"><h3>Расход на содержание</h3><span class="x" onclick="closeM()">×</span></div>
@@ -1855,7 +1935,7 @@ function settingsPage(){
     <div class="grid" style="grid-template-columns:repeat(3,1fr);gap:10px">
       <div class="field" style="margin:0"><label>Электро, ₽/кВт·ч</label><input id="s-tar-electricity" type="number" step="any" value="${+s.tariffs?.electricity||0}"></div>
       <div class="field" style="margin:0"><label>Вода, ₽/м³</label><input id="s-tar-water" type="number" step="any" value="${+s.tariffs?.water||0}"></div>
-      <div class="field" style="margin:0"><label>Отопление, ₽/Гкал</label><input id="s-tar-heating" type="number" step="any" value="${+s.tariffs?.heating||0}"></div>
+      <div class="field" style="margin:0"><label>Отопление, ₽/м²</label><input id="s-tar-heating" type="number" step="any" value="${+s.tariffs?.heating||0}"></div>
     </div>
   </div>
   <div style="margin-top:16px;display:flex;gap:10px"><button class="btn" onclick="saveSettings()">💾 Сохранить настройки</button>
