@@ -991,7 +991,7 @@ function utilities(){
 }
 function utilTable(list){
   return `<div style="overflow-x:auto"><table><thead><tr><th>Помещение</th><th>Эл-во</th><th>Вода</th><th>Отопл.</th><th>Итого</th><th>Статус</th></tr></thead><tbody>
-    ${list.length?list.map(u=>{const tot=u.electricity+u.water+u.heating;const clk=canEdit('utilities');return `<tr${clk?` style="cursor:pointer" onclick="utilEdit('${esc(u.id)}')"`:''}><td class="t-strong">${esc(u.unit)}</td><td>${fmt(u.electricity)}</td><td>${fmt(u.water)}</td><td>${fmt(u.heating)}</td><td class="t-strong">${money(tot)}</td><td>${utilPill(u.status)}</td></tr>`;}).join(''):'<tr><td colspan="6" class="empty">Нет начислений</td></tr>'}
+    ${list.length?list.map(u=>{const tot=u.electricity+u.water+u.heating;const clk=canEdit('utilities');const un=unitOf(u.unit);return `<tr${clk?` style="cursor:pointer" onclick="utilEdit('${esc(u.id)}')"`:''}><td class="t-strong">${esc(u.unit)}${un&&un.name?`<div class="t-sub">${esc(un.name)}</div>`:''}</td><td>${fmt(u.electricity)}</td><td>${fmt(u.water)}</td><td>${fmt(u.heating)}</td><td class="t-strong">${money(tot)}</td><td>${utilPill(u.status)}</td></tr>`;}).join(''):'<tr><td colspan="6" class="empty">Нет начислений</td></tr>'}
     </tbody></table></div>`;
 }
 function expenseTable(list){
