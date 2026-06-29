@@ -690,7 +690,7 @@ function planModal(bid){
 }
 function planHover(id){ const u=unitOf(id); const box=document.getElementById('planDetails'); if(!u||!box)return;
   const c=DB.contracts.find(x=>x.unit===id&&x.status!=='ended'); const t=u.tenant?tenantOf(u.tenant):null; const st=unitStatus(u); const r=u.responsible||{};
-  box.innerHTML=`<div class="t-strong" style="margin-bottom:6px">Помещение ${esc(u.id)} · ${u.area} м² · ${esc(u.type||'')}</div>
+  box.innerHTML=`<div class="t-strong" style="margin-bottom:6px">Помещение ${esc(u.id)}${u.name?' · '+esc(u.name):''} · ${u.area} м² · ${esc(u.type||'')}</div>
     <div class="t-sub">Статус: <b style="color:${PLAN_COL[st]}">${PLAN_LBL[st]}</b></div>
     ${t?`<div class="t-sub">Арендатор: ${esc(t.name)}</div>`:'<div class="t-sub">Помещение свободно</div>'}
     ${c?`<div class="t-sub">Аренда: ${money(c.rate)}/м² · ${money(monthlyRent(c))}/мес · договор до ${c.end?fmtD(c.end):'—'}</div>`:''}
@@ -752,7 +752,7 @@ function unitTile(u){
   const st=unitStatus(u); const cls={occupied:'u-occ',free:'u-free',reserved:'u-res',debt:'u-debt'}[st];
   const ten=u.tenant?(tenantOf(u.tenant)||{}).name:(st==='reserved'?'Бронь':'Свободно');
   return `<div class="unit ${cls}" onclick="unitInfo('${esc(u.id)}')"><span class="bar"></span>
-    <div class="u-id">${esc(u.id)}${u.ownership==='sold'?' 🏷':''}</div><div class="u-area">${esc(u.type)} · ${u.area} м²</div><div class="u-ten">${esc(ten)}</div>
+    <div class="u-id">${esc(u.id)}${u.name?' · '+esc(u.name):''}${u.ownership==='sold'?' 🏷':''}</div><div class="u-area">${esc(u.type)} · ${u.area} м²</div><div class="u-ten">${esc(ten)}</div>
     <div class="u-ten" style="color:var(--muted2);font-size:10.5px;margin-top:5px">📎 ${(u.documents||[]).length} док.${u.ownership==='sold'?' · сторонний собств.':''}</div></div>`;
 }
 function miniStat(label,v,color){return `<div class="card"><div class="label" style="color:var(--muted);font-size:12px">${label}</div><div style="font-size:24px;font-weight:750;margin-top:4px;color:${color?'var(--'+color+')':'var(--txt)'}">${v}</div></div>`;}
@@ -2317,12 +2317,13 @@ mBg.onclick=e=>{if(e.target===mBg)closeM();};
 function unitModal(presetBuilding){const def=presetBuilding||(SCOPE!=='all'?SCOPE:(buildingsList()[0]||{}).id);
   openM(`<div class="modal-h"><h3>Новое помещение</h3><span class="x" onclick="closeM()">×</span></div>
   <div class="modal-b"><div class="field"><label>Объект</label><select id="f-building">${buildingsList().map(b=>`<option value="${b.id}"${b.id===def?' selected':''}>${esc(b.name)}</option>`).join('')}</select></div>
-  <div class="row2"><div class="field"><label>Номер</label><input id="f-id" placeholder="3-03"></div><div class="field"><label>Этаж</label><input id="f-floor" type="number" value="1"></div></div>
-  <div class="row2"><div class="field"><label>Площадь, м²</label><input id="f-area" type="number" value="100"></div><div class="field"><label>Тип</label><select id="f-type">${(stg().unitTypes||['Офис','Склад']).map(t=>`<option>${esc(t)}</option>`).join('')}</select></div></div></div>
+  <div class="row2"><div class="field"><label>Номер</label><input id="f-id" placeholder="3-03"></div><div class="field"><label>Название <span class="t-sub">(необязательно)</span></label><input id="f-name" placeholder="Переговорная"></div></div>
+  <div class="row2"><div class="field"><label>Этаж</label><input id="f-floor" type="number" value="1"></div><div class="field"><label>Площадь, м²</label><input id="f-area" type="number" value="100"></div></div>
+  <div class="field"><label>Тип</label><select id="f-type">${(stg().unitTypes||['Офис','Склад']).map(t=>`<option>${esc(t)}</option>`).join('')}</select></div></div>
   <div class="modal-f"><button class="btn ghost" onclick="closeM()">Отмена</button><button class="btn" onclick="saveUnit()">Добавить</button></div>`);}
 async function saveUnit(){const id=val('f-id').trim().replace(/[<>"'`&]/g,''); if(!id)return alert('Укажите номер');
   if(unitOf(id))return alert('Помещение с номером '+id+' уже существует');
-  const u={id,building:val('f-building'),floor:+val('f-floor'),area:+val('f-area'),type:val('f-type'),tenant:null,status:'free',ownership:'own',owner:null,
+  const u={id,name:val('f-name').trim(),building:val('f-building'),floor:+val('f-floor'),area:+val('f-area'),type:val('f-type'),tenant:null,status:'free',ownership:'own',owner:null,
     responsible:{name:ME.full_name,role:ME.position,phone:ME.phone,email:ME.email},
     documents:[{name:'План_помещения_'+id+'.pdf',type:'plan',kind:'Поэтажный план'},{name:'Выписка_ЕГРН_'+id+'.pdf',type:'ownership',kind:'Право собственности'}]};
   DB.units.push(u);closeM();await afterStateChange();}
@@ -2548,10 +2549,10 @@ async function saveDoc(type,id){const e=docEntity(type,id);if(!e)return;if(!e.do
 async function delDoc(type,id,i){const e=docEntity(type,id);if(!e||!e.documents)return;if(!confirm('Удалить документ «'+e.documents[i].name+'»?'))return;
   e.documents.splice(i,1); await saveState(); render(); reopenInfo(type,id);}
 function unitInfo(id){const u=unitOf(id);const c=DB.contracts.find(c=>c.unit===id);const t=u.tenant?tenantOf(u.tenant):null;const r=u.responsible||{};
-  openM(`<div class="modal-h"><h3>Помещение ${u.id}</h3><span class="x" onclick="closeM()">×</span></div>
+  openM(`<div class="modal-h"><h3>Помещение ${esc(u.id)}${u.name?' · '+esc(u.name):''}</h3><span class="x" onclick="closeM()">×</span></div>
   <div class="modal-b">
     <div class="sec-h">Характеристики</div>
-    ${infoRow('Объект',esc(buildingOf(u.building)?.name||'—'))}${infoRow('Тип',esc(u.type))}${infoRow('Площадь',esc(u.area)+' м²')}${infoRow('Этаж',esc(u.floor))}
+    ${u.name?infoRow('Название',esc(u.name)):''}${infoRow('Объект',esc(buildingOf(u.building)?.name||'—'))}${infoRow('Тип',esc(u.type))}${infoRow('Площадь',esc(u.area)+' м²')}${infoRow('Этаж',esc(u.floor))}
     ${infoRow('Форма владения',u.ownership==='sold'?'<span class="pill amber">Продано · сторонний собственник</span>':'<span class="pill green">В собственности компании</span>')}
     ${t?infoRow('Арендатор',esc(t.name))+infoRow('Ставка',fmt(c.rate)+' ₽/м²')+infoRow('Аренда/мес',money(monthlyRent(c)))+infoRow('Договор до',fmtD(c.end)):infoRow('Статус',u.status==='reserved'?'Бронь':'Свободно / доступно к сдаче')}
     ${u.ownership==='sold'&&u.owner?`<div class="sec-h">Собственник помещения</div>${infoRow('Собственник',esc(u.owner.name))}${infoRow('ИНН / реквизиты',u.owner.inn||'—')}${infoRow('Контакт',esc(u.owner.contact||'—'))}`:''}
@@ -2565,7 +2566,9 @@ function editUnitModal(id){const u=unitOf(id);if(!u)return;const r=u.responsible
   openM(`<div class="modal-h"><h3>Редактировать помещение ${u.id}</h3><span class="x" onclick="closeM()">×</span></div>
   <div class="modal-b">
     <div class="sec-h">Характеристики</div>
-    <div class="field"><label>Номер помещения</label><input id="e-uid" value="${esc(u.id)}" placeholder="напр. 1-01"><div class="t-sub" style="margin-top:4px">При изменении номера он автоматически обновится во всех договорах, платежах, коммуналке, заявках и документах.</div></div>
+    <div class="row2"><div class="field"><label>Номер помещения</label><input id="e-uid" value="${esc(u.id)}" placeholder="напр. 1-01"></div>
+      <div class="field"><label>Название <span class="t-sub">(необязательно)</span></label><input id="e-uname" value="${esc(u.name||'')}" placeholder="Переговорная"></div></div>
+    <div class="t-sub" style="margin:-4px 0 6px">При изменении номера он автоматически обновится во всех договорах, платежах, коммуналке, заявках и документах.</div>
     <div class="row2"><div class="field"><label>Объект</label><select id="e-building">${buildingsList().map(b=>`<option value="${b.id}"${u.building===b.id?' selected':''}>${esc(b.name)}</option>`).join('')}</select></div>
       <div class="field"><label>Тип</label><select id="e-type">${['Офис','Ритейл','Кафе','Коворкинг','Склад'].map(x=>`<option${u.type===x?' selected':''}>${x}</option>`).join('')}</select></div></div>
     <div class="row2"><div class="field"><label>Этаж</label><input id="e-floor" type="number" value="${u.floor}"></div><div class="field"><label>Площадь, м²</label><input id="e-area" type="number" value="${u.area}"></div></div>
@@ -2599,6 +2602,7 @@ async function saveUnitEdit(id){const u=unitOf(id);if(!u)return;
     }catch{}
     id=newId;
   }
+  u.name=val('e-uname').trim();
   u.building=val('e-building'); u.type=val('e-type'); u.floor=+val('e-floor'); u.area=+val('e-area');
   u.responsible={name:val('e-rname'),role:val('e-rrole'),phone:val('e-rphone'),email:val('e-remail')};
   u.ownership=val('e-own');
