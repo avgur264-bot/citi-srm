@@ -148,6 +148,8 @@ function ensureState(){
   if(!Array.isArray(S.payMethodsExtra)) S.payMethodsExtra=[];
   if(!S.notify || typeof S.notify!=='object') S.notify={};
   if(!S.notify.telegram || typeof S.notify.telegram!=='object') S.notify.telegram={enabled:false,token:'',chatId:'',time:'08:00'};
+  // автоматизации (по умолчанию ВЫКЛ — ничего не делают «сюрпризом»)
+  if(!S.autoRent || typeof S.autoRent!=='object') S.autoRent={enabled:false,accrualDay:1,dueDay:5};
 }
 /* ---- брендинг и модули из настроек клиента ---- */
 const isAdmin = ()=> ME && (ME.role==='admin'||ME.role==='owner');
@@ -243,7 +245,7 @@ async function logout(){ try{await api('/api/auth/logout','POST');}catch{} stopP
    APP SHELL
    ============================================================ */
 const NAV=[
-  {group:'Обзор',items:[['dashboard','▦','Дашборд'],['alerts','🔔','Центр сроков'],['help','❓','Помощь']]},
+  {group:'Обзор',items:[['today','☀️','Сегодня'],['dashboard','▦','Дашборд'],['alerts','🔔','Центр сроков'],['help','❓','Помощь']]},
   {group:'Управление',items:[['objects','🏢','Объекты и занятость'],['tenants','👥','Арендаторы'],['contracts','📄','Договоры']]},
   {group:'Финансы',items:[['payments','💳','Платежи аренды'],['utilities','⚡','Коммуналка и расходы'],['salaries','💼','Зарплата (ФОТ)'],['budget','📈','Бюджет и долги']]},
   {group:'Операции',items:[['tasks','✓','Задачи'],['requests','🛠','Заявки'],['upkeep','🧰','Плановое ТО'],['ads','📣','Реклама'],['employees','🧑‍💼','Сотрудники'],['reports','📊','Отчёты']]},
@@ -252,7 +254,7 @@ const NAV=[
 ];
 // модули, которые можно включать/выключать в настройках (без dashboard и settings)
 const TOGGLEABLE=[['objects','Объекты и занятость'],['tenants','Арендаторы'],['contracts','Договоры'],['payments','Платежи аренды'],['utilities','Коммуналка и расходы'],['salaries','Зарплата (ФОТ)'],['budget','Бюджет и долги'],['tasks','Задачи'],['requests','Заявки на обслуживание'],['upkeep','Плановое ТО'],['ads','Реклама и вывески'],['employees','Сотрудники'],['reports','Отчёты'],['integrations','Синхронизация']];
-const navVisible = k => (k==='settings'||k==='audit') ? isAdmin() : (k==='alerts'||k==='help') ? true : (canView(k) && modOn(k));
+const navVisible = k => (k==='settings'||k==='audit') ? isAdmin() : (k==='today'||k==='alerts'||k==='help') ? true : (canView(k) && modOn(k));
 const PAGE_TITLES={dashboard:'Дашборд',objects:'Объекты',tenants:'Арендаторы',contracts:'Договоры',payments:'Платежи',utilities:'Коммуналка',tasks:'Задачи',employees:'Сотрудники',reports:'Отчёты'};
 
 function showApp(){
@@ -296,11 +298,12 @@ function renderScopeSelector(){
   </select>`;
 }
 
-const PAGES={dashboard,alerts,help,objects,tenants,contracts,payments,utilities,salaries,tasks,requests,upkeep,ads,budget,employees,reports,integrations,audit:auditPage,settings:settingsPage};
+const PAGES={today:todayPage,dashboard,alerts,help,objects,tenants,contracts,payments,utilities,salaries,tasks,requests,upkeep,ads,budget,employees,reports,integrations,audit:auditPage,settings:settingsPage};
 function render(){ updateBadges(); const m=document.getElementById('main'); if(!m)return; m.innerHTML=''; (PAGES[current]||dashboard)(); }
 function el(html){ const d=document.createElement('div'); d.className='page'; d.innerHTML=html; document.getElementById('main').appendChild(d); return d; }
 function head(title,sub,actions=''){ return `<div class="topbar"><div style="display:flex;align-items:center;gap:8px"><h1>${title}</h1>${PAGE_HELP[current]?`<button class="bell" style="width:30px;height:30px;font-size:15px" title="Для чего этот раздел" onclick="pageHelp()">ℹ️</button>`:''}</div><div class="sub" style="width:100%">${sub}</div><div class="spacer"></div>${actions}${bellHTML()}</div>`; }
 const PAGE_HELP={
+  today:{t:'Сегодня',d:'Простой экран действий на день: что нужно сделать прямо сейчас — просроченные оплаты, истекающие договоры, просроченное ТО, новые заявки и задачи на сегодня. У каждой строки кнопка действия в один клик (оплачено, продлить, выполнено, в работу, завершить). Это упрощённый вид того же, что показывают Центр сроков и колокольчик 🔔.'},
   dashboard:{t:'Дашборд',d:'Главный экран с ключевыми показателями бизнеса. Настраивается под вас: «⚙ Настроить» — добавить/убрать любые из 17 блоков; перетаскивайте блоки мышью, чтобы расставить по-своему. Настройка сохраняется лично для вашего аккаунта.'},
   alerts:{t:'Центр сроков',d:'Собирает в одном месте всё, что требует внимания: просроченные платежи, истекающие договоры, плановое ТО, срочные заявки и задачи. Клик по событию открывает нужный раздел. Эти же события показывает колокольчик 🔔.'},
   objects:{t:'Объекты и занятость',d:'Портфель ваших зданий и помещений. Здесь добавляют объекты и помещения, заносят арендаторов, видят заполняемость и статусы (занято / резерв / свободно / долг). Переключатель «Все объекты» вверху фильтрует все разделы системы.'},
@@ -450,7 +453,7 @@ async function silentRefresh(){
   try{
     const b=await api('/api/bootstrap'); DB=b.state; TASKS=b.tasks; USERS=b.users; ROLES=b.roles; ensureState(); applyRoleOverrides(); resetAuditBaseline();
     updateBadges();
-    if(['dashboard','tasks','employees','payments','salaries','integrations'].includes(current)) render();
+    if(['today','dashboard','tasks','employees','payments','salaries','integrations'].includes(current)) render();
     else { const bell=document.querySelector('.topbar .bell'); /* обновим только бейдж колокольчика */ }
   }catch{}
 }
@@ -778,9 +781,21 @@ function paymentRow(p){const c=contractOf(p.contract);const t=tenantOf(c.tenant)
   return `<tr><td class="t-strong">${esc(t.name)}</td><td>${c.unit}</td><td>${p.period}</td><td>${money(p.amount)}</td>
     <td>${p.paid?money(p.paid):'—'}</td><td class="t-sub">${fmtD(p.due)}</td><td>${payPill(p)}</td>
     <td style="text-align:right;white-space:nowrap">
-      <button class="btn ghost sm" title="Открыть / история" onclick="payModal('${p.id}')">${bal>0?'Оплата':'⋯'}</button>
+      ${bal>0&&canEdit('payments')?`<button class="btn sm" title="Отметить полностью оплаченным (сегодня, безналичный)" onclick="quickPay('${p.id}')">✓ Оплачено</button> `:''}
+      <button class="btn ghost sm" title="Открыть / история / частичная оплата" onclick="payModal('${p.id}')">${bal>0?'Оплата':'⋯'}</button>
       ${p.paid>0?`<button class="btn ghost sm" title="Печать квитанции" onclick="printReceipt('${p.id}')">🖶</button>`:''}
     </td></tr>`;
+}
+// B2. Оплата в один тап: полная оплата, способ по умолчанию (безналичный), дата = сегодня.
+async function quickPay(id){
+  const p=DB.payments.find(x=>x.id===id); if(!p) return;
+  const rem=p.amount-p.paid; if(rem<=0) return;
+  if(!p.transactions||!p.transactions.length){ p.transactions = p.paid>0?[{amount:p.paid,date:p.paidDate||p.due,method:'bank'}]:[]; }
+  const today=TODAY.toISOString().slice(0,10);
+  p.transactions.push({amount:rem,date:today,method:'bank'});
+  p.paid=p.amount; p.paidDate=today; p.status='paid';
+  if(document.getElementById('modalBg')?.classList.contains('show')) closeM();
+  await afterStateChange();
 }
 function payPill(p){const m={paid:['green','Оплачен'],overdue:['red','Просрочен'],partial:['amber','Частично'],pending:['blue','Ожидание']};const x=m[p.status]||['gray','—'];return `<span class="pill ${x[0]}">${x[1]}</span>`;}
 function payModal(id){const p=DB.payments.find(x=>x.id===id);if(!p)return;const c=contractOf(p.contract);const t=tenantOf(c.tenant);const rem=p.amount-p.paid;const tx=pTx(p);const editable=rem>0&&canEdit('payments');
@@ -1221,24 +1236,24 @@ function buildAlerts(){
   // Просроченные платежи
   DB.payments.filter(p=>p.amount-p.paid>0 && daysLeft(p.due)<0).forEach(p=>{ const b=paymentBuilding(p); if(!inS(b))return;
     const c=contractOf(p.contract); const t=c&&tenantOf(c.tenant); const dl=daysLeft(p.due);
-    A.push({level:'danger',icon:'💳',cat:'Платежи',title:`Просрочка оплаты: ${t?t.name:('договор '+p.contract)}`,sub:`${money(p.amount-p.paid)} · просрочено ${-dl} дн`,page:'payments',sort:dl}); });
+    A.push({level:'danger',icon:'💳',cat:'Платежи',id:p.id,title:`Просрочка оплаты: ${t?t.name:('договор '+p.contract)}`,sub:`${money(p.amount-p.paid)} · просрочено ${-dl} дн`,page:'payments',sort:dl}); });
   // Договоры на исходе (≤60 дн) или истёкшие
   DB.contracts.forEach(c=>{ if(c.status==='ended')return; const u=unitOf(c.unit); const b=u&&u.building; if(!inS(b))return;
     const dl=c.end?daysLeft(c.end):9999; if(dl>60)return; const t=tenantOf(c.tenant);
-    A.push({level:dl<0?'danger':dl<=30?'warn':'info',icon:'📄',cat:'Договоры',title:`Договор ${dl<0?'истёк':'истекает'}: ${t?t.name:c.id}`,sub:`${esc(c.unit)} · ${c.end?fmtD(c.end):''} · ${dueLabel(c.end)}`,page:'contracts',sort:dl}); });
+    A.push({level:dl<0?'danger':dl<=30?'warn':'info',icon:'📄',cat:'Договоры',id:c.id,title:`Договор ${dl<0?'истёк':'истекает'}: ${t?t.name:c.id}`,sub:`${esc(c.unit)} · ${c.end?fmtD(c.end):''} · ${dueLabel(c.end)}`,page:'contracts',sort:dl}); });
   // Плановое ТО просрочено/скоро (≤30 дн)
   (DB.equipment||[]).forEach(e=>{ if(!inS(e.building))return; const dl=daysLeft(e.nextService); if(e.nextService==null||dl===9999||dl>30)return;
-    A.push({level:dl<0?'danger':'warn',icon:'🧰',cat:'Плановое ТО',title:`ТО ${dl<0?'просрочено':'скоро'}: ${e.name}`,sub:`${e.nextService?fmtD(e.nextService):''} · ${dueLabel(e.nextService)}`,page:'upkeep',sort:dl}); });
+    A.push({level:dl<0?'danger':'warn',icon:'🧰',cat:'Плановое ТО',id:e.id,title:`ТО ${dl<0?'просрочено':'скоро'}: ${e.name}`,sub:`${e.nextService?fmtD(e.nextService):''} · ${dueLabel(e.nextService)}`,page:'upkeep',sort:dl}); });
   // Заявки на обслуживание срочные (≤3 дн или просрочено)
   (DB.requests||[]).filter(r=>r.status==='new'||r.status==='in_progress').forEach(r=>{ if(!inS(r.building))return; const dl=daysLeft(r.due); if(dl>3)return;
-    A.push({level:dl<0?'danger':'warn',icon:'🛠',cat:'Заявки',title:`Заявка: ${r.title}`,sub:`${esc(r.category||'')} · ${dueLabel(r.due)}`,page:'requests',sort:dl}); });
+    A.push({level:dl<0?'danger':'warn',icon:'🛠',cat:'Заявки',id:r.id,reqStatus:r.status,title:`Заявка: ${r.title}`,sub:`${esc(r.category||'')} · ${dueLabel(r.due)}`,page:'requests',sort:dl}); });
   // Задачи срочные
   (TASKS||[]).filter(t=>t.status!=='done' && daysLeft(t.due)<=3).forEach(t=>{ const dl=daysLeft(t.due);
-    A.push({level:dl<0?'danger':'warn',icon:'✓',cat:'Задачи',title:t.title,sub:`${esc(t.unit||'')} · ${dueLabel(t.due)}`,page:'tasks',sort:dl}); });
+    A.push({level:dl<0?'danger':'warn',icon:'✓',cat:'Задачи',id:t.id,taskStatus:t.status,title:t.title,sub:`${esc(t.unit||'')} · ${dueLabel(t.due)}`,page:'tasks',sort:dl}); });
   // Разрешения на вывески истекают/истекли (≤60 дн)
   (DB.signage||[]).forEach(s=>{ if(!inS(s.building))return; const dl=s.expiry?daysLeft(s.expiry):9999; if(dl>60)return;
     const who=s.owner==='self'?'собственника':((s.tenant&&tenantOf(s.tenant))?tenantOf(s.tenant).name:'арендатора');
-    A.push({level:dl<0?'danger':dl<=30?'warn':'info',icon:'📣',cat:'Реклама',title:`Разрешение ${dl<0?'истекло':'истекает'}: ${esc(s.kind||'вывеска')} (${esc(who)})`,sub:`${esc(s.permitNo||'')} · ${s.expiry?fmtD(s.expiry):''} · ${dueLabel(s.expiry)}`,page:'ads',sort:dl}); });
+    A.push({level:dl<0?'danger':dl<=30?'warn':'info',icon:'📣',cat:'Реклама',id:s.id,title:`Разрешение ${dl<0?'истекло':'истекает'}: ${esc(s.kind||'вывеска')} (${esc(who)})`,sub:`${esc(s.permitNo||'')} · ${s.expiry?fmtD(s.expiry):''} · ${dueLabel(s.expiry)}`,page:'ads',sort:dl}); });
   return A.sort((x,y)=>x.sort-y.sort);
 }
 const alertColor=l=>l==='danger'?'var(--red)':l==='warn'?'var(--amber)':'var(--accent2)';
@@ -1261,6 +1276,73 @@ function alerts(){
         <span class="t-sub">→</span></div>`).join('')}</div>`;
   }).join('') : '<div class="card"><div class="empty" style="padding:30px">Срочных событий нет — всё под контролем 🎉</div></div>'}`);
 }
+
+/* ============================================================
+   ЭКРАН «СЕГОДНЯ» — простые действия в один клик (надстройка над buildAlerts)
+   ============================================================ */
+function todayPage(){
+  const all=buildAlerts();
+  const groups=[
+    {key:'Деньги',icon:'💰',cats:['Платежи']},
+    {key:'Договоры',icon:'📄',cats:['Договоры']},
+    {key:'Обслуживание',icon:'🛠',cats:['Плановое ТО','Заявки']},
+    {key:'Задачи',icon:'✓',cats:['Задачи']},
+    {key:'Прочее',icon:'📣',cats:['Реклама']},
+  ];
+  const blocks=groups.map(g=>{ const items=all.filter(a=>g.cats.includes(a.cat)); if(!items.length) return '';
+    return `<div class="card" style="margin-bottom:14px"><div class="sec-h">${g.icon} ${g.key} · ${items.length}</div>${items.map(todayRow).join('')}</div>`;
+  }).filter(Boolean).join('');
+  el(head('Сегодня', `Что нужно сделать · ${scopeSub()} · ${TODAY.toLocaleDateString('ru-RU',{day:'numeric',month:'long'})}`,'')+
+   (all.length? blocks : `<div class="card"><div class="empty" style="padding:40px;font-size:16px">На сегодня всё сделано 🎉<div class="t-sub" style="margin-top:8px">Срочных дел нет. Загляните в Дашборд или Центр сроков.</div></div></div>`));
+}
+function todayRow(a){
+  return `<div class="doc" style="border-left:3px solid ${alertColor(a.level)};border-radius:8px;padding:10px 12px;margin-bottom:8px;align-items:center;gap:10px">
+    <div class="di" style="font-size:18px">${a.icon}</div>
+    <div style="flex:1;min-width:0;cursor:pointer" onclick="gotoPage('${a.page}')"><div class="t-strong">${esc(a.title)}</div><div class="t-sub">${a.cat} · ${a.sub}</div></div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end">${todayActions(a)}</div></div>`;
+}
+function todayActions(a){
+  const id=a.id, b=[];
+  if(a.cat==='Платежи'){ if(canEdit('payments')){ b.push(`<button class="btn sm" title="Полная оплата сегодня" onclick="quickPay('${id}')">✓ Оплачено</button>`); b.push(`<button class="btn ghost sm" onclick="remindDebtor('${id}')">📨 Напомнить</button>`); } }
+  else if(a.cat==='Договоры'){ if(canEdit('contracts')) b.push(`<button class="btn sm" onclick="renewModal('${id}')">Продлить</button>`); }
+  else if(a.cat==='Плановое ТО'){ if(canEdit('upkeep')) b.push(`<button class="btn sm" onclick="markServiced('${id}')">✅ ТО выполнено</button>`); }
+  else if(a.cat==='Заявки'){ if(canEdit('requests')) b.push(`<button class="btn sm" onclick="advanceRequest('${id}')">${a.reqStatus==='new'?'→ В работу':'✓ Выполнено'}</button>`); }
+  else if(a.cat==='Задачи'){ if(canEdit('tasks')) b.push(`<button class="btn sm" onclick="advanceTask(${id})">${a.taskStatus==='open'?'→ В работу':'✓ Завершить'}</button>`); }
+  if(!b.length) b.push(`<button class="btn ghost sm" onclick="gotoPage('${a.page}')">Открыть →</button>`);
+  return b.join('');
+}
+// Продление договора (из «Сегодня»): новая дата окончания + опц. индексация ставки.
+function renewModal(id){ const c=contractOf(id); if(!c)return; const t=tenantOf(c.tenant);
+  const defEnd=addMonths(c.end||TODAY.toISOString().slice(0,10),12);
+  openM(`<div class="modal-h"><h3>Продление договора</h3><span class="x" onclick="closeM()">×</span></div>
+  <div class="modal-b">
+    ${infoRow('Договор',esc((c.id||'').toUpperCase()))}${t?infoRow('Арендатор',esc(t.name)):''}${infoRow('Помещение',esc(c.unit))}
+    ${infoRow('Текущая ставка',money(c.rate)+'/м²')}${infoRow('Окончание сейчас',c.end?fmtD(c.end):'—')}
+    <div class="field" style="margin-top:10px"><label>Новая дата окончания</label><input id="rn-end" type="date" value="${defEnd}"></div>
+    ${c.indexation?`<label style="display:flex;align-items:center;gap:9px;cursor:pointer"><input type="checkbox" id="rn-idx" checked> Применить индексацию ${c.indexation}%/год к ставке (${money(c.rate)} → ${money(Math.round(c.rate*(1+c.indexation/100)))})</label>`:''}
+  </div>
+  <div class="modal-f"><button class="btn ghost" onclick="closeM()">Отмена</button><button class="btn" onclick="saveRenew('${id}')">Продлить</button></div>`);
+}
+async function saveRenew(id){ const c=contractOf(id); if(!c)return; const end=val('rn-end'); if(!end) return alert('Укажите дату окончания');
+  c.end=end; c.status='active';
+  if(document.getElementById('rn-idx')?.checked && c.indexation) c.rate=Math.round(c.rate*(1+c.indexation/100));
+  closeM(); await afterStateChange();
+}
+// Напоминание должнику: готовый текст (копировать / письмо). Полная авторассылка — отдельная автоматизация.
+function remindDebtor(id){ const p=DB.payments.find(x=>x.id===id); if(!p)return;
+  const c=contractOf(p.contract); const t=c&&tenantOf(c.tenant); const u=c&&unitOf(c.unit); const b=u&&buildingOf(u.building);
+  const rem=p.amount-p.paid; const dl=daysLeft(p.due);
+  const text=`Уважаемый арендатор${t?' ('+t.name+')':''}!\nНапоминаем о задолженности по аренде.\nОбъект: ${b?b.name:'—'}${c?', помещение '+c.unit:''}\nПериод: ${p.period}\nК оплате: ${money(rem)}\nСрок оплаты: ${fmtD(p.due)}${dl<0?' (просрочено '+(-dl)+' дн)':''}\nПросим погасить задолженность в ближайшее время. Спасибо!`;
+  openM(`<div class="modal-h"><h3>📨 Напоминание должнику</h3><span class="x" onclick="closeM()">×</span></div>
+  <div class="modal-b">
+    ${t?infoRow('Арендатор',esc(t.name)):''}${t&&t.phone?infoRow('Телефон',esc(t.phone)):''}${t&&t.email?infoRow('Email',esc(t.email)):''}
+    <div class="field" style="margin-top:10px"><label>Текст напоминания</label><textarea id="rem-text" rows="9" class="search" style="width:100%;resize:vertical;font-family:inherit">${esc(text)}</textarea></div>
+    <div class="t-sub">Скопируйте и отправьте арендатору удобным способом. Контакты видны согласно правам доступа.</div>
+  </div>
+  <div class="modal-f"><button class="btn ghost" onclick="copyRemind()">📋 Скопировать</button>${t&&t.email?`<a class="btn" href="mailto:${esc(t.email)}?subject=${encodeURIComponent('Напоминание об оплате аренды')}&body=${encodeURIComponent(text)}">✉ Письмо</a>`:''}<button class="btn ghost" onclick="closeM()">Закрыть</button></div>`);
+}
+function copyRemind(){ const t=document.getElementById('rem-text'); if(!t)return; t.select();
+  try{ navigator.clipboard.writeText(t.value); }catch{ try{document.execCommand('copy');}catch{} } alert('Текст скопирован'); }
 
 /* ============================================================
    РЕКЛАМА: объявления (ЦИАН/Авито) + разрешения на вывески
@@ -1629,6 +1711,15 @@ function settingsPage(){
       <div class="field" style="display:flex;align-items:flex-end"><button class="btn ghost" onclick="testNotify()">📨 Сохранить и отправить тест сейчас</button></div></div>
     <div class="t-sub" style="margin-top:8px">Как настроить: 1) в Telegram напишите <b>@BotFather</b> → /newbot → получите <b>токен</b>. 2) Напишите своему боту любое сообщение (или добавьте его в группу). 3) Узнайте <b>Chat ID</b> через бота <b>@userinfobot</b> (для себя) или @getidsbot (для группы). 4) Вставьте сюда и нажмите «Отправить тест».</div>
   </div>
+  <div class="card" style="margin-top:16px">
+    <div class="sec-h">⚙ Автоматизация</div>
+    <div class="t-sub" style="margin-bottom:10px">Чтобы убрать ручную рутину. По умолчанию выключено — включайте по необходимости. Работает идемпотентно: повторный запуск не создаёт дублей.</div>
+    <label style="display:flex;align-items:center;gap:10px;padding:7px 0;cursor:pointer;border-bottom:1px solid var(--line)"><input type="checkbox" id="s-autorent" ${s.autoRent?.enabled?'checked':''}> <span><b>Автоначисление аренды по графику</b><div class="t-sub">Каждый месяц система сама создаёт начисления по всем активным договорам (ставка × площадь). Ручное «+ Начисление» продолжает работать.</div></span></label>
+    <div class="row2" style="margin-top:10px">
+      <div class="field"><label>День начисления (число месяца)</label><input id="s-autorent-day" type="number" min="1" max="28" value="${Math.min(28,Math.max(1,+s.autoRent?.accrualDay||1))}"></div>
+      <div class="field"><label>День срока оплаты (число месяца)</label><input id="s-autorent-due" type="number" min="1" max="28" value="${Math.min(28,Math.max(1,+s.autoRent?.dueDay||5))}"></div>
+    </div>
+  </div>
   <div style="margin-top:16px;display:flex;gap:10px"><button class="btn" onclick="saveSettings()">💾 Сохранить настройки</button>
     <span class="t-sub" style="align-self:center">Изменения видят все пользователи этого клиента.</span></div>`);
 }
@@ -1678,6 +1769,7 @@ async function saveSettings(){
   S.unitTypes=lines('s-unittypes');
   S.payMethodsExtra=lines('s-paymethods');
   if(document.getElementById('s-tg-on')) S.notify={telegram:{enabled:document.getElementById('s-tg-on').checked,instant:!!document.getElementById('s-tg-instant')?.checked,token:val('s-tg-token').trim(),chatId:val('s-tg-chat').trim(),time:val('s-tg-time')||'08:00'}};
+  if(document.getElementById('s-autorent')) S.autoRent={enabled:document.getElementById('s-autorent').checked,accrualDay:Math.min(28,Math.max(1,+val('s-autorent-day')||1)),dueDay:Math.min(28,Math.max(1,+val('s-autorent-due')||5))};
   await afterStateChange();
   applyAccent(); showApp();
 }

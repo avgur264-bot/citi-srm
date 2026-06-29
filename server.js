@@ -123,15 +123,65 @@ async function sendTelegram(token, chatId, text){
 function notifyCfg(){ try{ const st=JSON.parse(db.prepare(`SELECT json FROM state WHERE key='main'`).get().json); return (st.settings&&st.settings.notify&&st.settings.notify.telegram)||null; }catch{ return null; } }
 // мгновенное оповещение (если включено instant) — не блокирует ответ
 function notifyInstant(text){ const tg=notifyCfg(); if(tg&&tg.instant&&tg.token&&tg.chatId) sendTelegram(tg.token, tg.chatId, text); }
-// планировщик: раз в минуту проверяем время отправки (раз в день)
+
+// ---------- автоматизации (ежедневная проверка, серверная запись состояния) ----------
+function loadMain(){ return JSON.parse(db.prepare(`SELECT json FROM state WHERE key='main'`).get().json); }
+function saveMain(st, by){ db.prepare(`UPDATE state SET json=?, updated_at=?, updated_by=? WHERE key='main'`).run(JSON.stringify(st), new Date().toISOString(), by||'system'); }
+const pad2 = n => String(n).padStart(2,'0');
+// A1. Автоначисление аренды: в день начисления создаём начисления по активным договорам за текущий период.
+// Идемпотентно (ключ договор+период) — повторный прогон и ручное начисление не плодят дублей.
+function autoAccrueRent(st, today){
+  const cfg = st.settings && st.settings.autoRent;
+  if(!cfg || !cfg.enabled) return {created:0};
+  const accrualDay = Math.min(28, Math.max(1, +cfg.accrualDay || 1));
+  if(today.getDate() !== accrualDay) return {created:0};
+  const period = today.getFullYear()+'-'+pad2(today.getMonth()+1);
+  const dueDay = Math.min(28, Math.max(1, +cfg.dueDay || 5));
+  const due = period+'-'+pad2(dueDay);
+  const units = Object.fromEntries((st.units||[]).map(u=>[u.id,u]));
+  const has = new Set((st.payments||[]).filter(p=>p.period===period).map(p=>p.contract));
+  let created=0;
+  (st.contracts||[]).forEach(c=>{
+    if(c.status==='ended') return;
+    if(c.end && new Date(c.end) < new Date(period+'-01')) return;   // договор уже завершился
+    if(has.has(c.id)) return;                                       // начисление за период уже есть
+    const u = units[c.unit]; if(!u) return;
+    const amount = Math.round((c.rate||0)*(u.area||0)); if(amount<=0) return;
+    st.payments.push({ id:'p'+Date.now()+'_'+c.id, contract:c.id, period, amount, due,
+      paid:0, paidDate:null, status:(new Date(due)<today?'overdue':'pending'), auto:true });
+    has.add(c.id); created++;
+  });
+  return {created, period};
+}
+let _lastAuto=null;
+function runDailyAutomations(){
+  const today=new Date(); const dstr=today.toISOString().slice(0,10);
+  if(_lastAuto===dstr) return; _lastAuto=dstr;
+  try{
+    const st=loadMain(); const entries=[];
+    const rent=autoAccrueRent(st, today);
+    if(rent.created>0) entries.push(`Автоначисление аренды за ${rent.period}: ${rent.created} начисл.`);
+    if(entries.length){
+      st.audit = Array.isArray(st.audit)?st.audit:[];
+      st.audit.unshift({ts:today.toISOString(), user:'Система', role:'Автоматизация', entries});
+      st.audit=st.audit.slice(0,200);
+      saveMain(st,'auto');
+      const tg=notifyCfg(); if(tg&&tg.instant&&tg.token&&tg.chatId) sendTelegram(tg.token, tg.chatId, '⚙ Автоматизация СИТИ SRM\n'+entries.join('\n'));
+    }
+  }catch(e){ console.error('automation', e.message); }
+}
+
+// планировщик: раз в минуту проверяем время отправки (раз в день) + ежедневные автоматизации
 let _lastDigest=null;
 setInterval(async ()=>{
+  runDailyAutomations();
   const tg=notifyCfg();
   if(!tg||!tg.enabled||!tg.token||!tg.chatId) return;
   const now=new Date(); const hhmm=String(now.getHours()).padStart(2,'0')+':'+String(now.getMinutes()).padStart(2,'0');
   const today=now.toISOString().slice(0,10);
   if(hhmm===(tg.time||'08:00') && _lastDigest!==today){ _lastDigest=today; await sendTelegram(tg.token, tg.chatId, buildDigest()); }
 }, 60*1000);
+setTimeout(runDailyAutomations, 5000); // прогон вскоре после старта
 // роли, которые можно выбрать при самостоятельной регистрации (без привилегированных)
 const SELF_ROLES = ['leasing','accountant','maintenance'];
 // Самостоятельная регистрация по умолчанию ВЫКЛЮЧЕНА (безопасность боевого режима).
