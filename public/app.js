@@ -150,6 +150,9 @@ function ensureState(){
   if(!S.notify.telegram || typeof S.notify.telegram!=='object') S.notify.telegram={enabled:false,token:'',chatId:'',time:'08:00'};
   // автоматизации (по умолчанию ВЫКЛ — ничего не делают «сюрпризом»)
   if(!S.autoRent || typeof S.autoRent!=='object') S.autoRent={enabled:false,accrualDay:1,dueDay:5};
+  if(!S.autoRemind || typeof S.autoRemind!=='object') S.autoRemind={enabled:false,everyDays:7};
+  // тарифы для расчёта коммуналки по показаниям счётчиков
+  if(!S.tariffs || typeof S.tariffs!=='object') S.tariffs={electricity:6.5,water:45,heating:2200};
 }
 /* ---- брендинг и модули из настроек клиента ---- */
 const isAdmin = ()=> ME && (ME.role==='admin'||ME.role==='owner');
@@ -283,6 +286,7 @@ function showApp(){
     <div class="scrim" id="scrim" onclick="closeNav()"></div>
     <div class="mtopbar"><span class="burger" onclick="toggleNav()">☰</span><div class="logo">${brandLogoHtml()}</div><b>${esc(stg().company)}</b></div>
     <main class="main" id="main"></main>
+    ${quickAddItems().length?`<div class="fab-add" title="Быстро добавить" onclick="quickAddMenu()">+</div>`:''}
   </div>`;
   document.querySelectorAll('.nav-item[data-page]').forEach(n=>n.onclick=()=>{ current=n.dataset.page; markActive(); render(); closeNav(); });
   updateThemeBtns(); renderScopeSelector(); markActive(); render(); startPolling();
@@ -301,7 +305,51 @@ function renderScopeSelector(){
 const PAGES={today:todayPage,dashboard,alerts,help,objects,tenants,contracts,payments,utilities,salaries,tasks,requests,upkeep,ads,budget,employees,reports,integrations,audit:auditPage,settings:settingsPage};
 function render(){ updateBadges(); const m=document.getElementById('main'); if(!m)return; m.innerHTML=''; (PAGES[current]||dashboard)(); }
 function el(html){ const d=document.createElement('div'); d.className='page'; d.innerHTML=html; document.getElementById('main').appendChild(d); return d; }
-function head(title,sub,actions=''){ return `<div class="topbar"><div style="display:flex;align-items:center;gap:8px"><h1>${title}</h1>${PAGE_HELP[current]?`<button class="bell" style="width:30px;height:30px;font-size:15px" title="Для чего этот раздел" onclick="pageHelp()">ℹ️</button>`:''}</div><div class="sub" style="width:100%">${sub}</div><div class="spacer"></div>${actions}${bellHTML()}</div>`; }
+function head(title,sub,actions=''){ return `<div class="topbar"><div style="display:flex;align-items:center;gap:8px"><h1>${title}</h1>${PAGE_HELP[current]?`<button class="bell" style="width:30px;height:30px;font-size:15px" title="Для чего этот раздел" onclick="pageHelp()">ℹ️</button>`:''}</div><div class="sub" style="width:100%">${sub}</div><div class="spacer"></div>${actions}${searchHTML()}${bellHTML()}</div>`; }
+/* ---------- глобальный поиск (B3) ---------- */
+function searchHTML(){ return `<div class="gsearch"><input class="search" id="gsearch" placeholder="🔍 Поиск…" style="width:180px;max-width:42vw" oninput="runSearch(this.value)" onfocus="runSearch(this.value)"><div class="gsearch-res" id="gsearchRes"></div></div>`; }
+function runSearch(q){
+  const box=document.getElementById('gsearchRes'); if(!box) return;
+  q=(q||'').trim().toLowerCase();
+  if(q.length<2){ box.classList.remove('show'); box.innerHTML=''; return; }
+  const res=[]; const add=(icon,title,sub,go)=>res.push({icon,title,sub,go});
+  // арендаторы
+  if(canView('tenants')) sTenants().filter(t=>(t.name||'').toLowerCase().includes(q)||(t.inn||'').includes(q)||(t.contact||'').toLowerCase().includes(q))
+    .slice(0,6).forEach(t=>add('👥',t.name,`Арендатор · ИНН ${esc(t.inn||'—')}`,`tenantInfo('${t.id}')`));
+  // помещения
+  if(canView('objects')) sUnits().filter(u=>(u.id||'').toLowerCase().includes(q)||(u.type||'').toLowerCase().includes(q))
+    .slice(0,6).forEach(u=>add('🏢',`Помещение ${u.id}`,`${esc(u.type||'')} · ${u.area} м²`,`unitInfo('${esc(u.id)}')`));
+  // договоры
+  if(canView('contracts')) sContracts().filter(c=>{const t=tenantOf(c.tenant);return (c.id||'').toLowerCase().includes(q)||(c.unit||'').toLowerCase().includes(q)||(t&&(t.name||'').toLowerCase().includes(q));})
+    .slice(0,6).forEach(c=>{const t=tenantOf(c.tenant);add('📄',`Договор ${(c.id||'').toUpperCase()}`,`${esc(t?t.name:'')} · ${esc(c.unit)}`,`contractInfo('${c.id}')`);});
+  // платежи
+  if(canView('payments')) sPayments().filter(p=>{const c=contractOf(p.contract);const t=c&&tenantOf(c.tenant);return (p.period||'').includes(q)||(t&&(t.name||'').toLowerCase().includes(q));})
+    .slice(0,6).forEach(p=>{const c=contractOf(p.contract);const t=c&&tenantOf(c.tenant);add('💳',`Платёж ${p.period}`,`${esc(t?t.name:'')} · ${money(p.amount)} · ${p.status}`,`payModal('${p.id}')`);});
+  box.innerHTML = res.length
+    ? res.slice(0,20).map(r=>`<div class="gi" onclick="searchGo(${JSON.stringify(r.go).replace(/"/g,'&quot;')})"><span style="font-size:17px">${r.icon}</span><div style="flex:1;min-width:0"><div class="t-strong">${esc(r.title)}</div><div class="t-sub">${r.sub}</div></div></div>`).join('')
+    : `<div class="gi"><div class="t-sub">Ничего не найдено по «${esc(q)}»</div></div>`;
+  box.classList.add('show');
+}
+function searchGo(call){ const box=document.getElementById('gsearchRes'); if(box){box.classList.remove('show');} const gs=document.getElementById('gsearch'); if(gs)gs.value=''; try{ (0,eval)(call); }catch(e){} }
+document.addEventListener('click',e=>{ const g=document.getElementById('gsearchRes'); if(g&&!e.target.closest('.gsearch')) g.classList.remove('show'); });
+/* ---------- быстрое добавление (B4 FAB) ---------- */
+function quickAddItems(){
+  const it=[];
+  if(canEdit('payments') && DB && DB.contracts && DB.contracts.length) it.push(['💳','Платёж','paymentModal()']);
+  if(canEdit('tasks')) it.push(['✓','Задача','taskModal()']);
+  if(canEdit('requests')) it.push(['🛠','Заявка','requestModal()']);
+  if(canEdit('tenants')) it.push(['👥','Арендатор','tenantModal()']);
+  if(canEdit('objects')) it.push(['🏢','Помещение','unitModal()']);
+  if(canEdit('contracts') && DB && DB.tenants && DB.tenants.length) it.push(['📄','Договор','contractModal()']);
+  return it;
+}
+function quickAddMenu(){
+  const items=quickAddItems(); if(!items.length) return;
+  openM(`<div class="modal-h"><h3>＋ Быстро добавить</h3><span class="x" onclick="closeM()">×</span></div>
+  <div class="modal-b"><div class="grid" style="grid-template-columns:repeat(2,1fr);gap:10px">
+    ${items.map(([ic,label,call])=>`<button class="btn ghost" style="justify-content:flex-start;padding:14px;font-size:15px" onclick="closeM();${call}"><span style="font-size:18px;margin-right:8px">${ic}</span>${label}</button>`).join('')}
+  </div></div>`);
+}
 const PAGE_HELP={
   today:{t:'Сегодня',d:'Простой экран действий на день: что нужно сделать прямо сейчас — просроченные оплаты, истекающие договоры, просроченное ТО, новые заявки и задачи на сегодня. У каждой строки кнопка действия в один клик (оплачено, продлить, выполнено, в работу, завершить). Это упрощённый вид того же, что показывают Центр сроков и колокольчик 🔔.'},
   dashboard:{t:'Дашборд',d:'Главный экран с ключевыми показателями бизнеса. Настраивается под вас: «⚙ Настроить» — добавить/убрать любые из 17 блоков; перетаскивайте блоки мышью, чтобы расставить по-своему. Настройка сохраняется лично для вашего аккаунта.'},
@@ -880,7 +928,7 @@ function utilities(){
   const ut=UT.reduce((s,u)=>s+u.electricity+u.water+u.heating,0);
   const ex=EX.reduce((s,e)=>s+e.amount,0);
   const pers=periodsList();
-  el(head('Коммуналка и расходы на содержание',`${utilPeriod?'Период: '+fmtPeriod(utilPeriod):'Все периоды'} · ${scopeSub()}`,canEdit('utilities')?`<button class="btn" onclick="expenseModal()">+ Расход</button>`:'')+
+  el(head('Коммуналка и расходы на содержание',`${utilPeriod?'Период: '+fmtPeriod(utilPeriod):'Все периоды'} · ${scopeSub()}`,canEdit('utilities')?`<button class="btn ghost" onclick="readingsModal()">📟 Показания</button> <button class="btn" onclick="expenseModal()">+ Расход</button>`:'')+
   `<div class="toolbar"><span class="t-sub">Период:</span><select class="search" style="width:auto;min-width:160px" onchange="setUtilPeriod(this.value)"><option value="">Все периоды</option>${pers.map(p=>`<option value="${p}"${utilPeriod===p?' selected':''}>${fmtPeriod(p)}</option>`).join('')}</select></div>
   <div class="grid" style="grid-template-columns:repeat(3,1fr);margin-bottom:18px">
     ${miniStat('Коммунальные начисления',money(ut),'violet')}${miniStat('Расходы на содержание',money(ex),'amber')}${miniStat('Итого затраты',money(ut+ex),'red')}
@@ -914,6 +962,58 @@ function expenseTable(list){
     </tbody></table></div>`;
 }
 function utilPill(s){const m={paid:['green','Оплачено'],invoiced:['blue','Выставлен'],overdue:['red','Просрочен'],planned:['gray','План']};const x=m[s]||['gray',s];return `<span class="pill ${x[0]}">${x[1]}</span>`;}
+/* ---------- A4. Показания счётчиков → автосумма коммуналки ---------- */
+const UTIL_KINDS=[['electricity','Электроэнергия','кВт·ч'],['water','Вода','м³'],['heating','Отопление','Гкал']];
+function lastReading(unitId,kind,beforePeriod){
+  const recs=(DB.utilities||[]).filter(u=>u.unit===unitId && u.readings && u.readings[kind] && (!beforePeriod || String(u.period)<beforePeriod))
+    .sort((a,b)=>String(b.period).localeCompare(String(a.period)));
+  return recs.length? (+recs[0].readings[kind].current||0) : 0;
+}
+function readingsModal(){
+  if(!canEdit('utilities')) return;
+  const def=SCOPE!=='all'?SCOPE:(buildingsList()[0]||{}).id;
+  const units=DB.units.filter(u=>u.building===def);
+  openM(`<div class="modal-h"><h3>📟 Внести показания счётчиков</h3><span class="x" onclick="closeM()">×</span></div>
+  <div class="modal-b">
+    <div class="row2">
+      <div class="field"><label>Объект</label><select id="rd-building" onchange="rdUnitsRefresh()">${buildingsList().map(b=>`<option value="${b.id}"${b.id===def?' selected':''}>${esc(b.name)}</option>`).join('')}</select></div>
+      <div class="field"><label>Помещение</label><select id="rd-unit" onchange="rdPrefill()">${units.map(u=>`<option value="${esc(u.id)}">${esc(u.id)} · ${esc(u.type||'')}</option>`).join('')}</select></div>
+    </div>
+    <div class="field"><label>Период</label><input id="rd-period" type="month" value="${utilPeriod||TODAY.toISOString().slice(0,7)}" onchange="rdPrefill()"></div>
+    <div class="t-sub" style="margin-bottom:8px">Предыдущее показание подставляется из прошлого периода, тариф — из настроек. Сумма = (текущее − предыдущее) × тариф. Можно переопределить.</div>
+    ${UTIL_KINDS.map(([k,label,unit])=>`<div class="card" style="background:var(--bg2);margin-bottom:8px"><div class="t-strong" style="margin-bottom:6px">${label} <span class="t-sub">(${unit})</span></div>
+      <div class="grid" style="grid-template-columns:repeat(3,1fr);gap:8px">
+        <div class="field" style="margin:0"><label>Предыдущее</label><input id="rd-${k}-prev" type="number" step="any" value="0" oninput="rdRecalc()"></div>
+        <div class="field" style="margin:0"><label>Текущее</label><input id="rd-${k}-cur" type="number" step="any" placeholder="0" oninput="rdRecalc()"></div>
+        <div class="field" style="margin:0"><label>Тариф ₽</label><input id="rd-${k}-tar" type="number" step="any" value="0" oninput="rdRecalc()"></div>
+      </div>
+      <div class="t-sub" style="margin-top:6px">К начислению: <b id="rd-${k}-sum">0 ₽</b></div></div>`).join('')}
+    <div class="sec-h" style="display:flex;justify-content:space-between"><span>Итого за период</span><b id="rd-total">0 ₽</b></div>
+  </div>
+  <div class="modal-f"><button class="btn ghost" onclick="closeM()">Отмена</button><button class="btn" onclick="saveReadings()">Создать начисление</button></div>`);
+  rdPrefill();
+}
+function rdUnitsRefresh(){ const b=val('rd-building'); const sel=document.getElementById('rd-unit');
+  sel.innerHTML=DB.units.filter(u=>u.building===b).map(u=>`<option value="${esc(u.id)}">${esc(u.id)} · ${esc(u.type||'')}</option>`).join(''); rdPrefill(); }
+function rdPrefill(){ const unit=val('rd-unit'); const period=val('rd-period'); const tariffs=(stg().tariffs)||{};
+  UTIL_KINDS.forEach(([k])=>{ const pe=document.getElementById('rd-'+k+'-prev'), te=document.getElementById('rd-'+k+'-tar');
+    if(pe) pe.value=lastReading(unit,k,period);
+    if(te) te.value=tariffs[k]||0; });
+  rdRecalc(); }
+function rdRecalc(){ let total=0;
+  UTIL_KINDS.forEach(([k])=>{ const prev=+val('rd-'+k+'-prev')||0, cur=+val('rd-'+k+'-cur')||0, tar=+val('rd-'+k+'-tar')||0;
+    const sum=Math.max(0,Math.round((cur-prev)*tar)); total+=sum;
+    const se=document.getElementById('rd-'+k+'-sum'); if(se)se.textContent=money(sum); });
+  const te=document.getElementById('rd-total'); if(te)te.textContent=money(total); }
+async function saveReadings(){ const unit=val('rd-unit'); const period=val('rd-period'); if(!unit||!period) return alert('Выберите помещение и период');
+  const readings={}, amt={};
+  UTIL_KINDS.forEach(([k])=>{ const prev=+val('rd-'+k+'-prev')||0, cur=+val('rd-'+k+'-cur')||0, tar=+val('rd-'+k+'-tar')||0;
+    readings[k]={prev,current:cur,tariff:tar}; amt[k]=Math.max(0,Math.round((cur-prev)*tar)); });
+  let u=DB.utilities.find(x=>x.unit===unit && x.period===period);
+  if(u){ u.electricity=amt.electricity; u.water=amt.water; u.heating=amt.heating; u.readings=readings; }
+  else DB.utilities.push({id:'u'+Date.now(),unit,period,electricity:amt.electricity,water:amt.water,heating:amt.heating,status:'invoiced',readings});
+  closeM(); await afterStateChange();
+}
 const EX_STATUS=[['planned','План'],['invoiced','Выставлен (счёт получен)'],['paid','Оплачено'],['overdue','Просрочен']];
 function expenseEdit(id){ const e=DB.expenses.find(x=>x.id===id); if(!e||!canEdit('utilities'))return; const b=buildingOf(e.building);
   openM(`<div class="modal-h"><h3>Расход на содержание</h3><span class="x" onclick="closeM()">×</span></div>
@@ -1719,6 +1819,17 @@ function settingsPage(){
       <div class="field"><label>День начисления (число месяца)</label><input id="s-autorent-day" type="number" min="1" max="28" value="${Math.min(28,Math.max(1,+s.autoRent?.accrualDay||1))}"></div>
       <div class="field"><label>День срока оплаты (число месяца)</label><input id="s-autorent-due" type="number" min="1" max="28" value="${Math.min(28,Math.max(1,+s.autoRent?.dueDay||5))}"></div>
     </div>
+    <label style="display:flex;align-items:center;gap:10px;padding:10px 0 7px;cursor:pointer;border-top:1px solid var(--line);margin-top:10px"><input type="checkbox" id="s-autoremind" ${s.autoRemind?.enabled?'checked':''}> <span><b>Авто-напоминания должникам</b><div class="t-sub">По просроченным платежам система готовит сводку должников (и шлёт в Telegram, если подключён). Не чаще одного напоминания на долг в заданное число дней.</div></span></label>
+    <div class="field" style="max-width:240px"><label>Не чаще, чем раз в (дней)</label><input id="s-autoremind-days" type="number" min="1" max="90" value="${Math.max(1,+s.autoRemind?.everyDays||7)}"></div>
+  </div>
+  <div class="card" style="margin-top:16px">
+    <div class="sec-h">📟 Тарифы для показаний счётчиков</div>
+    <div class="t-sub" style="margin-bottom:10px">Используются при вводе показаний (Коммуналка → «📟 Показания»): сумма = (текущее − предыдущее) × тариф. В форме можно переопределить.</div>
+    <div class="grid" style="grid-template-columns:repeat(3,1fr);gap:10px">
+      <div class="field" style="margin:0"><label>Электро, ₽/кВт·ч</label><input id="s-tar-electricity" type="number" step="any" value="${+s.tariffs?.electricity||0}"></div>
+      <div class="field" style="margin:0"><label>Вода, ₽/м³</label><input id="s-tar-water" type="number" step="any" value="${+s.tariffs?.water||0}"></div>
+      <div class="field" style="margin:0"><label>Отопление, ₽/Гкал</label><input id="s-tar-heating" type="number" step="any" value="${+s.tariffs?.heating||0}"></div>
+    </div>
   </div>
   <div style="margin-top:16px;display:flex;gap:10px"><button class="btn" onclick="saveSettings()">💾 Сохранить настройки</button>
     <span class="t-sub" style="align-self:center">Изменения видят все пользователи этого клиента.</span></div>`);
@@ -1770,6 +1881,8 @@ async function saveSettings(){
   S.payMethodsExtra=lines('s-paymethods');
   if(document.getElementById('s-tg-on')) S.notify={telegram:{enabled:document.getElementById('s-tg-on').checked,instant:!!document.getElementById('s-tg-instant')?.checked,token:val('s-tg-token').trim(),chatId:val('s-tg-chat').trim(),time:val('s-tg-time')||'08:00'}};
   if(document.getElementById('s-autorent')) S.autoRent={enabled:document.getElementById('s-autorent').checked,accrualDay:Math.min(28,Math.max(1,+val('s-autorent-day')||1)),dueDay:Math.min(28,Math.max(1,+val('s-autorent-due')||5))};
+  if(document.getElementById('s-autoremind')) S.autoRemind={enabled:document.getElementById('s-autoremind').checked,everyDays:Math.max(1,+val('s-autoremind-days')||7)};
+  if(document.getElementById('s-tar-electricity')) S.tariffs={electricity:+val('s-tar-electricity')||0,water:+val('s-tar-water')||0,heating:+val('s-tar-heating')||0};
   await afterStateChange();
   applyAccent(); showApp();
 }

@@ -153,6 +153,29 @@ function autoAccrueRent(st, today){
   });
   return {created, period};
 }
+// A3. Авто-напоминания должникам: по просрочкам, не чаще раза в N дней на долг (анти-спам по remindedAt).
+function autoRemindDebtors(st, today){
+  const cfg = st.settings && st.settings.autoRemind;
+  if(!cfg || !cfg.enabled) return {sent:0};
+  const everyDays = Math.max(1, +cfg.everyDays || 7);
+  const tName = Object.fromEntries((st.tenants||[]).map(t=>[t.id,t.name]));
+  const due=[];
+  (st.payments||[]).forEach(p=>{
+    if((p.amount-p.paid)<=0) return;
+    if(new Date(p.due) >= today) return;                                   // только просроченные
+    if(p.remindedAt){ const diff=(today-new Date(p.remindedAt))/864e5; if(diff<everyDays) return; }
+    due.push(p);
+  });
+  if(!due.length) return {sent:0};
+  const stamp = today.toISOString().slice(0,10);
+  due.forEach(p=>{ p.remindedAt=stamp; });
+  const tg = st.settings && st.settings.notify && st.settings.notify.telegram;
+  if(tg && tg.token && tg.chatId){
+    const lines = due.slice(0,20).map(p=>{ const c=(st.contracts||[]).find(x=>x.id===p.contract); const tn=c?tName[c.tenant]:''; return `• ${tn||p.contract} — ${fmtMoney(p.amount-p.paid)} (${p.period})`; });
+    sendTelegram(tg.token, tg.chatId, `\u{1F4E8} Напоминание: должники (${due.length})\n`+lines.join('\n'));
+  }
+  return {sent:due.length};
+}
 let _lastAuto=null;
 function runDailyAutomations(){
   const today=new Date(); const dstr=today.toISOString().slice(0,10);
@@ -161,6 +184,8 @@ function runDailyAutomations(){
     const st=loadMain(); const entries=[];
     const rent=autoAccrueRent(st, today);
     if(rent.created>0) entries.push(`Автоначисление аренды за ${rent.period}: ${rent.created} начисл.`);
+    const rem=autoRemindDebtors(st, today);
+    if(rem.sent>0) entries.push(`Авто-напоминания должникам: ${rem.sent}`);
     if(entries.length){
       st.audit = Array.isArray(st.audit)?st.audit:[];
       st.audit.unshift({ts:today.toISOString(), user:'Система', role:'Автоматизация', entries});
