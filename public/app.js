@@ -64,6 +64,8 @@ const unitStatus=u=>{ if(!u.tenant) return u.status||'free';
   const c=DB.contracts.find(c=>c.unit===u.id&&c.status!=='ended');
   const p=DB.payments.find(p=>c&&p.contract===c.id&&p.status==='overdue');
   return p?'debt':'occupied'; };
+// кто занимает помещение: арендатор / собственник (для проданных помещений) / свободно
+function unitOccupant(u){ if(!u) return ''; if(u.tenant){ const t=tenantOf(u.tenant); return t?t.name:'арендатор'; } if(u.ownership==='sold'){ return '🏷 '+((u.owner&&u.owner.name)||'собственник'); } return 'свободно'; }
 // ставка: 'sqm' — ₽/м²/мес (× площадь), 'flat' — фиксированная сумма за помещение/мес
 function monthlyRent(c){ if(!c) return 0; if(c.rateType==='flat') return +c.rate||0; const u=unitOf(c.unit); return u? c.rate*u.area : 0; }
 function rateTypeSelect(id,sel){ return `<select id="${id}" onchange="syncRateLbl('${id}')"><option value="sqm"${sel==='flat'?'':' selected'}>за м² в месяц</option><option value="flat"${sel==='flat'?' selected':''}>фикс. за помещение/мес</option></select>`; }
@@ -960,7 +962,7 @@ function utilities(){
   const ut=UT.reduce((s,u)=>s+u.electricity+u.water+u.heating,0);
   const ex=EX.reduce((s,e)=>s+e.amount,0);
   const pers=periodsList();
-  el(head('Коммуналка и расходы на содержание',`${utilPeriod?'Период: '+fmtPeriod(utilPeriod):'Все периоды'} · ${scopeSub()}`,canEdit('utilities')?`<button class="btn ghost" onclick="readingsModal()">📟 Показания</button> <button class="btn" onclick="expenseModal()">+ Расход</button>`:'')+
+  el(head('Коммуналка и расходы на содержание',`${utilPeriod?'Период: '+fmtPeriod(utilPeriod):'Все периоды'} · ${scopeSub()}`,canEdit('utilities')?`<button class="btn ghost" onclick="readingsModal()">📟 Показания помещений</button> <button class="btn ghost" onclick="odpuEntry()">🏢 Показания ОДПУ</button> <button class="btn" onclick="expenseModal()">+ Расход</button>`:'')+
   `<div class="toolbar"><span class="t-sub">Период:</span><select class="search" style="width:auto;min-width:160px" onchange="setUtilPeriod(this.value)"><option value="">Все периоды</option>${pers.map(p=>`<option value="${p}"${utilPeriod===p?' selected':''}>${fmtPeriod(p)}</option>`).join('')}</select></div>
   <div class="grid" style="grid-template-columns:repeat(3,1fr);margin-bottom:18px">
     ${miniStat('Коммунальные начисления',money(ut),'violet')}${miniStat('Расходы на содержание',money(ex),'amber')}${miniStat('Итого затраты',money(ut+ex),'red')}
@@ -1012,7 +1014,7 @@ function readingsModal(){
   <div class="modal-b">
     <div class="row2">
       <div class="field"><label>Объект</label><select id="rd-building" onchange="rdUnitsRefresh()">${buildingsList().map(b=>`<option value="${b.id}"${b.id===def?' selected':''}>${esc(b.name)}</option>`).join('')}</select></div>
-      <div class="field"><label>Помещение</label><select id="rd-unit" onchange="rdPrefill()">${units.map(u=>`<option value="${esc(u.id)}">${esc(u.id)} · ${esc(u.type||'')}</option>`).join('')}</select></div>
+      <div class="field"><label>Помещение</label><select id="rd-unit" onchange="rdPrefill()">${units.map(u=>`<option value="${esc(u.id)}">${esc(u.id)}${u.name?' · '+esc(u.name):''} · ${esc(u.type||'')} — ${esc(unitOccupant(u))}</option>`).join('')}</select></div>
     </div>
     <div class="field"><label>Период</label><input id="rd-period" type="month" value="${utilPeriod||TODAY.toISOString().slice(0,7)}" onchange="rdPrefill()"></div>
     <div class="t-sub" style="margin-bottom:8px">Электро/вода — по счётчику: (текущее − предыдущее) × тариф. Отопление — по площади помещения × тариф ₽/м². Тарифы берутся из «Настроек», можно переопределить.</div>
@@ -1032,7 +1034,7 @@ function readingsModal(){
   rdPrefill();
 }
 function rdUnitsRefresh(){ const b=val('rd-building'); const sel=document.getElementById('rd-unit');
-  sel.innerHTML=DB.units.filter(u=>u.building===b).map(u=>`<option value="${esc(u.id)}">${esc(u.id)} · ${esc(u.type||'')}</option>`).join(''); rdPrefill(); }
+  sel.innerHTML=DB.units.filter(u=>u.building===b).map(u=>`<option value="${esc(u.id)}">${esc(u.id)}${u.name?' · '+esc(u.name):''} · ${esc(u.type||'')} — ${esc(unitOccupant(u))}</option>`).join(''); rdPrefill(); }
 function rdPrefill(){ const unit=val('rd-unit'); const period=val('rd-period'); const tariffs=(stg().tariffs)||{}; const u=unitOf(unit);
   UTIL_KINDS.forEach(([k,,,mode])=>{ const te=document.getElementById('rd-'+k+'-tar'); if(te) te.value=tariffs[k]||0;
     if(mode==='area'){ const ae=document.getElementById('rd-'+k+'-area'); if(ae) ae.value=(u&&u.area)||0; }
@@ -1061,9 +1063,12 @@ function odpuAccrued(m){ if(!m)return null; const e=m.electricity||{},w=m.water|
     heating:Math.max(0,Math.round((+h.area||0)*(+h.tariff||0))) }; }
 function odpuCollected(bid,period){ const us=DB.utilities.filter(u=>unitOf(u.unit)?.building===bid && u.period===period);
   return { electricity:us.reduce((s,u)=>s+(+u.electricity||0),0), water:us.reduce((s,u)=>s+(+u.water||0),0), heating:us.reduce((s,u)=>s+(+u.heating||0),0) }; }
+function odpuEntry(bid){ if(!canEdit('utilities')) return; const id=bid||(SCOPE!=='all'?SCOPE:(buildingsList()[0]||{}).id); if(!id) return alert('Сначала добавьте объект'); buildingMeterModal(id, utilPeriod); }
 function odpuSummary(bid,period){
-  if(!period) return '<div class="t-sub" style="padding:8px 0">Выберите конкретный период (вверху), чтобы свести общедомовые приборы учёта.</div>';
-  const m=buildingMeter(bid,period); const acc=odpuAccrued(m); const col=odpuCollected(bid,period); const ed=canEdit('utilities');
+  const ed=canEdit('utilities');
+  const entryBtn = ed?`<button class="btn ghost sm" style="margin-top:6px" onclick="odpuEntry('${bid}')">🏢 Внести / изменить показания ОДПУ</button>`:'';
+  if(!period) return `<div class="t-sub" style="padding:6px 0">Сведение «нагорело / собрали / разница» считается за конкретный период — выберите месяц вверху страницы. Внести показания дома можно и сейчас (период указывается в окне):</div>${entryBtn}`;
+  const m=buildingMeter(bid,period); const acc=odpuAccrued(m); const col=odpuCollected(bid,period);
   const rows=[['electricity','Электроэнергия'],['water','Вода'],['heating','Отопление']].map(([k,l])=>{
     const a=acc?acc[k]:null; const c=col[k]||0; const diff=(a==null)?null:(a-c);
     return `<tr><td class="t-strong">${l}</td><td>${a==null?'—':money(a)}</td><td>${money(c)}</td><td${diff!=null&&diff!==0?` style="color:${diff>0?'var(--amber)':'var(--green)'}"`:''}>${diff==null?'—':money(diff)}</td></tr>`;
@@ -1071,7 +1076,7 @@ function odpuSummary(bid,period){
   const totA=acc?(acc.electricity+acc.water+acc.heating):null, totC=col.electricity+col.water+col.heating;
   return `<table><thead><tr><th>Ресурс</th><th>Нагорело (ОДПУ)</th><th>Собрали (с помещений)</th><th>Разница</th></tr></thead><tbody>${rows}
     <tr style="border-top:2px solid var(--line2)"><td class="t-strong">Итого</td><td><b>${totA==null?'—':money(totA)}</b></td><td><b>${money(totC)}</b></td><td><b${totA!=null&&(totA-totC)!==0?` style="color:${totA-totC>0?'var(--amber)':'var(--green)'}"`:''}>${totA==null?'—':money(totA-totC)}</b></td></tr></tbody></table>
-    <div class="t-sub" style="margin-top:6px">«Разница» — общедомовые нужды / потери (показания дома минус сумма по помещениям). ${ed?`<button class="btn ghost sm" style="margin-top:6px" onclick="buildingMeterModal('${bid}','${period}')">🏢 ${m?'Изменить показания ОДПУ':'Внести показания ОДПУ'}</button>`:''}</div>`;
+    <div class="t-sub" style="margin-top:6px">«Разница» — общедомовые нужды / потери (показания дома минус сумма по всем помещениям, включая собственников). ${entryBtn}</div>`;
 }
 function buildingMeterModal(bid,period){
   if(!canEdit('utilities')) return; const b=buildingOf(bid); if(!b) return;
@@ -1079,9 +1084,12 @@ function buildingMeterModal(bid,period){
   const m=buildingMeter(bid,period); const tariffs=(stg().tariffs)||{};
   const totalArea=DB.units.filter(u=>u.building===bid).reduce((s,u)=>s+(+u.area||0),0);
   const e=(m&&m.electricity)||{}, w=(m&&m.water)||{}, h=(m&&m.heating)||{};
-  openM(`<div class="modal-h"><h3>🏢 ОДПУ — ${esc(b.name)}</h3><span class="x" onclick="closeM()">×</span></div>
+  openM(`<div class="modal-h"><h3>🏢 Показания общедомовых счётчиков (ОДПУ)</h3><span class="x" onclick="closeM()">×</span></div>
   <div class="modal-b">
-    <div class="field"><label>Период</label><input id="bm-period" type="month" value="${period}"></div>
+    <div class="row2">
+      <div class="field"><label>Объект</label><select id="bm-building" onchange="buildingMeterModal(this.value, document.getElementById('bm-period').value)">${buildingsList().map(x=>`<option value="${x.id}"${x.id===bid?' selected':''}>${esc(x.name)}</option>`).join('')}</select></div>
+      <div class="field"><label>Период</label><input id="bm-period" type="month" value="${period}"></div>
+    </div>
     <div class="t-sub" style="margin-bottom:8px">Показания общедомовых приборов учёта. «Нагорело» сравнивается с суммой по помещениям, разница — общедомовые нужды.</div>
     <div class="card" style="background:var(--bg2);margin-bottom:8px"><div class="t-strong" style="margin-bottom:6px">Электроэнергия <span class="t-sub">(кВт·ч)</span></div>
       <div class="grid" style="grid-template-columns:repeat(3,1fr);gap:8px">
