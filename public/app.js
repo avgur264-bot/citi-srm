@@ -2565,6 +2565,7 @@ function editUnitModal(id){const u=unitOf(id);if(!u)return;const r=u.responsible
   openM(`<div class="modal-h"><h3>Редактировать помещение ${u.id}</h3><span class="x" onclick="closeM()">×</span></div>
   <div class="modal-b">
     <div class="sec-h">Характеристики</div>
+    <div class="field"><label>Номер помещения</label><input id="e-uid" value="${esc(u.id)}" placeholder="напр. 1-01"><div class="t-sub" style="margin-top:4px">При изменении номера он автоматически обновится во всех договорах, платежах, коммуналке, заявках и документах.</div></div>
     <div class="row2"><div class="field"><label>Объект</label><select id="e-building">${buildingsList().map(b=>`<option value="${b.id}"${u.building===b.id?' selected':''}>${esc(b.name)}</option>`).join('')}</select></div>
       <div class="field"><label>Тип</label><select id="e-type">${['Офис','Ритейл','Кафе','Коворкинг','Склад'].map(x=>`<option${u.type===x?' selected':''}>${x}</option>`).join('')}</select></div></div>
     <div class="row2"><div class="field"><label>Этаж</label><input id="e-floor" type="number" value="${u.floor}"></div><div class="field"><label>Площадь, м²</label><input id="e-area" type="number" value="${u.area}"></div></div>
@@ -2581,6 +2582,23 @@ function editUnitModal(id){const u=unitOf(id);if(!u)return;const r=u.responsible
   </div>
   <div class="modal-f"><button class="btn ghost" onclick="unitInfo('${u.id}')">Отмена</button><button class="btn" onclick="saveUnitEdit('${u.id}')">Сохранить</button></div>`);}
 async function saveUnitEdit(id){const u=unitOf(id);if(!u)return;
+  // переименование номера помещения с обновлением всех ссылок
+  const newId=(val('e-uid')||'').trim();
+  if(newId && newId!==id){
+    if(DB.units.some(x=>x.id!==id && x.id===newId)) return alert('Помещение с номером «'+newId+'» уже существует. Выберите другой номер.');
+    DB.contracts.forEach(c=>{ if(c.unit===id) c.unit=newId; });
+    (DB.utilities||[]).forEach(x=>{ if(x.unit===id) x.unit=newId; });
+    (DB.requests||[]).forEach(x=>{ if(x.unit===id) x.unit=newId; });
+    (DB.listings||[]).forEach(x=>{ if(x.unit===id) x.unit=newId; });
+    (DB.signage||[]).forEach(x=>{ if(x.unit===id) x.unit=newId; });
+    u.id=newId;
+    // задачи хранятся на сервере отдельно — обновим у тех, что ссылались на это помещение
+    try{ const upd=(TASKS||[]).filter(t=>t.unit===id);
+      for(const t of upd){ await api('/api/tasks/'+t.id,'PATCH',{unit:newId}); }
+      if(upd.length) await reloadTasks();
+    }catch{}
+    id=newId;
+  }
   u.building=val('e-building'); u.type=val('e-type'); u.floor=+val('e-floor'); u.area=+val('e-area');
   u.responsible={name:val('e-rname'),role:val('e-rrole'),phone:val('e-rphone'),email:val('e-remail')};
   u.ownership=val('e-own');
