@@ -26,6 +26,10 @@ async function api(path, method='GET', body){
 if(!appJs.includes(API_BLOCK)) { console.error('ОШИБКА: блок API в app.js не найден — проверьте app.js'); process.exit(1); }
 appJs = appJs.replace(API_BLOCK, mock.trim());
 
+// включаем режим демо (лимит записей + окно «приобретите полную версию»)
+if(!appJs.includes('let IS_DEMO=false;')){ console.error('ОШИБКА: флаг IS_DEMO в app.js не найден'); process.exit(1); }
+appJs = appJs.replace('let IS_DEMO=false;', 'let IS_DEMO=true;');
+
 // встраиваем логотип (logo.jpg) как data-URI, чтобы файл был самодостаточным
 const logoB64 = (await readFile(P('public/logo.jpg'))).toString('base64');
 appJs = appJs.replace("const LOGO_FULL='logo.jpg';", `const LOGO_FULL='data:image/jpeg;base64,${logoB64}';`);
