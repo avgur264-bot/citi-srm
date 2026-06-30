@@ -242,10 +242,14 @@ function normalizeAction(raw, st, role){
   }catch(msg){ return { ok:false, error: (typeof msg==='string'?msg:'Не удалось распознать действие.') }; }
 }
 
-// анти-злоупотребление: лимит запросов на пользователя
+// анти-злоупотребление: лимит запросов на пользователя (в минуту)
 const assistHits = new Map();
 function assistAllowed(uid){ const now=Date.now(); const r=assistHits.get(uid)||{c:0,ts:now};
   if(now-r.ts>60_000){ r.c=0; r.ts=now; } r.c++; assistHits.set(uid,r); return r.c<=15; }
+// дневной лимит на КЛИЕНТА (весь контейнер = один клиент = одна база), чтобы бесплатные токены не «сгорели»
+let _assistDay=null, _assistDayCount=0;
+function assistDayAllowed(limit){ const d=new Date().toISOString().slice(0,10);
+  if(_assistDay!==d){ _assistDay=d; _assistDayCount=0; } _assistDayCount++; return _assistDayCount<=limit; }
 
 // ---------- ежедневная сводка в Telegram ----------
 const fmtMoney = n => new Intl.NumberFormat('ru-RU').format(Math.round(n||0)) + ' ₽';
@@ -629,6 +633,8 @@ async function api(req, res, url){
     const cfg = (st.settings && st.settings.assistant) || {};
     if(!hasModelKey() || !cfg.enabled) return send(res,200,{ enabled:false });   // ключа нет или выключен в Настройках
     if(!assistAllowed(me.id)) return send(res,429,{ error:'Слишком много вопросов подряд. Подождите минуту.' });
+    const dailyLimit = Math.max(1, +cfg.dailyLimit || +process.env.ASSISTANT_DAILY_LIMIT || 250);
+    if(!assistDayAllowed(dailyLimit)) return send(res,200,{ enabled:true, answer:`На сегодня лимит вопросов помощника исчерпан (${dailyLimit}/день). Помощник снова заработает завтра. Лимит можно изменить в Настройках.` });
     const b = await readBody(req);
     const question = String(b.question||'').trim().slice(0,1000);
     if(!question) return send(res,400,{ error:'Пустой вопрос' });

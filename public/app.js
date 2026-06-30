@@ -165,6 +165,7 @@ function ensureState(){
   if(!S.autoIndex || typeof S.autoIndex!=='object') S.autoIndex={enabled:false};
   if(!S.assistant || typeof S.assistant!=='object') S.assistant={enabled:false,provider:'gigachat',actions:true};
   if(typeof S.assistant.actions!=='boolean') S.assistant.actions=true;
+  if(typeof S.assistant.dailyLimit!=='number' || S.assistant.dailyLimit<1) S.assistant.dailyLimit=250;
   // тарифы для расчёта коммуналки по показаниям счётчиков
   if(!S.tariffs || typeof S.tariffs!=='object') S.tariffs={electricity:6.5,water:45,heating:35};
   if(+S.tariffs.heating>200) S.tariffs.heating=35; // миграция: раньше отопление было в ₽/Гкал, теперь ₽/м²
@@ -1996,7 +1997,10 @@ function settingsPage(){
     <div class="t-sub" style="margin-bottom:8px">Ключ модели в окружении: <b style="color:${ASSIST_KEY?'var(--green)':'var(--red)'}">${ASSIST_KEY?'задан ✓':'не задан'}</b> · провайдер: <b>${esc(ASSIST_PROVIDER)}</b></div>
     <label style="display:flex;align-items:center;gap:10px;padding:7px 0;cursor:pointer"><input type="checkbox" id="s-assist-on" ${s.assistant?.enabled?'checked':''} ${ASSIST_KEY?'':'disabled'}> <span>Включить помощника${ASSIST_KEY?'':' <span class="t-sub">(сначала задайте ключ в окружении клиента)</span>'}</span></label>
     <label style="display:flex;align-items:center;gap:10px;padding:7px 0;cursor:pointer"><input type="checkbox" id="s-assist-act" ${s.assistant?.actions!==false?'checked':''}> <span>Разрешить выполнять действия <span class="t-sub">(оплата, задачи, заявки, договоры — всегда с кнопкой подтверждения; в рамках прав сотрудника, с записью в аудит)</span></span></label>
-    <div class="field" style="max-width:260px"><label>Провайдер модели</label><select id="s-assist-prov"><option value="gigachat"${(s.assistant?.provider||'gigachat')==='gigachat'?' selected':''}>GigaChat (Сбер)</option><option value="yandexgpt"${s.assistant?.provider==='yandexgpt'?' selected':''}>YandexGPT</option></select></div>
+    <div class="row2">
+      <div class="field"><label>Провайдер модели</label><select id="s-assist-prov"><option value="gigachat"${(s.assistant?.provider||'gigachat')==='gigachat'?' selected':''}>GigaChat (Сбер)</option><option value="yandexgpt"${s.assistant?.provider==='yandexgpt'?' selected':''}>YandexGPT</option></select></div>
+      <div class="field"><label>Лимит вопросов в день (на клиента)</label><input id="s-assist-limit" type="number" min="1" max="100000" value="${Math.max(1,+s.assistant?.dailyLimit||250)}"></div>
+    </div>
     <div class="t-sub">Провайдер выбирается переменной окружения <code>LLM_PROVIDER</code>; здесь — отметка для удобства. По умолчанию помощник выключен.</div>
   </div>
   <div class="card" style="margin-top:16px">
@@ -2084,7 +2088,7 @@ async function saveSettings(){
   if(document.getElementById('s-autoremind')) S.autoRemind={enabled:document.getElementById('s-autoremind').checked,everyDays:Math.max(1,+val('s-autoremind-days')||7)};
   if(document.getElementById('s-tar-electricity')) S.tariffs={electricity:+val('s-tar-electricity')||0,water:+val('s-tar-water')||0,heating:+val('s-tar-heating')||0};
   if(document.getElementById('s-autoindex')) S.autoIndex={enabled:document.getElementById('s-autoindex').checked};
-  if(document.getElementById('s-assist-on')) S.assistant={enabled:document.getElementById('s-assist-on').checked,provider:val('s-assist-prov')||'gigachat',actions:!!document.getElementById('s-assist-act')?.checked};
+  if(document.getElementById('s-assist-on')) S.assistant={enabled:document.getElementById('s-assist-on').checked,provider:val('s-assist-prov')||'gigachat',actions:!!document.getElementById('s-assist-act')?.checked,dailyLimit:Math.max(1,+val('s-assist-limit')||250)};
   await afterStateChange();
   applyAccent(); showApp();
 }
