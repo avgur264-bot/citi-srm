@@ -144,6 +144,104 @@ function buildAssistantData(state, role, scope){
   if(req.length) L.push(`Открытые заявки на обслуживание: ${req.length}.`);
   return L.join('\n');
 }
+// ---------- Фаза 2: предложение действий (выполняются на фронте по кнопке, с проверкой прав и аудитом) ----------
+const ASSISTANT_ACTIONS_DOC = `ВЫПОЛНЕНИЕ ДЕЙСТВИЙ. Если пользователь ЯВНО просит что-то сделать, кратко подтверди намерение словами и добавь В КОНЦЕ ответа РОВНО ОДИН блок действия:
+<action>{"type":"...", ...}</action>
+Правила: не выдумывай данные; если не хватает (период, сумма, дата, объект) — НЕ добавляй блок, а спроси одним вопросом. Пользователь подтвердит действие кнопкой в приложении — тебе ничего подтверждать в системе не нужно. Доступные типы:
+- pay {tenant, period?, unit?} — отметить оплату аренды (полную)
+- task_create {title, due?, unit?} — создать задачу (due в формате ГГГГ-ММ-ДД)
+- request_create {title, category?, priority?, building?} — создать заявку на обслуживание
+- task_done {title} — завершить задачу по её названию
+- request_take {title} — взять заявку в работу / завершить (по названию)
+- contract_renew {tenant?, unit?, end} — продлить договор; end — новая дата окончания ГГГГ-ММ-ДД
+- contract_rate {tenant?, unit?, rate, rateType?} — изменить ставку аренды; rateType: sqm (за м²) или flat (за помещение)
+- upkeep_done {name} — отметить плановое ТО выполненным (по названию оборудования)
+- assign_tenant {unit, tenant, rate, rateType?} — заселить арендатора в свободное помещение`;
+
+function parseActionBlock(text){
+  const m = /<action>([\s\S]*?)<\/action>/i.exec(text||'');
+  if(!m) return { clean: text||'', raw: null };
+  let raw=null; try{ raw = JSON.parse(m[1].trim()); }catch{}
+  const clean = (text.slice(0,m.index) + text.slice(m.index+m[0].length)).trim();
+  return { clean, raw };
+}
+const _money = n => fmtMoney(n);
+function normalizeAction(raw, st, role){
+  if(!raw || typeof raw!=='object' || !raw.type) return { ok:false, error:null };
+  const tenants=st.tenants||[], units=st.units||[], contracts=st.contracts||[], payments=st.payments||[];
+  const tByName = n => { n=String(n||'').toLowerCase().trim(); return n?tenants.find(t=>(t.name||'').toLowerCase().includes(n)):null; };
+  const cById = id => contracts.find(c=>c.id===id);
+  const tById = id => tenants.find(t=>t.id===id);
+  const findContract = raw0 => { let cs=contracts.filter(c=>c.status!=='ended');
+    if(raw0.unit) cs=cs.filter(c=>c.unit===raw0.unit);
+    if(raw0.tenant){ const t=tByName(raw0.tenant); if(t) cs=cs.filter(c=>c.tenant===t.id); }
+    return cs; };
+  const need = (cond,msg)=>{ if(!cond) throw msg; };
+  try{
+    switch(raw.type){
+      case 'pay': {
+        need(canEdit(role,'payments'),'У вас нет прав отмечать оплаты.');
+        let cs=payments.filter(p=>(p.amount-p.paid)>0);
+        if(raw.unit) cs=cs.filter(p=>{const c=cById(p.contract);return c&&c.unit===raw.unit;});
+        if(raw.tenant){ const t=tByName(raw.tenant); need(t,'Не нашёл арендатора «'+raw.tenant+'».'); cs=cs.filter(p=>{const c=cById(p.contract);return c&&c.tenant===t.id;}); }
+        if(raw.period) cs=cs.filter(p=>p.period===raw.period);
+        need(cs.length,'Не нашёл неоплаченный платёж по этим данным.');
+        need(cs.length===1,'Нашёл несколько подходящих платежей — уточните период или помещение.');
+        const p=cs[0], c=cById(p.contract), t=tById(c.tenant), rem=p.amount-p.paid;
+        return { ok:true, action:{ type:'pay', params:{paymentId:p.id}, label:`Отметить оплату ${_money(rem)} по «${t?t.name:c.unit}» (помещ. ${c.unit}) за ${p.period}` } };
+      }
+      case 'task_create': {
+        need(canEdit(role,'tasks'),'У вас нет прав создавать задачи.');
+        need(raw.title,'Не указано описание задачи.');
+        return { ok:true, action:{ type:'task_create', params:{title:String(raw.title).slice(0,200),due:raw.due||null,unit:raw.unit||'—'}, label:`Создать задачу: «${String(raw.title).slice(0,80)}»${raw.due?' (срок '+raw.due+')':''}` } };
+      }
+      case 'request_create': {
+        need(canEdit(role,'requests'),'У вас нет прав создавать заявки.');
+        need(raw.title,'Не указан заголовок заявки.');
+        const b=(st.buildings||[])[0]; const bid = raw.building && (st.buildings||[]).some(x=>x.id===raw.building||x.name===raw.building) ? ((st.buildings||[]).find(x=>x.id===raw.building||x.name===raw.building).id) : (b&&b.id);
+        return { ok:true, action:{ type:'request_create', params:{title:String(raw.title).slice(0,200),category:raw.category||'Прочее',priority:['high','medium','low'].includes(raw.priority)?raw.priority:'medium',building:bid}, label:`Создать заявку: «${String(raw.title).slice(0,80)}»` } };
+      }
+      case 'task_done': {
+        need(canEdit(role,'tasks'),'У вас нет прав на задачи.');
+        return { ok:true, action:{ type:'task_done', params:{title:String(raw.title||'').slice(0,200)}, label:`Завершить задачу: «${String(raw.title||'').slice(0,80)}»` } };
+      }
+      case 'request_take': {
+        need(canEdit(role,'requests'),'У вас нет прав на заявки.');
+        return { ok:true, action:{ type:'request_take', params:{title:String(raw.title||'').slice(0,200)}, label:`Продвинуть заявку: «${String(raw.title||'').slice(0,80)}»` } };
+      }
+      case 'contract_renew': {
+        need(canEdit(role,'contracts'),'У вас нет прав на договоры.');
+        need(raw.end && /^\d{4}-\d{2}-\d{2}$/.test(raw.end),'Укажите новую дату окончания (ГГГГ-ММ-ДД).');
+        const cs=findContract(raw); need(cs.length,'Не нашёл договор по этим данным.'); need(cs.length===1,'Нашёл несколько договоров — уточните арендатора или помещение.');
+        const c=cs[0], t=tById(c.tenant);
+        return { ok:true, action:{ type:'contract_renew', params:{contractId:c.id,end:raw.end}, label:`Продлить договор «${t?t.name:c.id}» (${c.unit}) до ${raw.end}` } };
+      }
+      case 'contract_rate': {
+        need(canEdit(role,'contracts'),'У вас нет прав на договоры.');
+        need(raw.rate!=null && +raw.rate>0,'Укажите новую ставку.');
+        const cs=findContract(raw); need(cs.length,'Не нашёл договор по этим данным.'); need(cs.length===1,'Нашёл несколько договоров — уточните арендатора или помещение.');
+        const c=cs[0], t=tById(c.tenant), rt=raw.rateType==='flat'?'flat':'sqm';
+        return { ok:true, action:{ type:'contract_rate', params:{contractId:c.id,rate:+raw.rate,rateType:rt}, label:`Изменить ставку договора «${t?t.name:c.id}» (${c.unit}) на ${_money(+raw.rate)}${rt==='flat'?' /мес за помещение':' /м²'}` } };
+      }
+      case 'upkeep_done': {
+        need(canEdit(role,'upkeep'),'У вас нет прав на ТО.');
+        const nm=String(raw.name||'').toLowerCase().trim(); need(nm,'Укажите оборудование.');
+        const eq=(st.equipment||[]).filter(e=>(e.name||'').toLowerCase().includes(nm));
+        need(eq.length,'Не нашёл оборудование «'+raw.name+'».'); need(eq.length===1,'Нашёл несколько единиц — уточните название.');
+        return { ok:true, action:{ type:'upkeep_done', params:{equipmentId:eq[0].id}, label:`Отметить ТО выполненным: «${eq[0].name}»` } };
+      }
+      case 'assign_tenant': {
+        need(canEdit(role,'contracts'),'У вас нет прав на договоры.');
+        need(raw.unit,'Укажите помещение.'); const u=units.find(x=>x.id===raw.unit); need(u,'Не нашёл помещение «'+raw.unit+'».'); need(!u.tenant,'Помещение «'+raw.unit+'» уже занято.');
+        need(raw.tenant,'Укажите арендатора.'); need(raw.rate!=null && +raw.rate>0,'Укажите ставку.');
+        const ex=tByName(raw.tenant); const rt=raw.rateType==='flat'?'flat':'sqm';
+        return { ok:true, action:{ type:'assign_tenant', params:{unit:raw.unit,tenantId:ex?ex.id:null,tenantName:ex?ex.name:String(raw.tenant).slice(0,120),rate:+raw.rate,rateType:rt}, label:`Заселить «${ex?ex.name:raw.tenant}» в ${raw.unit} по ${_money(+raw.rate)}${rt==='flat'?' /мес':' /м²'}` } };
+      }
+      default: return { ok:false, error:null };
+    }
+  }catch(msg){ return { ok:false, error: (typeof msg==='string'?msg:'Не удалось распознать действие.') }; }
+}
+
 // анти-злоупотребление: лимит запросов на пользователя
 const assistHits = new Map();
 function assistAllowed(uid){ const now=Date.now(); const r=assistHits.get(uid)||{c:0,ts:now};
@@ -538,10 +636,12 @@ async function api(req, res, url){
     // контекст: только данные, доступные роли (filterStateForRole), без секретов
     const safe = filterStateForRole(st, me.role);
     const data = buildAssistantData(safe, me.role, scope);
-    // GigaChat требует РОВНО один системный месседж и первым — объединяем промпт + справку + данные.
+    const actionsOn = cfg.actions !== false;   // Фаза 2: выполнение действий (по умолчанию вкл при включённом помощнике)
+    // GigaChat требует РОВНО один системный месседж и первым — объединяем промпт + справку + данные (+ протокол действий).
     const sys = ASSISTANT_SYS
       + '\n\nСПРАВКА ПО СИСТЕМЕ:\n' + ASSISTANT_KNOWLEDGE
-      + '\n\nДАННЫЕ (текущий объект/портфель, по правам пользователя; не показывай чужого):\n' + data;
+      + '\n\nДАННЫЕ (текущий объект/портфель, по правам пользователя; не показывай чужого):\n' + data
+      + (actionsOn ? ('\n\n' + ASSISTANT_ACTIONS_DOC) : '');
     const messages = [
       { role:'system', content: sys },
       ...(Array.isArray(b.history) ? b.history.filter(m=>m&&(m.role==='user'||m.role==='assistant')&&typeof m.content==='string').slice(-6).map(m=>({role:m.role,content:String(m.content).slice(0,1500)})) : []),
@@ -549,9 +649,19 @@ async function api(req, res, url){
     ];
     const ctrl = new AbortController(); const timer = setTimeout(()=>ctrl.abort(), 30_000);
     try{
-      const answer = await llmAsk(messages, { signal: ctrl.signal, temperature:0.3 });
+      const raw = await llmAsk(messages, { signal: ctrl.signal, temperature:0.3 });
       console.log(`[assistant] uid=${me.id} role=${me.role} q.len=${question.length}`);
-      return send(res,200,{ enabled:true, answer: String(answer||'').trim() || 'Не удалось сформировать ответ. Попробуйте переформулировать.' });
+      let answer = String(raw||'').trim() || 'Не удалось сформировать ответ. Попробуйте переформулировать.';
+      let action = null;
+      if(actionsOn){
+        const parsed = parseActionBlock(answer);
+        answer = parsed.clean || answer;
+        if(parsed.raw){ const n = normalizeAction(parsed.raw, st, me.role);
+          if(n.ok) action = n.action;
+          else if(n.error) answer = (answer? answer+'\n\n':'') + '⚠️ ' + n.error;
+        }
+      }
+      return send(res,200,{ enabled:true, answer, action });
     }catch(e){
       console.error('[assistant] error', e.message);
       return send(res,200,{ enabled:true, error:'Помощник временно недоступен, попробуйте позже.' });

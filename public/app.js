@@ -163,7 +163,8 @@ function ensureState(){
   if(!S.autoRent || typeof S.autoRent!=='object') S.autoRent={enabled:false,accrualDay:1,dueDay:5};
   if(!S.autoRemind || typeof S.autoRemind!=='object') S.autoRemind={enabled:false,everyDays:7};
   if(!S.autoIndex || typeof S.autoIndex!=='object') S.autoIndex={enabled:false};
-  if(!S.assistant || typeof S.assistant!=='object') S.assistant={enabled:false,provider:'gigachat'};
+  if(!S.assistant || typeof S.assistant!=='object') S.assistant={enabled:false,provider:'gigachat',actions:true};
+  if(typeof S.assistant.actions!=='boolean') S.assistant.actions=true;
   // тарифы для расчёта коммуналки по показаниям счётчиков
   if(!S.tariffs || typeof S.tariffs!=='object') S.tariffs={electricity:6.5,water:45,heating:35};
   if(+S.tariffs.heating>200) S.tariffs.heating=35; // миграция: раньше отопление было в ₽/Гкал, теперь ₽/м²
@@ -318,9 +319,19 @@ function assistPanelHTML(){ return `<div class="assist-panel" id="assistPanel">
 </div>`; }
 function toggleAssist(){ const p=document.getElementById('assistPanel'); if(!p)return; const open=p.classList.toggle('show');
   if(open){ renderAssist(); setTimeout(()=>document.getElementById('assistInput')?.focus(),50); } }
+function assistMsgHTML(m,i){
+  if(m.role==='action'){ const a=m.action;
+    return `<div class="assist-msg bot" style="border-left:3px solid var(--accent)">
+      <div class="t-strong" style="margin-bottom:6px">⚡ Подтвердите действие</div>
+      <div style="margin-bottom:8px">${esc(a.label||'действие')}</div>
+      ${m.done?`<div class="t-sub" style="color:${m.ok?'var(--green)':'var(--red)'}">${esc(m.result||'')}</div>`
+        :`<div style="display:flex;gap:8px"><button class="btn sm" onclick="assistConfirm(${i})">✓ Подтвердить</button><button class="btn ghost sm" onclick="assistDecline(${i})">Отмена</button></div>`}
+    </div>`; }
+  return `<div class="assist-msg ${m.role==='user'?'user':'bot'}">${esc(m.content)}</div>`;
+}
 function renderAssist(){ const box=document.getElementById('assistMsgs'); if(!box)return;
-  box.innerHTML = ASSIST_HIST.length? ASSIST_HIST.map(m=>`<div class="assist-msg ${m.role==='user'?'user':'bot'}">${esc(m.content)}</div>`).join('')
-    : `<div class="assist-msg bot">Здравствуйте! Я помогу разобраться в СИТИ SRM: как что сделать, откуда берётся цифра, кто не заплатил и т.п. Спрашивайте простыми словами.</div>`;
+  box.innerHTML = ASSIST_HIST.length? ASSIST_HIST.map((m,i)=>assistMsgHTML(m,i)).join('')
+    : `<div class="assist-msg bot">Здравствуйте! Я помогу разобраться в СИТИ SRM и могу выполнять простые действия (с вашим подтверждением): отметить оплату, создать задачу/заявку, продлить договор и т.п. Спрашивайте простыми словами.</div>`;
   const sug=document.getElementById('assistSug'); if(sug) sug.style.display=ASSIST_HIST.length?'none':'flex';
   box.scrollTop=box.scrollHeight; }
 function assistAsk(q){ const inp=document.getElementById('assistInput'); if(inp){ inp.value=q; } assistSend(); }
@@ -328,11 +339,31 @@ async function assistSend(){
   const inp=document.getElementById('assistInput'); if(!inp)return; const q=inp.value.trim(); if(!q)return; inp.value='';
   ASSIST_HIST.push({role:'user',content:q}); ASSIST_HIST.push({role:'assistant',content:'…думаю'}); renderAssist();
   try{
-    const r=await api('/api/assistant','POST',{question:q,scope:SCOPE,history:ASSIST_HIST.slice(0,-2).slice(-6)});
+    const hist=ASSIST_HIST.filter(m=>m.role==='user'||m.role==='assistant').slice(0,-2).slice(-6);
+    const r=await api('/api/assistant','POST',{question:q,scope:SCOPE,history:hist});
     ASSIST_HIST.pop(); // убрать «думаю»
     if(r&&r.enabled===false){ ASSIST_HIST.push({role:'assistant',content:'Помощник сейчас выключен.'}); }
-    else ASSIST_HIST.push({role:'assistant',content:(r&&(r.answer||r.error))||'Пустой ответ.'});
+    else { ASSIST_HIST.push({role:'assistant',content:(r&&(r.answer||r.error))||'Пустой ответ.'});
+      if(r&&r.action) ASSIST_HIST.push({role:'action',action:r.action,done:false}); }
   }catch(e){ ASSIST_HIST.pop(); ASSIST_HIST.push({role:'assistant',content:'Помощник недоступен: '+(e.message||e)}); }
+  renderAssist();
+}
+function assistDecline(i){ const m=ASSIST_HIST[i]; if(!m||m.role!=='action')return; m.done=true; m.ok=false; m.result='Отменено.'; renderAssist(); }
+// выполнение подтверждённого действия — через обычные функции (права + аудит соблюдаются)
+async function assistConfirm(i){ const m=ASSIST_HIST[i]; if(!m||m.role!=='action'||m.done)return; const a=m.action; const p=a.params||{};
+  try{
+    if(a.type==='pay'){ const pay=DB.payments.find(x=>x.id===p.paymentId); if(!pay) throw 'платёж не найден'; await quickPay(p.paymentId); }
+    else if(a.type==='task_create'){ await api('/api/tasks','POST',{title:p.title,unit:p.unit||'—',due:p.due||null,priority:'medium'}); await reloadTasks(); render(); }
+    else if(a.type==='task_done'){ const t=TASKS.find(x=>(x.title||'').toLowerCase().includes((p.title||'').toLowerCase())); if(!t) throw 'задача не найдена'; await api('/api/tasks/'+t.id,'PATCH',{status:'done'}); await reloadTasks(); render(); }
+    else if(a.type==='request_create'){ ensureState(); DB.requests.unshift({id:'r'+Date.now(),building:p.building,unit:null,tenant:null,category:p.category,title:p.title,priority:p.priority,status:'new',assignee_id:null,created_by:ME.id,created_at:new Date().toISOString(),due:null,note:''}); await afterStateChange(); }
+    else if(a.type==='request_take'){ const r=(DB.requests||[]).find(x=>(x.title||'').toLowerCase().includes((p.title||'').toLowerCase())&&reqOpen(x)); if(!r) throw 'заявка не найдена'; await advanceRequest(r.id); }
+    else if(a.type==='contract_renew'){ const c=contractOf(p.contractId); if(!c) throw 'договор не найден'; c.end=p.end; c.status='active'; await afterStateChange(); }
+    else if(a.type==='contract_rate'){ const c=contractOf(p.contractId); if(!c) throw 'договор не найден'; c.rate=p.rate; c.rateType=p.rateType; await afterStateChange(); }
+    else if(a.type==='upkeep_done'){ const e=(DB.equipment||[]).find(x=>x.id===p.equipmentId); if(!e) throw 'оборудование не найдено'; const today=TODAY.toISOString().slice(0,10); e.lastService=today; e.nextService=addMonths(today,e.intervalMonths||12); await afterStateChange(); }
+    else if(a.type==='assign_tenant'){ const u=unitOf(p.unit); if(!u||u.tenant) throw 'помещение занято или не найдено'; let tid=p.tenantId; if(!tid){ tid='t'+Date.now(); DB.tenants.push({id:tid,name:p.tenantName,contact:'',phone:'',email:'',inn:'',industry:''}); } const monthly=p.rateType==='flat'?p.rate:p.rate*(u.area||0); DB.contracts.push({id:'c'+Date.now(),tenant:tid,unit:p.unit,rate:p.rate,rateType:p.rateType,start:TODAY.toISOString().slice(0,10),end:addMonths(TODAY.toISOString().slice(0,10),12),deposit:monthly*2,indexation:6,status:'active'}); u.tenant=tid; await afterStateChange(); }
+    else throw 'неизвестное действие';
+    m.done=true; m.ok=true; m.result='✓ Выполнено.';
+  }catch(e){ m.done=true; m.ok=false; m.result='Не удалось: '+(e.message||e); }
   renderAssist();
 }
 function toggleNav(){ document.getElementById('sidebar')?.classList.toggle('open'); document.getElementById('scrim')?.classList.toggle('show'); }
@@ -1964,6 +1995,7 @@ function settingsPage(){
     <div class="t-sub" style="margin-bottom:10px">Встроенный помощник отвечает на вопросы по работе с системой и простым вопросам по данным («кто не заплатил»). Только подсказки — ничего не меняет. Ключ модели задаётся в окружении сервера (в настройках не хранится).</div>
     <div class="t-sub" style="margin-bottom:8px">Ключ модели в окружении: <b style="color:${ASSIST_KEY?'var(--green)':'var(--red)'}">${ASSIST_KEY?'задан ✓':'не задан'}</b> · провайдер: <b>${esc(ASSIST_PROVIDER)}</b></div>
     <label style="display:flex;align-items:center;gap:10px;padding:7px 0;cursor:pointer"><input type="checkbox" id="s-assist-on" ${s.assistant?.enabled?'checked':''} ${ASSIST_KEY?'':'disabled'}> <span>Включить помощника${ASSIST_KEY?'':' <span class="t-sub">(сначала задайте ключ в окружении клиента)</span>'}</span></label>
+    <label style="display:flex;align-items:center;gap:10px;padding:7px 0;cursor:pointer"><input type="checkbox" id="s-assist-act" ${s.assistant?.actions!==false?'checked':''}> <span>Разрешить выполнять действия <span class="t-sub">(оплата, задачи, заявки, договоры — всегда с кнопкой подтверждения; в рамках прав сотрудника, с записью в аудит)</span></span></label>
     <div class="field" style="max-width:260px"><label>Провайдер модели</label><select id="s-assist-prov"><option value="gigachat"${(s.assistant?.provider||'gigachat')==='gigachat'?' selected':''}>GigaChat (Сбер)</option><option value="yandexgpt"${s.assistant?.provider==='yandexgpt'?' selected':''}>YandexGPT</option></select></div>
     <div class="t-sub">Провайдер выбирается переменной окружения <code>LLM_PROVIDER</code>; здесь — отметка для удобства. По умолчанию помощник выключен.</div>
   </div>
@@ -2052,7 +2084,7 @@ async function saveSettings(){
   if(document.getElementById('s-autoremind')) S.autoRemind={enabled:document.getElementById('s-autoremind').checked,everyDays:Math.max(1,+val('s-autoremind-days')||7)};
   if(document.getElementById('s-tar-electricity')) S.tariffs={electricity:+val('s-tar-electricity')||0,water:+val('s-tar-water')||0,heating:+val('s-tar-heating')||0};
   if(document.getElementById('s-autoindex')) S.autoIndex={enabled:document.getElementById('s-autoindex').checked};
-  if(document.getElementById('s-assist-on')) S.assistant={enabled:document.getElementById('s-assist-on').checked,provider:val('s-assist-prov')||'gigachat'};
+  if(document.getElementById('s-assist-on')) S.assistant={enabled:document.getElementById('s-assist-on').checked,provider:val('s-assist-prov')||'gigachat',actions:!!document.getElementById('s-assist-act')?.checked};
   await afterStateChange();
   applyAccent(); showApp();
 }
