@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join, extname, normalize, sep } from 'node:path';
 import {
   db, seed, resetData, hashPassword, verifyPassword,
-  ROLES, ROLE_KEYS, perms, canView, canEdit
+  ROLES, ROLE_KEYS, perms, canView, canEdit, canViewS, canEditS
 } from './db.js';
 import { ask as llmAsk, hasModelKey, providerName } from './llm.js';
 
@@ -35,6 +35,7 @@ function getSecret(){
   return row.json;
 }
 const SECRET = getSecret();
+const DUMMY_HASH = hashPassword('not-a-real-password-timing-guard'); // для постоянного времени логина
 const b64 = o => Buffer.from(JSON.stringify(o)).toString('base64url');
 const unb64 = s => JSON.parse(Buffer.from(s,'base64url').toString());
 function signToken(payload){
@@ -81,12 +82,22 @@ const STATE_MOD = { buildings:'objects', units:'objects', tenants:'tenants', con
   requests:'requests', equipment:'upkeep', listings:'ads', signage:'ads',
   budgets:'budget', penaltyRate:'budget', integrations:'integrations' };
 const isFull = role => role==='admin' || role==='owner';
+// идентификаторы попадают в onclick="fn('${id}')" на фронте — запрещаем в них спецсимволы HTML/JS (анти-stored-XSS у корня)
+const BAD_ID = /[<>"'`\\]/;
+const ID_COLLECTIONS = ['buildings','units','tenants','contracts','payments','utilities','expenses','salaries','requests','equipment','listings','signage','buildingMeters'];
+function hasBadIds(st){
+  for(const k of ID_COLLECTIONS){ if(Array.isArray(st[k])) for(const it of st[k]){ if(it && typeof it.id==='string' && BAD_ID.test(it.id)) return true; } }
+  // ссылки, которые тоже рендерятся в onclick/атрибуты
+  if(Array.isArray(st.units)) for(const u of st.units){ if(u && typeof u.building==='string' && BAD_ID.test(u.building)) return true; }
+  if(Array.isArray(st.contracts)) for(const c of st.contracts){ if(c && ((typeof c.unit==='string'&&BAD_ID.test(c.unit)) || (typeof c.tenant==='string'&&BAD_ID.test(c.tenant)))) return true; }
+  return false;
+}
 // убираем из состояния разделы, которые роль не имеет права видеть (защита чтения)
 function filterStateForRole(state, role){
   if(isFull(role)) return state;
   const s = {...state};
-  if(!canView(role,'salaries')) s.salaries = [];
-  if(!canView(role,'budget')) s.budgets = {};
+  if(!canViewS(role,'salaries',state)) s.salaries = [];
+  if(!canViewS(role,'budget',state)) s.budgets = {};
   // токен Telegram-бота — только админу/собственнику
   if(s.settings && s.settings.notify && s.settings.notify.telegram){
     s.settings = {...s.settings, notify:{...s.settings.notify, telegram:{...s.settings.notify.telegram, token:''}}};
@@ -125,8 +136,8 @@ function buildAssistantData(state, role, scope){
   const L=[];
   const today = new Date(new Date().toISOString().slice(0,10));
   const dl = d => d ? Math.round((new Date(d)-today)/864e5) : 9999;
-  // выжимка строится ТОЛЬКО по модулям, доступным роли (canView) — чтобы не утекли данные мимо прав
-  const cv = m => canView(role, m);
+  // выжимка строится ТОЛЬКО по модулям, доступным роли (с учётом матрицы прав) — чтобы не утекли данные мимо прав
+  const cv = m => canViewS(role, m, state);
   L.push(`Объектов: ${(state.buildings||[]).length}, помещений: ${(state.units||[]).length}${cv('tenants')?`, арендаторов: ${(state.tenants||[]).length}`:''}${cv('contracts')?`, договоров: ${(state.contracts||[]).length}`:''}.`);
   // должники (просроченные/неоплаченные) — только если роль видит платежи
   if(cv('payments')){
@@ -192,7 +203,7 @@ function normalizeAction(raw, st, role){
   try{
     switch(raw.type){
       case 'pay': {
-        need(canEdit(role,'payments'),'У вас нет прав отмечать оплаты.');
+        need(canEditS(role,'payments',st),'У вас нет прав отмечать оплаты.');
         let cs=payments.filter(p=>(p.amount-p.paid)>0);
         if(raw.unit) cs=cs.filter(p=>{const c=cById(p.contract);return c&&c.unit===raw.unit;});
         if(raw.tenant){ const t=tByName(raw.tenant); need(t,'Не нашёл арендатора «'+raw.tenant+'».'); cs=cs.filter(p=>{const c=cById(p.contract);return c&&c.tenant===t.id;}); }
@@ -203,51 +214,51 @@ function normalizeAction(raw, st, role){
         return { ok:true, action:{ type:'pay', params:{paymentId:p.id}, label:`Отметить оплату ${_money(rem)} по «${t?t.name:c.unit}» (помещ. ${c.unit}) за ${p.period}` } };
       }
       case 'task_create': {
-        need(canEdit(role,'tasks'),'У вас нет прав создавать задачи.');
+        need(canEditS(role,'tasks',st),'У вас нет прав создавать задачи.');
         need(raw.title,'Не указано описание задачи.');
         return { ok:true, action:{ type:'task_create', params:{title:String(raw.title).slice(0,200),due:raw.due||null,unit:raw.unit||'—'}, label:`Создать задачу: «${String(raw.title).slice(0,80)}»${raw.due?' (срок '+raw.due+')':''}` } };
       }
       case 'request_create': {
-        need(canEdit(role,'requests'),'У вас нет прав создавать заявки.');
+        need(canEditS(role,'requests',st),'У вас нет прав создавать заявки.');
         need(raw.title,'Не указан заголовок заявки.');
         const b=(st.buildings||[])[0]; const bid = raw.building && (st.buildings||[]).some(x=>x.id===raw.building||x.name===raw.building) ? ((st.buildings||[]).find(x=>x.id===raw.building||x.name===raw.building).id) : (b&&b.id);
         return { ok:true, action:{ type:'request_create', params:{title:String(raw.title).slice(0,200),category:raw.category||'Прочее',priority:['high','medium','low'].includes(raw.priority)?raw.priority:'medium',building:bid}, label:`Создать заявку: «${String(raw.title).slice(0,80)}»` } };
       }
       case 'task_done': {
-        need(canEdit(role,'tasks'),'У вас нет прав на задачи.');
+        need(canEditS(role,'tasks',st),'У вас нет прав на задачи.');
         return { ok:true, action:{ type:'task_done', params:{title:String(raw.title||'').slice(0,200)}, label:`Завершить задачу: «${String(raw.title||'').slice(0,80)}»` } };
       }
       case 'request_take': {
-        need(canEdit(role,'requests'),'У вас нет прав на заявки.');
+        need(canEditS(role,'requests',st),'У вас нет прав на заявки.');
         return { ok:true, action:{ type:'request_take', params:{title:String(raw.title||'').slice(0,200)}, label:`Продвинуть заявку: «${String(raw.title||'').slice(0,80)}»` } };
       }
       case 'contract_renew': {
-        need(canEdit(role,'contracts'),'У вас нет прав на договоры.');
+        need(canEditS(role,'contracts',st),'У вас нет прав на договоры.');
         need(raw.end && /^\d{4}-\d{2}-\d{2}$/.test(raw.end),'Укажите новую дату окончания (ГГГГ-ММ-ДД).');
         const cs=findContract(raw); need(cs.length,'Не нашёл договор по этим данным.'); need(cs.length===1,'Нашёл несколько договоров — уточните арендатора или помещение.');
         const c=cs[0], t=tById(c.tenant);
         return { ok:true, action:{ type:'contract_renew', params:{contractId:c.id,end:raw.end}, label:`Продлить договор «${t?t.name:c.id}» (${c.unit}) до ${raw.end}` } };
       }
       case 'contract_rate': {
-        need(canEdit(role,'contracts'),'У вас нет прав на договоры.');
+        need(canEditS(role,'contracts',st),'У вас нет прав на договоры.');
         need(raw.rate!=null && +raw.rate>0,'Укажите новую ставку.');
         const cs=findContract(raw); need(cs.length,'Не нашёл договор по этим данным.'); need(cs.length===1,'Нашёл несколько договоров — уточните арендатора или помещение.');
         const c=cs[0], t=tById(c.tenant), rt=raw.rateType==='flat'?'flat':'sqm';
         return { ok:true, action:{ type:'contract_rate', params:{contractId:c.id,rate:+raw.rate,rateType:rt}, label:`Изменить ставку договора «${t?t.name:c.id}» (${c.unit}) на ${_money(+raw.rate)}${rt==='flat'?' /мес за помещение':' /м²'}` } };
       }
       case 'upkeep_done': {
-        need(canEdit(role,'upkeep'),'У вас нет прав на ТО.');
+        need(canEditS(role,'upkeep',st),'У вас нет прав на ТО.');
         const nm=String(raw.name||'').toLowerCase().trim(); need(nm,'Укажите оборудование.');
         const eq=(st.equipment||[]).filter(e=>(e.name||'').toLowerCase().includes(nm));
         need(eq.length,'Не нашёл оборудование «'+raw.name+'».'); need(eq.length===1,'Нашёл несколько единиц — уточните название.');
         return { ok:true, action:{ type:'upkeep_done', params:{equipmentId:eq[0].id}, label:`Отметить ТО выполненным: «${eq[0].name}»` } };
       }
       case 'assign_tenant': {
-        need(canEdit(role,'contracts'),'У вас нет прав на договоры.');
+        need(canEditS(role,'contracts',st),'У вас нет прав на договоры.');
         need(raw.unit,'Укажите помещение.'); const u=units.find(x=>x.id===raw.unit); need(u,'Не нашёл помещение «'+raw.unit+'».'); need(!u.tenant,'Помещение «'+raw.unit+'» уже занято.');
         need(raw.tenant,'Укажите арендатора.'); need(raw.rate!=null && +raw.rate>0,'Укажите ставку.');
         const ex=tByName(raw.tenant); const rt=raw.rateType==='flat'?'flat':'sqm';
-        need(ex || canEdit(role,'tenants'),'Нет прав создавать нового арендатора.');
+        need(ex || canEditS(role,'tenants',st),'Нет прав создавать нового арендатора.');
         return { ok:true, action:{ type:'assign_tenant', params:{unit:raw.unit,tenantId:ex?ex.id:null,tenantName:ex?ex.name:String(raw.tenant).slice(0,120),rate:+raw.rate,rateType:rt}, label:`Заселить «${ex?ex.name:raw.tenant}» в ${raw.unit} по ${_money(+raw.rate)}${rt==='flat'?' /мес':' /м²'}` } };
       }
       default: return { ok:false, error:null };
@@ -412,7 +423,9 @@ const ALLOW_REGISTRATION = process.env.ALLOW_REGISTRATION === '1';
 
 // простой лимит попыток входа (анти-брутфорс)
 const loginFails = new Map();
-function loginKey(req, email){ return (req.headers['x-forwarded-for']||req.socket.remoteAddress||'')+'|'+email; }
+// IP клиента: последний адрес в X-Forwarded-For — его добавляет НАШ Caddy (левые значения может подделать клиент)
+function clientIp(req){ const xff=String(req.headers['x-forwarded-for']||'').split(',').map(s=>s.trim()).filter(Boolean); return xff.length? xff[xff.length-1] : (req.socket.remoteAddress||''); }
+function loginKey(req, email){ return clientIp(req)+'|'+email; }
 function isLocked(key){ const r=loginFails.get(key); if(!r) return false; if(Date.now()-r.ts > 15*60*1000){ loginFails.delete(key); return false; } return r.count>=8; }
 function noteFail(key){ const r=loginFails.get(key)||{count:0,ts:0}; r.count++; r.ts=Date.now(); loginFails.set(key,r); }
 
@@ -427,9 +440,16 @@ function readBody(req){
     req.on('end',()=>{ try{ resolve(data?JSON.parse(data):{}); }catch{ resolve({}); } });
   });
 }
+// общие заголовки безопасности (анти-clickjacking, nosniff, referrer)
+const SEC_HEADERS = {
+  'X-Frame-Options':'DENY',
+  'Content-Security-Policy':"frame-ancestors 'none'",
+  'X-Content-Type-Options':'nosniff',
+  'Referrer-Policy':'strict-origin-when-cross-origin',
+};
 function send(res, code, obj, headers={}){
   const body = JSON.stringify(obj);
-  res.writeHead(code, { 'Content-Type':'application/json; charset=utf-8', ...headers });
+  res.writeHead(code, { 'Content-Type':'application/json; charset=utf-8', ...SEC_HEADERS, ...headers });
   res.end(body);
 }
 function authUser(req){
@@ -479,7 +499,9 @@ async function api(req, res, url){
     const key = loginKey(req, email);
     if(isLocked(key)) return send(res,429,{error:'Слишком много попыток. Попробуйте через 15 минут.'});
     const u = db.prepare('SELECT * FROM users WHERE email=?').get(email);
-    if(!u || !u.active || !verifyPassword(b.password||'', u.password)){ noteFail(key); return send(res,401,{error:'Неверный email или пароль'}); }
+    // постоянное время: проверяем пароль даже если пользователя нет (против user-enumeration по таймингу)
+    const ok = (u && u.active) ? verifyPassword(b.password||'', u.password) : (verifyPassword(b.password||'', DUMMY_HASH), false);
+    if(!ok){ noteFail(key); return send(res,401,{error:'Неверный email или пароль'}); }
     loginFails.delete(key);
     setAuthCookie(req, res, u.id);
     return send(res,200,{ user: publicUser(u) });
@@ -526,10 +548,15 @@ async function api(req, res, url){
       let toSave = b;
       if(!isFull(me.role)){
         const merged = {...cur};
-        for(const [k,mod] of Object.entries(STATE_MOD)){ if(canEdit(me.role, mod)) merged[k] = b[k]; }
-        if(Array.isArray(b.audit)) merged.audit = b.audit; // журнал действий дописывают все роли
+        // права — с учётом редактируемой матрицы клиента (roleMatrix берётся из текущего серверного состояния)
+        for(const [k,mod] of Object.entries(STATE_MOD)){ if(canEditS(me.role, mod, cur)) merged[k] = b[k]; }
+        // журнал действий: только ДОПИСЫВАНИЕ (нельзя стереть/укоротить уже записанное) — защита от подделки аудита
+        const oldAudit = Array.isArray(cur.audit)?cur.audit:[];
+        if(Array.isArray(b.audit) && b.audit.length >= oldAudit.length) merged.audit = b.audit;
+        else merged.audit = oldAudit;
         toSave = merged;
       }
+      if(hasBadIds(toSave)) return send(res,400,{error:'Недопустимые символы в идентификаторах (запрещены < > " \' ` \\).'});
       db.prepare(`UPDATE state SET json=?, updated_at=?, updated_by=? WHERE key='main'`)
         .run(JSON.stringify(toSave), new Date().toISOString(), me.email);
       // мгновенные оповещения о новых заявках
@@ -595,7 +622,8 @@ async function api(req, res, url){
       const email=(b.email||'').trim().toLowerCase();
       if(!email || !b.password || !b.full_name) return send(res,400,{error:'Заполните email, пароль и ФИО'});
       if(db.prepare('SELECT 1 FROM users WHERE email=?').get(email)) return send(res,409,{error:'Email уже занят'});
-      const role = ROLE_KEYS.includes(b.role)?b.role:'maintenance';
+      let role = ROLE_KEYS.includes(b.role)?b.role:'maintenance';
+      if((role==='admin'||role==='owner') && !isFull(me.role)) role='manager'; // привилегированную роль выдаёт только admin/owner
       const info = db.prepare(`INSERT INTO users(email,password,full_name,position,role,phone,active,created_at)
                                VALUES(?,?,?,?,?,?,1,?)`)
         .run(email, hashPassword(b.password), b.full_name.trim(), (b.position||'').trim(), role, (b.phone||'').trim(), new Date().toISOString());
@@ -611,7 +639,10 @@ async function api(req, res, url){
       const b=await readBody(req);
       const fields=[],vals=[];
       for(const k of ['full_name','position','phone']) if(k in b){ fields.push(`${k}=?`); vals.push((b[k]||'').trim()); }
-      if('role' in b && ROLE_KEYS.includes(b.role)){ fields.push('role=?'); vals.push(b.role); }
+      if('role' in b && ROLE_KEYS.includes(b.role)){
+        if((b.role==='admin'||b.role==='owner') && !isFull(me.role)) return send(res,403,{error:'Повышать до администратора/собственника может только администратор'});
+        if((u.role==='admin'||u.role==='owner') && !isFull(me.role)) return send(res,403,{error:'Менять роль администратора может только администратор'});
+        fields.push('role=?'); vals.push(b.role); }
       if('active' in b){ fields.push('active=?'); vals.push(b.active?1:0); }
       if('password' in b && b.password){ fields.push('password=?'); vals.push(hashPassword(b.password)); }
       if(fields.length){ vals.push(id); db.prepare(`UPDATE users SET ${fields.join(', ')} WHERE id=?`).run(...vals); }
@@ -746,7 +777,7 @@ async function serveStatic(req,res,url){
   if(!file.startsWith(PUBLIC)) { res.writeHead(403); return res.end('Forbidden'); }
   try{
     const data = await readFile(file);
-    res.writeHead(200, {'Content-Type': MIME[extname(file)] || 'application/octet-stream', 'Cache-Control':'no-store'});
+    res.writeHead(200, {'Content-Type': MIME[extname(file)] || 'application/octet-stream', 'Cache-Control':'no-store', ...SEC_HEADERS});
     res.end(data);
   }catch{
     res.writeHead(404, {'Content-Type':'text/plain; charset=utf-8'});
@@ -755,7 +786,7 @@ async function serveStatic(req,res,url){
 }
 
 // ============================================================
-http.createServer(async (req,res)=>{
+const srv = http.createServer(async (req,res)=>{
   const url = new URL(req.url, `http://${req.headers.host}`);
   try{
     if(url.pathname.startsWith('/api/')) return await api(req,res,url);
@@ -764,7 +795,11 @@ http.createServer(async (req,res)=>{
     console.error(err);
     send(res,500,{error:'Внутренняя ошибка сервера'});
   }
-}).listen(PORT, '0.0.0.0', ()=>{
+});
+// таймауты против медленных/slowloris-соединений
+srv.requestTimeout = 30000;
+srv.headersTimeout = 20000;
+srv.listen(PORT, '0.0.0.0', ()=>{
   console.log(`\n  СИТИ SRM (серверная версия) — http://localhost:${PORT}`);
   if(!process.env.SEED_PASSWORD) console.warn('  ⚠ SEED_PASSWORD не задан — используются демо-пароли. Для боевого режима задайте SEED_PASSWORD.');
   console.log('');

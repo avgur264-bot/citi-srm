@@ -30,6 +30,17 @@ export const ROLE_KEYS = Object.keys(ROLES);
 export const perms = role => ROLES[role] || ROLES.maintenance;
 export const canView = (role, mod) => perms(role).view.includes(mod);
 export const canEdit = (role, mod) => perms(role).edit.includes(mod);
+// Эффективные права с учётом редактируемой матрицы прав клиента (state.roleMatrix).
+// admin/owner всегда полные. Применять на СЕРВЕРЕ для авторизации (иначе матрица — лишь фронтовая иллюзия).
+export function rolePerms(role, state){
+  const base = perms(role);
+  if(role==='admin' || role==='owner') return base;
+  const ov = state && state.roleMatrix && state.roleMatrix[role];
+  if(!ov || typeof ov!=='object') return base;
+  return { view: Array.isArray(ov.view)?ov.view:base.view, edit: Array.isArray(ov.edit)?ov.edit:base.edit };
+}
+export const canViewS = (role, mod, state) => rolePerms(role, state).view.includes(mod);
+export const canEditS = (role, mod, state) => rolePerms(role, state).edit.includes(mod);
 
 // ---------- Пароли ----------
 export function hashPassword(pw){

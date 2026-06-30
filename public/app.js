@@ -52,7 +52,8 @@ const mkLogin = v => { v=(v||'').trim(); return !v? '' : (v.includes('@')? v.toL
 /* ---------- helpers ---------- */
 const fmt=n=>new Intl.NumberFormat('ru-RU').format(Math.round(n));
 const money=n=>fmt(n)+' ₽';
-const esc=s=>(s==null?'':String(s)).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+// экранируем и одинарную кавычку/обратный апостроф — id и значения часто попадают в onclick="fn('${...}')"
+const esc=s=>(s==null?'':String(s)).replace(/[&<>"'`]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;','`':'&#96;'}[c]));
 // безопасная внешняя ссылка: только http(s)/mailto, иначе пусто (защита от javascript:/data:text/html)
 const safeUrl=u=>{ const s=String(u||'').trim(); return (/^(https?:\/\/|mailto:)/i.test(s) || /^\/api\/files\//.test(s))?s:''; };
 // ячейка CSV: экранирование + защита от формульных инъекций в Excel (ведущие = + - @)
@@ -413,25 +414,28 @@ function runSearch(q){
   const box=document.getElementById('gsearchRes'); if(!box) return;
   q=(q||'').trim().toLowerCase();
   if(q.length<2){ box.classList.remove('show'); box.innerHTML=''; return; }
-  const res=[]; const add=(icon,title,sub,go)=>res.push({icon,title,sub,go});
+  const res=[]; const add=(icon,title,sub,fn,id)=>res.push({icon,title,sub,fn,id});
   // арендаторы
   if(canView('tenants')) sTenants().filter(t=>(t.name||'').toLowerCase().includes(q)||(t.inn||'').includes(q)||(t.contact||'').toLowerCase().includes(q))
-    .slice(0,6).forEach(t=>add('👥',t.name,`Арендатор · ИНН ${esc(t.inn||'—')}`,`tenantInfo('${t.id}')`));
+    .slice(0,6).forEach(t=>add('👥',t.name,`Арендатор · ИНН ${esc(t.inn||'—')}`,'tenantInfo',t.id));
   // помещения
   if(canView('objects')) sUnits().filter(u=>(u.id||'').toLowerCase().includes(q)||(u.type||'').toLowerCase().includes(q))
-    .slice(0,6).forEach(u=>add('🏢',`Помещение ${u.id}`,`${esc(u.type||'')} · ${u.area} м²`,`unitInfo('${esc(u.id)}')`));
+    .slice(0,6).forEach(u=>add('🏢',`Помещение ${u.id}`,`${esc(u.type||'')} · ${u.area} м²`,'unitInfo',u.id));
   // договоры
   if(canView('contracts')) sContracts().filter(c=>{const t=tenantOf(c.tenant);return (c.id||'').toLowerCase().includes(q)||(c.unit||'').toLowerCase().includes(q)||(t&&(t.name||'').toLowerCase().includes(q));})
-    .slice(0,6).forEach(c=>{const t=tenantOf(c.tenant);add('📄',`Договор ${(c.id||'').toUpperCase()}`,`${esc(t?t.name:'')} · ${esc(c.unit)}`,`contractInfo('${c.id}')`);});
+    .slice(0,6).forEach(c=>{const t=tenantOf(c.tenant);add('📄',`Договор ${(c.id||'').toUpperCase()}`,`${esc(t?t.name:'')} · ${esc(c.unit)}`,'contractInfo',c.id);});
   // платежи
   if(canView('payments')) sPayments().filter(p=>{const c=contractOf(p.contract);const t=c&&tenantOf(c.tenant);return (p.period||'').includes(q)||(t&&(t.name||'').toLowerCase().includes(q));})
-    .slice(0,6).forEach(p=>{const c=contractOf(p.contract);const t=c&&tenantOf(c.tenant);add('💳',`Платёж ${p.period}`,`${esc(t?t.name:'')} · ${money(p.amount)} · ${p.status}`,`payModal('${p.id}')`);});
+    .slice(0,6).forEach(p=>{const c=contractOf(p.contract);const t=c&&tenantOf(c.tenant);add('💳',`Платёж ${p.period}`,`${esc(t?t.name:'')} · ${money(p.amount)} · ${p.status}`,'payModal',p.id);});
   box.innerHTML = res.length
-    ? res.slice(0,20).map(r=>`<div class="gi" onclick="searchGo(${JSON.stringify(r.go).replace(/"/g,'&quot;')})"><span style="font-size:17px">${r.icon}</span><div style="flex:1;min-width:0"><div class="t-strong">${esc(r.title)}</div><div class="t-sub">${r.sub}</div></div></div>`).join('')
+    ? res.slice(0,20).map(r=>`<div class="gi" onclick="searchGo('${r.fn}','${esc(r.id)}')"><span style="font-size:17px">${r.icon}</span><div style="flex:1;min-width:0"><div class="t-strong">${esc(r.title)}</div><div class="t-sub">${r.sub}</div></div></div>`).join('')
     : `<div class="gi"><div class="t-sub">Ничего не найдено по «${esc(q)}»</div></div>`;
   box.classList.add('show');
 }
-function searchGo(call){ const box=document.getElementById('gsearchRes'); if(box){box.classList.remove('show');} const gs=document.getElementById('gsearch'); if(gs)gs.value=''; try{ (0,eval)(call); }catch(e){} }
+// без eval: диспетчеризация по белому списку функций
+const SEARCH_FNS={ tenantInfo, unitInfo, contractInfo, payModal };
+function searchGo(fn,id){ const box=document.getElementById('gsearchRes'); if(box){box.classList.remove('show');} const gs=document.getElementById('gsearch'); if(gs)gs.value='';
+  const f=SEARCH_FNS[fn]; if(typeof f==='function'){ try{ f(id); }catch(e){} } }
 document.addEventListener('click',e=>{ const g=document.getElementById('gsearchRes'); if(g&&!e.target.closest('.gsearch')) g.classList.remove('show'); });
 /* ---------- быстрое добавление (B4 FAB) ---------- */
 function quickAddItems(){
@@ -999,7 +1003,7 @@ function printReceipt(pid, txIndex){
   const c=contractOf(p.contract);const t=tenantOf(c.tenant);const u=unitOf(c.unit);const b=buildingOf(u&&u.building);
   const tx=pTx(p); const x=(txIndex!=null&&tx[txIndex])?tx[txIndex]:(tx.length?tx[tx.length-1]:{amount:p.paid,date:p.paidDate,method:'bank'});
   const rem=Math.max(0,p.amount-p.paid);
-  const num=(''+pid).toUpperCase()+'-'+((txIndex!=null?txIndex:Math.max(0,tx.length-1))+1);
+  const num=esc((''+pid).toUpperCase()+'-'+((txIndex!=null?txIndex:Math.max(0,tx.length-1))+1));
   const row=(k,v,cls='')=>`<div class="row ${cls}"><span>${k}</span><b>${v}</b></div>`;
   const html=`<!DOCTYPE html><html lang="ru"><head><meta charset="utf-8"><title>Квитанция ${num}</title>
   <style>*{font-family:Arial,Helvetica,sans-serif;box-sizing:border-box}body{margin:0;padding:20px;color:#13233F}
@@ -1020,9 +1024,9 @@ function printReceipt(pid, txIndex){
     ${row('Дата платежа',x.date?fmtD(x.date):'—')}
     ${row('Объект',esc(b&&b.name||'—'))}
     ${row('Адрес',esc(b&&b.address||'—'))}
-    ${row('Помещение',c.unit)}
+    ${row('Помещение',esc(c.unit))}
     ${row('Арендатор',esc(t.name))}
-    ${row('ИНН',t.inn||'—')}
+    ${row('ИНН',esc(t.inn||'—'))}
     ${row('Назначение','Аренда за '+p.period)}
     <hr>
     ${row('Сумма платежа',money(x.amount),'big')}
@@ -2178,7 +2182,7 @@ function buildImportRec(type,get,errors,line){
   if(type==='buildings'){ const name=get('name'); if(!name){errors.push(`Строка ${line}: пустое название`);return null;}
     if(buildingsList().some(b=>b.name.toLowerCase()===name.toLowerCase())){errors.push(`Строка ${line}: объект «${name}» уже есть`);return null;}
     return {id:'b'+Date.now()+'_'+line,name,address:get('address')}; }
-  if(type==='units'){ const id=get('id'); if(!id){errors.push(`Строка ${line}: пустой номер`);return null;}
+  if(type==='units'){ const id=get('id').replace(/[<>"'`&]/g,''); if(!id){errors.push(`Строка ${line}: пустой номер`);return null;}
     if(DB.units.some(u=>u.id===id)){errors.push(`Строка ${line}: помещение «${id}» уже есть`);return null;}
     const bn=get('building'); const b=buildingsList().find(x=>x.name.toLowerCase()===bn.toLowerCase()||x.id===bn);
     if(!b){errors.push(`Строка ${line}: объект «${bn}» не найден`);return null;}
