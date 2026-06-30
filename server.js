@@ -125,23 +125,35 @@ function buildAssistantData(state, role, scope){
   const L=[];
   const today = new Date(new Date().toISOString().slice(0,10));
   const dl = d => d ? Math.round((new Date(d)-today)/864e5) : 9999;
-  L.push(`Объектов: ${(state.buildings||[]).length}, помещений: ${(state.units||[]).length}, арендаторов: ${(state.tenants||[]).length}, договоров: ${(state.contracts||[]).length}.`);
-  // должники (просроченные/неоплаченные)
-  const debt=(state.payments||[]).filter(p=>(p.amount-p.paid)>0).filter(p=>inB(uB[cU[p.contract]]));
-  if(debt.length){
-    const sum=debt.reduce((s,p)=>s+(p.amount-p.paid),0);
-    L.push(`Неоплаченные платежи: ${debt.length} на ${Math.round(sum)} ₽.`);
-    debt.slice(0,15).forEach(p=>{ const c=(state.contracts||[]).find(x=>x.id===p.contract); const od=dl(p.due);
-      L.push(`  • ${tName[c&&c.tenant]||p.contract} — ${Math.round(p.amount-p.paid)} ₽ за ${p.period}, срок ${fmtDate(p.due)}${od<0?` (просрочено ${-od} дн)`:''}.`); });
-  } else L.push('Неоплаченных платежей нет.');
-  // договоры на исходе (≤60 дн)
-  const exp=(state.contracts||[]).filter(c=>c.status!=='ended' && inB(uB[c.unit]) && dl(c.end)<=60 && dl(c.end)>-3650).sort((a,b)=>dl(a.end)-dl(b.end));
-  if(exp.length){ L.push(`Договоры истекают/истекли (≤60 дн): ${exp.length}.`); exp.slice(0,10).forEach(c=>L.push(`  • ${tName[c.tenant]||c.id} (${c.unit}) — до ${fmtDate(c.end)}.`)); }
-  // ТО и заявки
-  const to=(state.equipment||[]).filter(e=>inB(e.building) && dl(e.nextService)<=14);
-  if(to.length){ L.push(`Плановое ТО скоро/просрочено: ${to.length}.`); to.slice(0,8).forEach(e=>L.push(`  • ${e.name} — ${fmtDate(e.nextService)}.`)); }
-  const req=(state.requests||[]).filter(r=>(r.status==='new'||r.status==='in_progress') && inB(r.building));
-  if(req.length) L.push(`Открытые заявки на обслуживание: ${req.length}.`);
+  // выжимка строится ТОЛЬКО по модулям, доступным роли (canView) — чтобы не утекли данные мимо прав
+  const cv = m => canView(role, m);
+  L.push(`Объектов: ${(state.buildings||[]).length}, помещений: ${(state.units||[]).length}${cv('tenants')?`, арендаторов: ${(state.tenants||[]).length}`:''}${cv('contracts')?`, договоров: ${(state.contracts||[]).length}`:''}.`);
+  // должники (просроченные/неоплаченные) — только если роль видит платежи
+  if(cv('payments')){
+    const debt=(state.payments||[]).filter(p=>(p.amount-p.paid)>0).filter(p=>inB(uB[cU[p.contract]]));
+    if(debt.length){
+      const sum=debt.reduce((s,p)=>s+(p.amount-p.paid),0);
+      L.push(`Неоплаченные платежи: ${debt.length} на ${Math.round(sum)} ₽.`);
+      debt.slice(0,15).forEach(p=>{ const c=(state.contracts||[]).find(x=>x.id===p.contract); const od=dl(p.due);
+        const who = cv('tenants') ? (tName[c&&c.tenant]||p.contract) : (c?c.unit:p.contract);
+        L.push(`  • ${who} — ${Math.round(p.amount-p.paid)} ₽ за ${p.period}, срок ${fmtDate(p.due)}${od<0?` (просрочено ${-od} дн)`:''}.`); });
+    } else L.push('Неоплаченных платежей нет.');
+  }
+  // договоры на исходе (≤60 дн) — только если роль видит договоры
+  if(cv('contracts')){
+    const exp=(state.contracts||[]).filter(c=>c.status!=='ended' && inB(uB[c.unit]) && dl(c.end)<=60 && dl(c.end)>-3650).sort((a,b)=>dl(a.end)-dl(b.end));
+    if(exp.length){ L.push(`Договоры истекают/истекли (≤60 дн): ${exp.length}.`); exp.slice(0,10).forEach(c=>L.push(`  • ${cv('tenants')?(tName[c.tenant]||c.id):c.id} (${c.unit}) — до ${fmtDate(c.end)}.`)); }
+  }
+  // ТО — только если роль видит плановое ТО
+  if(cv('upkeep')){
+    const to=(state.equipment||[]).filter(e=>inB(e.building) && dl(e.nextService)<=14);
+    if(to.length){ L.push(`Плановое ТО скоро/просрочено: ${to.length}.`); to.slice(0,8).forEach(e=>L.push(`  • ${e.name} — ${fmtDate(e.nextService)}.`)); }
+  }
+  // заявки — только если роль видит заявки
+  if(cv('requests')){
+    const req=(state.requests||[]).filter(r=>(r.status==='new'||r.status==='in_progress') && inB(r.building));
+    if(req.length) L.push(`Открытые заявки на обслуживание: ${req.length}.`);
+  }
   return L.join('\n');
 }
 // ---------- Фаза 2: предложение действий (выполняются на фронте по кнопке, с проверкой прав и аудитом) ----------
@@ -235,6 +247,7 @@ function normalizeAction(raw, st, role){
         need(raw.unit,'Укажите помещение.'); const u=units.find(x=>x.id===raw.unit); need(u,'Не нашёл помещение «'+raw.unit+'».'); need(!u.tenant,'Помещение «'+raw.unit+'» уже занято.');
         need(raw.tenant,'Укажите арендатора.'); need(raw.rate!=null && +raw.rate>0,'Укажите ставку.');
         const ex=tByName(raw.tenant); const rt=raw.rateType==='flat'?'flat':'sqm';
+        need(ex || canEdit(role,'tenants'),'Нет прав создавать нового арендатора.');
         return { ok:true, action:{ type:'assign_tenant', params:{unit:raw.unit,tenantId:ex?ex.id:null,tenantName:ex?ex.name:String(raw.tenant).slice(0,120),rate:+raw.rate,rateType:rt}, label:`Заселить «${ex?ex.name:raw.tenant}» в ${raw.unit} по ${_money(+raw.rate)}${rt==='flat'?' /мес':' /м²'}` } };
       }
       default: return { ok:false, error:null };

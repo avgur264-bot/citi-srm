@@ -1143,11 +1143,11 @@ function odpuSummary(bid,period){
   const m=buildingMeter(bid,period); const acc=odpuAccrued(m); const col=odpuCollected(bid,period);
   const rows=[['electricity','Электроэнергия'],['water','Вода'],['heating','Отопление']].map(([k,l])=>{
     const a=acc?acc[k]:null; const c=col[k]||0; const diff=(a==null)?null:(a-c);
-    return `<tr><td class="t-strong">${l}</td><td>${a==null?'—':money(a)}</td><td>${money(c)}</td><td${diff!=null&&diff!==0?` style="color:${diff>0?'var(--amber)':'var(--green)'}"`:''}>${diff==null?'—':money(diff)}</td></tr>`;
+    return `<tr><td class="t-strong">${l}</td><td>${a==null?'—':money(a)}</td><td>${money(c)}</td><td${diff!=null&&diff!==0?` style="color:var(--amber)"`:''}>${diff==null?'—':money(diff)}</td></tr>`;
   }).join('');
   const totA=acc?(acc.electricity+acc.water+acc.heating):null, totC=col.electricity+col.water+col.heating;
   return `<table><thead><tr><th>Ресурс</th><th>Нагорело (ОДПУ)</th><th>Собрали (с помещений)</th><th>Разница</th></tr></thead><tbody>${rows}
-    <tr style="border-top:2px solid var(--line2)"><td class="t-strong">Итого</td><td><b>${totA==null?'—':money(totA)}</b></td><td><b>${money(totC)}</b></td><td><b${totA!=null&&(totA-totC)!==0?` style="color:${totA-totC>0?'var(--amber)':'var(--green)'}"`:''}>${totA==null?'—':money(totA-totC)}</b></td></tr></tbody></table>
+    <tr style="border-top:2px solid var(--line2)"><td class="t-strong">Итого</td><td><b>${totA==null?'—':money(totA)}</b></td><td><b>${money(totC)}</b></td><td><b${totA!=null&&(totA-totC)!==0?` style="color:var(--amber)"`:''}>${totA==null?'—':money(totA-totC)}</b></td></tr></tbody></table>
     <div class="t-sub" style="margin-top:6px">«Разница» — общедомовые нужды / потери (показания дома минус сумма по всем помещениям, включая собственников). ${entryBtn}</div>`;
 }
 function buildingMeterModal(bid,period){
@@ -1608,7 +1608,7 @@ function renewModal(id){ const c=contractOf(id); if(!c)return; const t=tenantOf(
   openM(`<div class="modal-h"><h3>Продление договора</h3><span class="x" onclick="closeM()">×</span></div>
   <div class="modal-b">
     ${infoRow('Договор',esc((c.id||'').toUpperCase()))}${t?infoRow('Арендатор',esc(t.name)):''}${infoRow('Помещение',esc(c.unit))}
-    ${infoRow('Текущая ставка',money(c.rate)+'/м²')}${infoRow('Окончание сейчас',c.end?fmtD(c.end):'—')}
+    ${infoRow('Текущая ставка',money(c.rate)+(c.rateType==='flat'?' /мес за помещение':' /м²'))}${infoRow('Окончание сейчас',c.end?fmtD(c.end):'—')}
     <div class="field" style="margin-top:10px"><label>Новая дата окончания</label><input id="rn-end" type="date" value="${defEnd}"></div>
     ${c.indexation?`<label style="display:flex;align-items:center;gap:9px;cursor:pointer"><input type="checkbox" id="rn-idx" checked> Применить индексацию ${c.indexation}%/год к ставке (${money(c.rate)} → ${money(Math.round(c.rate*(1+c.indexation/100)))})</label>`:''}
   </div>
@@ -2591,10 +2591,11 @@ function contractModal(){const free=sUnits().filter(u=>!u.tenant);const pool=fre
   <div class="row2"><div class="field"><label>Индексация %/год</label><input id="f-idx" type="number" value="6"></div><div class="field"></div></div>
   <div class="row2"><div class="field"><label>Начало</label><input id="f-start" type="date" value="2026-07-01"></div><div class="field"><label>Окончание</label><input id="f-end" type="date" value="2029-06-30"></div></div></div>
   <div class="modal-f"><button class="btn ghost" onclick="closeM()">Отмена</button><button class="btn" onclick="saveContract()">Создать</button></div>`);}
-async function saveContract(){const u=val('f-unit');const rate=+val('f-rate');const rt=val('f-ratetype')||'sqm';const area=unitOf(u).area;
-  const monthly=rt==='flat'?rate:rate*area;
-  DB.contracts.push({id:'c'+Date.now(),tenant:val('f-ten'),unit:u,rate,rateType:rt,start:val('f-start'),end:val('f-end'),deposit:monthly*2,indexation:+val('f-idx'),status:'active'});
-  unitOf(u).tenant=val('f-ten');closeM();await afterStateChange();}
+async function saveContract(){const u=val('f-unit');const unit=unitOf(u); if(!unit) return alert('Выберите помещение (в портфеле нет доступных помещений).');
+  const ten=val('f-ten'); if(!ten) return alert('Выберите арендатора.');
+  const rate=+val('f-rate')||0;const rt=val('f-ratetype')||'sqm';const monthly=rt==='flat'?rate:rate*(unit.area||0);
+  DB.contracts.push({id:'c'+Date.now(),tenant:ten,unit:u,rate,rateType:rt,start:val('f-start'),end:val('f-end'),deposit:monthly*2,indexation:+val('f-idx')||0,status:'active'});
+  unit.tenant=ten;closeM();await afterStateChange();}
 
 /* платёж */
 function paymentModal(){openM(`<div class="modal-h"><h3>Новый платёж</h3><span class="x" onclick="closeM()">×</span></div>

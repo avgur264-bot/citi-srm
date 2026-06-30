@@ -32,6 +32,13 @@ awk -v key="$KEY" -v scope="$SCOPE" '
   }
 ' "$BAK" > "$CF"
 
+# Проверка, что ключ действительно вписан (иначе в шаблоне не нашёлся блок environment:) — откатываемся.
+if ! grep -q 'GIGACHAT_AUTH_KEY=' "$CF"; then
+  cp "$BAK" "$CF"
+  echo "Ошибка: не нашёл блок 'environment:' в $CF — ключ НЕ вписан, файл восстановлен. Проверьте формат compose."
+  exit 1
+fi
+
 echo "→ Пересоздаю контейнер клиента '$NAME'…"
 docker compose -f "$CF" up -d
 echo
