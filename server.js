@@ -12,6 +12,7 @@ import {
   db, seed, resetData, hashPassword, verifyPassword,
   ROLES, ROLE_KEYS, perms, canView, canEdit
 } from './db.js';
+import { ask as llmAsk, hasModelKey, providerName } from './llm.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PUBLIC = join(__dirname, 'public');
@@ -92,6 +93,61 @@ function filterStateForRole(state, role){
   }
   return s;
 }
+
+// ============================================================
+// AI-помощник (Фаза 1: только чтение и подсказки, ничего не меняет)
+// ============================================================
+// Краткая справка по разделам — грунтовка ответов (чтобы модель не выдумывала).
+const ASSISTANT_KNOWLEDGE = `СИТИ SRM — система управления коммерческой недвижимостью (объекты, помещения, арендаторы, договоры, платежи, коммуналка, бюджет, задачи, заявки, плановое ТО, реклама, отчёты, настройки).
+Разделы и подсказки:
+- Сегодня — дела дня с действием в один клик (оплатить, продлить, ТО выполнено, взять заявку, завершить задачу).
+- Дашборд — ключевые показатели; настраивается (⚙ Настроить), блоки перетаскиваются.
+- Объекты и занятость — здания и помещения; «+ Объект», «+ Помещение»; у помещения есть номер, название, тип, площадь, статус. Тарифы коммуналки и расчётный коэффициент электро задаются в карточке объекта (✎ Редактировать).
+- Арендаторы — компании-арендаторы, контакты, договоры, документы. Заселить арендатора можно из карточки свободного помещения (🏠 Заселить арендатора).
+- Договоры — ставка (за м²/мес или фиксированная за помещение/мес), срок, индексация, депозит. Изменить аренду — «✎ Изменить аренду». Продлить — «Продлить».
+- Платежи аренды — начисления и оплаты. Оплата: «✓ Оплачено» (полная в один тап) или «Оплата» (частичная, способ, дата). Автоначисление аренды включается в Настройках → Автоматизация.
+- Коммуналка и расходы — начисления по помещениям и расходы на содержание. «📟 Показания помещений»: электро = (текущее−предыдущее)×коэффициент×тариф, вода = (текущее−предыдущее)×тариф, отопление = площадь×тариф ₽/м². «🏢 Показания ОДПУ» — общедомовые приборы учёта; сводка «Нагорело (ОДПУ) / Собрали (с помещений) / Разница (общедомовые нужды)». Тарифы — в карточке объекта или Настройках.
+- Бюджет и долги — план/факт доходов и расходов, NOI = доходы минус расходы (факт), % выполнения; старение задолженности (1–30/31–60/61–90/90+ дней) и пени.
+- Задачи — канбан, исполнители, сроки. Заявки на обслуживание — новые→в работе→выполнено. Плановое ТО — реестр оборудования, «✅ ТО выполнено».
+- Центр сроков (🔔) — всё срочное в одном месте. Реклама — объявления ЦИАН/Авито и разрешения на вывески.
+- Отчёты — доход/расход/NOI/маржа, заполняемость, экспорт CSV. Настройки — брендинг, модули, справочники, тарифы, Telegram, автоматизации (по умолчанию выключены).
+- Документы (PDF/фото) прикрепляются в карточках помещений, арендаторов, объявлений, разрешений; план объекта — несколько файлов и PDF.`;
+
+const ASSISTANT_SYS = `Ты встроенный помощник СИТИ SRM — системы управления коммерческой недвижимостью. Отвечай кратко, простым языком, по-русски. Опирайся ТОЛЬКО на предоставленные справку и данные. Если данных нет — честно скажи и предложи, где посмотреть. Где уместно — давай короткие шаги (1, 2, 3) и называй раздел меню. Никаких выдумок. Ты НИЧЕГО не меняешь в системе и не выполняешь действий — только подсказываешь, как сделать это пользователю.`;
+
+const fmtDate = d => d ? new Date(d).toLocaleDateString('ru-RU') : '—';
+// Компактная выжимка данных по текущему scope и роли (state уже отфильтрован filterStateForRole).
+function buildAssistantData(state, role, scope){
+  const inB = b => !scope || scope==='all' || b===scope;
+  const tName = Object.fromEntries((state.tenants||[]).map(t=>[t.id,t.name]));
+  const uB = Object.fromEntries((state.units||[]).map(u=>[u.id,u.building]));
+  const cU = Object.fromEntries((state.contracts||[]).map(c=>[c.id,c.unit]));
+  const L=[];
+  const today = new Date(new Date().toISOString().slice(0,10));
+  const dl = d => d ? Math.round((new Date(d)-today)/864e5) : 9999;
+  L.push(`Объектов: ${(state.buildings||[]).length}, помещений: ${(state.units||[]).length}, арендаторов: ${(state.tenants||[]).length}, договоров: ${(state.contracts||[]).length}.`);
+  // должники (просроченные/неоплаченные)
+  const debt=(state.payments||[]).filter(p=>(p.amount-p.paid)>0).filter(p=>inB(uB[cU[p.contract]]));
+  if(debt.length){
+    const sum=debt.reduce((s,p)=>s+(p.amount-p.paid),0);
+    L.push(`Неоплаченные платежи: ${debt.length} на ${Math.round(sum)} ₽.`);
+    debt.slice(0,15).forEach(p=>{ const c=(state.contracts||[]).find(x=>x.id===p.contract); const od=dl(p.due);
+      L.push(`  • ${tName[c&&c.tenant]||p.contract} — ${Math.round(p.amount-p.paid)} ₽ за ${p.period}, срок ${fmtDate(p.due)}${od<0?` (просрочено ${-od} дн)`:''}.`); });
+  } else L.push('Неоплаченных платежей нет.');
+  // договоры на исходе (≤60 дн)
+  const exp=(state.contracts||[]).filter(c=>c.status!=='ended' && inB(uB[c.unit]) && dl(c.end)<=60 && dl(c.end)>-3650).sort((a,b)=>dl(a.end)-dl(b.end));
+  if(exp.length){ L.push(`Договоры истекают/истекли (≤60 дн): ${exp.length}.`); exp.slice(0,10).forEach(c=>L.push(`  • ${tName[c.tenant]||c.id} (${c.unit}) — до ${fmtDate(c.end)}.`)); }
+  // ТО и заявки
+  const to=(state.equipment||[]).filter(e=>inB(e.building) && dl(e.nextService)<=14);
+  if(to.length){ L.push(`Плановое ТО скоро/просрочено: ${to.length}.`); to.slice(0,8).forEach(e=>L.push(`  • ${e.name} — ${fmtDate(e.nextService)}.`)); }
+  const req=(state.requests||[]).filter(r=>(r.status==='new'||r.status==='in_progress') && inB(r.building));
+  if(req.length) L.push(`Открытые заявки на обслуживание: ${req.length}.`);
+  return L.join('\n');
+}
+// анти-злоупотребление: лимит запросов на пользователя
+const assistHits = new Map();
+function assistAllowed(uid){ const now=Date.now(); const r=assistHits.get(uid)||{c:0,ts:now};
+  if(now-r.ts>60_000){ r.c=0; r.ts=now; } r.c++; assistHits.set(uid,r); return r.c<=15; }
 
 // ---------- ежедневная сводка в Telegram ----------
 const fmtMoney = n => new Intl.NumberFormat('ru-RU').format(Math.round(n||0)) + ' ₽';
@@ -284,7 +340,8 @@ async function api(req, res, url){
   // ---- AUTH (без токена) ----
   // Публичный флаг: разрешена ли самостоятельная регистрация (по умолчанию — нет).
   if(path==='/api/config' && method==='GET'){
-    return send(res,200,{ allowRegistration: ALLOW_REGISTRATION });
+    // assistantKey — задан ли ключ модели в окружении (UI помощника показывается только тогда + при включении в Настройках)
+    return send(res,200,{ allowRegistration: ALLOW_REGISTRATION, assistantKey: hasModelKey(), assistantProvider: providerName() });
   }
   if(path==='/api/auth/register' && method==='POST'){
     if(!ALLOW_REGISTRATION) return send(res,403,{error:'Регистрация закрыта. Учётную запись создаёт администратор.'});
@@ -466,6 +523,36 @@ async function api(req, res, url){
     if(!tg||!tg.token||!tg.chatId) return send(res,400,{error:'Не заданы токен бота и chat_id. Сохраните настройки.'});
     const ok=await sendTelegram(tg.token, tg.chatId, buildDigest());
     return send(res,200,{ ok });
+  }
+
+  // ---- AI-помощник (Фаза 1: только чтение/подсказки) ----
+  if(path==='/api/assistant' && method==='POST'){
+    const st = JSON.parse(db.prepare(`SELECT json FROM state WHERE key='main'`).get().json);
+    const cfg = (st.settings && st.settings.assistant) || {};
+    if(!hasModelKey() || !cfg.enabled) return send(res,200,{ enabled:false });   // ключа нет или выключен в Настройках
+    if(!assistAllowed(me.id)) return send(res,429,{ error:'Слишком много вопросов подряд. Подождите минуту.' });
+    const b = await readBody(req);
+    const question = String(b.question||'').trim().slice(0,1000);
+    if(!question) return send(res,400,{ error:'Пустой вопрос' });
+    const scope = (typeof b.scope==='string') ? b.scope : 'all';
+    // контекст: только данные, доступные роли (filterStateForRole), без секретов
+    const safe = filterStateForRole(st, me.role);
+    const data = buildAssistantData(safe, me.role, scope);
+    const messages = [
+      { role:'system', content: ASSISTANT_SYS + '\n\nСПРАВКА ПО СИСТЕМЕ:\n' + ASSISTANT_KNOWLEDGE },
+      { role:'system', content: 'ДАННЫЕ (текущий объект/портфель, по правам пользователя; не показывай чужого):\n' + data },
+      ...(Array.isArray(b.history) ? b.history.filter(m=>m&&(m.role==='user'||m.role==='assistant')&&typeof m.content==='string').slice(-6).map(m=>({role:m.role,content:String(m.content).slice(0,1500)})) : []),
+      { role:'user', content: question },
+    ];
+    const ctrl = new AbortController(); const timer = setTimeout(()=>ctrl.abort(), 30_000);
+    try{
+      const answer = await llmAsk(messages, { signal: ctrl.signal, temperature:0.3 });
+      console.log(`[assistant] uid=${me.id} role=${me.role} q.len=${question.length}`);
+      return send(res,200,{ enabled:true, answer: String(answer||'').trim() || 'Не удалось сформировать ответ. Попробуйте переформулировать.' });
+    }catch(e){
+      console.error('[assistant] error', e.message);
+      return send(res,200,{ enabled:true, error:'Помощник временно недоступен, попробуйте позже.' });
+    }finally{ clearTimeout(timer); }
   }
 
   // ---- загрузка документа в локальное файловое хранилище ----
