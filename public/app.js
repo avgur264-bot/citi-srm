@@ -313,11 +313,36 @@ const assistOn = ()=> ASSIST_KEY && stg().assistant && stg().assistant.enabled;
 let ASSIST_HIST=[]; // [{role,content}]
 const ASSIST_SUGGEST=['Как внести оплату?','Откуда берётся NOI?','Кто не заплатил за этот месяц?','Как продлить договор?','Как внести показания счётчиков?'];
 function assistPanelHTML(){ return `<div class="assist-panel" id="assistPanel">
-  <div class="assist-h">💬 AI-помощник <span class="t-sub" style="font-weight:400">· подсказки</span><span class="x" onclick="toggleAssist()">×</span></div>
+  <div class="assist-h">💬 AI-помощник <span class="t-sub" style="font-weight:400">· подсказки</span><span style="margin-left:auto;display:flex;gap:10px;align-items:center"><span style="cursor:pointer" title="Как пользоваться" onclick="assistHelp()">ℹ️</span><span class="x" style="margin:0" onclick="toggleAssist()">×</span></span></div>
   <div class="assist-msgs" id="assistMsgs"></div>
   <div class="assist-sug" id="assistSug">${ASSIST_SUGGEST.map(s=>`<span onclick="assistAsk('${s.replace(/'/g,"\\'")}')">${esc(s)}</span>`).join('')}</div>
   <div class="assist-in"><input id="assistInput" placeholder="Спросите о работе с системой…" onkeydown="if(event.key==='Enter')assistSend()"><button onclick="assistSend()">➤</button></div>
 </div>`; }
+function assistHelp(){
+  openM(`<div class="modal-h"><h3>💬 Как пользоваться AI-помощником</h3><span class="x" onclick="closeM()">×</span></div>
+  <div class="modal-b" style="line-height:1.6">
+    <div class="t-sub" style="margin-bottom:10px">Помощник понимает обычный язык. Просто напишите, что хотите узнать или сделать.</div>
+    <div class="sec-h" style="margin-top:0">1. Вопросы по работе</div>
+    <div>Спросите «как сделать» — он подскажет по шагам и назовёт нужный раздел.</div>
+    <div class="t-sub" style="margin:6px 0 0">Примеры: «Как внести оплату?» · «Как добавить помещение?» · «Что такое Центр сроков?» · «Откуда берётся NOI?»</div>
+    <div class="sec-h">2. Вопросы по данным</div>
+    <div>Спросите про текущее состояние — ответит по вашим объектам.</div>
+    <div class="t-sub" style="margin:6px 0 0">Примеры: «Кто не заплатил за июнь?» · «Какие договоры скоро истекают?» · «Что по плановому ТО на неделю?»</div>
+    <div class="sec-h">3. Действия (с подтверждением)</div>
+    <div>Попросите что-то сделать — помощник покажет карточку с кнопкой <b>«✓ Подтвердить»</b>. Пока не нажмёте — ничего не изменится.</div>
+    <div class="t-sub" style="margin:6px 0 0">Примеры: «Отметь оплату по ТехноСофт за июнь» · «Создай задачу проверить лифт до 5 июля» · «Продли договор по 1-01 до 31.12.2027» · «Отметь ТО по лифту выполненным».</div>
+    <div class="sec-h">Важно знать</div>
+    <ul style="margin:6px 0 0;padding-left:20px;display:flex;flex-direction:column;gap:5px">
+      <li>Помощник видит данные <b>только по вашим правам</b> — чужого и секретов (пароли, зарплаты, если нет доступа) не покажет.</li>
+      <li>Действия выполняются <b>в рамках ваших прав</b> и записываются в Журнал действий.</li>
+      <li>Если данных нет или вопрос непонятен — честно скажет и предложит, где посмотреть. Может ошибаться — проверяйте важное.</li>
+      <li>Переключатель «Все объекты / конкретный объект» вверху слева влияет и на ответы помощника.</li>
+      <li>Есть дневной лимит вопросов (по умолчанию 250) — чтобы расходы были предсказуемы.</li>
+    </ul>
+    <div class="t-sub" style="margin-top:12px">Включается/настраивается администратором: Настройки → «AI-помощник».</div>
+  </div>
+  <div class="modal-f"><button class="btn" onclick="closeM()">Понятно</button></div>`);
+}
 function toggleAssist(){ const p=document.getElementById('assistPanel'); if(!p)return; const open=p.classList.toggle('show');
   if(open){ renderAssist(); setTimeout(()=>document.getElementById('assistInput')?.focus(),50); } }
 function assistMsgHTML(m,i){
