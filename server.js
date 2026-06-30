@@ -538,9 +538,12 @@ async function api(req, res, url){
     // контекст: только данные, доступные роли (filterStateForRole), без секретов
     const safe = filterStateForRole(st, me.role);
     const data = buildAssistantData(safe, me.role, scope);
+    // GigaChat требует РОВНО один системный месседж и первым — объединяем промпт + справку + данные.
+    const sys = ASSISTANT_SYS
+      + '\n\nСПРАВКА ПО СИСТЕМЕ:\n' + ASSISTANT_KNOWLEDGE
+      + '\n\nДАННЫЕ (текущий объект/портфель, по правам пользователя; не показывай чужого):\n' + data;
     const messages = [
-      { role:'system', content: ASSISTANT_SYS + '\n\nСПРАВКА ПО СИСТЕМЕ:\n' + ASSISTANT_KNOWLEDGE },
-      { role:'system', content: 'ДАННЫЕ (текущий объект/портфель, по правам пользователя; не показывай чужого):\n' + data },
+      { role:'system', content: sys },
       ...(Array.isArray(b.history) ? b.history.filter(m=>m&&(m.role==='user'||m.role==='assistant')&&typeof m.content==='string').slice(-6).map(m=>({role:m.role,content:String(m.content).slice(0,1500)})) : []),
       { role:'user', content: question },
     ];
