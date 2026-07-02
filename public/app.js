@@ -1918,17 +1918,17 @@ function salaries(){
   const recs=(DB.salaries||[]).filter(s=>s.period===salPeriod);
   const accrued=recs.reduce((s,x)=>s+x.amount,0), paid=recs.reduce((s,x)=>s+x.paid,0);
   const pers=[...new Set((DB.salaries||[]).map(s=>s.period))].sort().reverse(); if(!pers.includes(salPeriod))pers.unshift(salPeriod);
-  el(head('Зарплата (ФОТ)',`${fmtPeriod(salPeriod)} · ${USERS.length} сотрудников`, canEdit('salaries')?`<button class="btn" onclick="bulkAccrue()">Начислить всем</button>`:'')+
+  el(head('Зарплата (ФОТ)',`${fmtPeriod(salPeriod)} · ${USERS.length} сотрудников`, `${canEdit('employees')?`<button class="btn ghost" onclick="userModal()">+ Сотрудник</button> `:''}${canEdit('salaries')?`<button class="btn" onclick="bulkAccrue()">Начислить всем</button>`:''}`)+
    `<div class="toolbar"><span class="t-sub">Период:</span><select class="search" style="width:auto;min-width:160px" onchange="salPeriod=this.value;render()">${pers.map(p=>`<option value="${p}"${p===salPeriod?' selected':''}>${fmtPeriod(p)}</option>`).join('')}</select></div>
    <div class="grid" style="grid-template-columns:repeat(3,1fr);margin-bottom:18px">
      ${miniStat('ФОТ начислено',money(accrued),'violet')}${miniStat('Выплачено',money(paid),'green')}${miniStat('К выплате',money(accrued-paid),'red')}
    </div>
-   <div class="card" style="padding:0"><div style="overflow-x:auto"><table><thead><tr><th>Сотрудник</th><th>Должность</th><th>Начислено</th><th>Выплачено</th><th>Статус</th>${canEdit('salaries')?'<th></th>':''}</tr></thead><tbody>
+   <div class="card" style="padding:0"><div style="overflow-x:auto"><table><thead><tr><th>Сотрудник</th><th>Должность</th><th>Начислено</th><th>Выплачено</th><th>Статус</th>${(canEdit('salaries')||canEdit('employees'))?'<th></th>':''}</tr></thead><tbody>
    ${USERS.map(u=>{const rec=recs.find(s=>s.user_id===u.id);
      return `<tr><td class="t-strong">${esc(u.full_name)}</td><td class="t-sub">${esc(u.position||'—')}</td>
      <td>${rec?money(rec.amount):'<span class="t-sub">не начислено</span>'}</td>
      <td>${rec&&rec.paid?money(rec.paid):'—'}</td><td>${rec?salPill(rec):'<span class="pill gray">—</span>'}</td>
-     ${canEdit('salaries')?`<td style="text-align:right;white-space:nowrap">${rec?(rec.paid<rec.amount?`<button class="btn sm" onclick="salPayModal('${rec.id}')">Выплатить</button>`:'<span class="t-sub">выплачено</span>'):`<button class="btn ghost sm" onclick="salaryModal(${u.id})">Начислить</button>`}</td>`:''}</tr>`;}).join('')}
+     ${(canEdit('salaries')||canEdit('employees'))?`<td style="text-align:right;white-space:nowrap">${canEdit('salaries')?(rec?(rec.paid<rec.amount?`<button class="btn sm" onclick="salPayModal('${rec.id}')">Выплатить</button>`:'<span class="t-sub">выплачено</span>'):`<button class="btn ghost sm" onclick="salaryModal(${u.id})">Начислить</button>`):''}${canEdit('employees')?` <button class="btn ghost sm" onclick="userModal(${u.id})" title="Редактировать сотрудника">✎</button>`:''}</td>`:''}</tr>`;}).join('')}
    </tbody></table></div></div>`);
 }
 function salaryModal(uid){const u=userOf(uid);if(!u)return;
@@ -2617,13 +2617,14 @@ function contractModal(){const free=sUnits().filter(u=>!u.tenant);const pool=fre
   <div class="modal-b"><div class="field"><label>Арендатор</label><select id="f-ten">${DB.tenants.map(t=>`<option value="${t.id}">${esc(t.name)}</option>`).join('')}</select></div>
   <div class="field"><label>Помещение (свободные)</label><select id="f-unit">${pool.map(u=>`<option value="${u.id}">${u.id} · ${u.area} м² · ${esc(buildingOf(u.building)?.name||'')}</option>`).join('')}</select></div>
   <div class="row2"><div class="field"><label>Тип ставки</label>${rateTypeSelect('f-ratetype','sqm')}</div><div class="field"><label id="f-ratetype-lbl">Ставка ₽/м²/мес</label><input id="f-rate" type="number" value="2200"></div></div>
-  <div class="row2"><div class="field"><label>Индексация %/год</label><input id="f-idx" type="number" value="6"></div><div class="field"></div></div>
+  <div class="row2"><div class="field"><label>Индексация %/год</label><input id="f-idx" type="number" value="6"></div><div class="field"><label>День начисления аренды (число 1–28)</label><input id="f-accrualday" type="number" min="1" max="28" placeholder="общий из настроек"></div></div>
   <div class="row2"><div class="field"><label>Начало</label><input id="f-start" type="date" value="2026-07-01"></div><div class="field"><label>Окончание</label><input id="f-end" type="date" value="2029-06-30"></div></div></div>
   <div class="modal-f"><button class="btn ghost" onclick="closeM()">Отмена</button><button class="btn" onclick="saveContract()">Создать</button></div>`);}
 async function saveContract(){const u=val('f-unit');const unit=unitOf(u); if(!unit) return alert('Выберите помещение (в портфеле нет доступных помещений).');
   const ten=val('f-ten'); if(!ten) return alert('Выберите арендатора.');
   const rate=+val('f-rate')||0;const rt=val('f-ratetype')||'sqm';const monthly=rt==='flat'?rate:rate*(unit.area||0);
-  DB.contracts.push({id:'c'+Date.now(),tenant:ten,unit:u,rate,rateType:rt,start:val('f-start'),end:val('f-end'),deposit:monthly*2,indexation:+val('f-idx')||0,status:'active'});
+  const ad=+val('f-accrualday');
+  DB.contracts.push({id:'c'+Date.now(),tenant:ten,unit:u,rate,rateType:rt,start:val('f-start'),end:val('f-end'),deposit:monthly*2,indexation:+val('f-idx')||0,accrualDay:(ad>=1&&ad<=28)?ad:null,status:'active'});
   unit.tenant=ten;closeM();await afterStateChange();}
 
 /* платёж */
@@ -2870,10 +2871,10 @@ async function delUnit(id){const u=unitOf(id);if(!u)return;
 function tenantInfo(id){const t=tenantOf(id);const c=DB.contracts.find(c=>c.tenant===id);const u=c?unitOf(c.unit):null;
   openM(`<div class="modal-h"><h3>${esc(t.name)}</h3><span class="x" onclick="closeM()">×</span></div>
   <div class="modal-b">${infoRow('Контакт',esc(t.contact))}${infoRow('Телефон',esc(t.phone))}${infoRow('Email',esc(t.email))}${infoRow('ИНН',esc(t.inn))}${infoRow('Отрасль',esc(t.industry))}
-  ${c?infoRow('Объект',esc(buildingOf(u?.building)?.name||'—'))+infoRow('Помещение',c.unit)+infoRow('Ставка',fmt(c.rate)+(c.rateType==='flat'?' ₽/мес (за помещение)':' ₽/м²/мес'))+infoRow('Аренда/мес',money(monthlyRent(c)))+infoRow('Договор',fmtD(c.start)+' — '+fmtD(c.end)):infoRow('Размещение','не размещён в помещении')}
+  ${c?infoRow('Объект',esc(buildingOf(u?.building)?.name||'—'))+infoRow('Помещение',c.unit)+infoRow('Ставка',fmt(c.rate)+(c.rateType==='flat'?' ₽/мес (за помещение)':' ₽/м²/мес'))+infoRow('Аренда/мес',money(monthlyRent(c)))+infoRow('Договор',fmtD(c.start)+' — '+fmtD(c.end))+infoRow('День начисления аренды',c.accrualDay?('число '+c.accrualDay+' каждого месяца'):'общий (Настройки → Автоматизация)'):infoRow('Размещение','не размещён в помещении')}
   ${docsBlock('tenant',id,t.documents)}
   ${tenantSignageBlock(id)}</div>
-  <div class="modal-f">${c&&canEdit('contracts')?`<button class="btn ghost" onclick="editContractModal('${c.id}')">✎ Изменить аренду</button>`:''}${canEdit('tenants')?`<button class="btn ghost" onclick="editTenantModal('${id}')">✎ Редактировать</button><button class="btn danger" onclick="delTenant('${id}')">Удалить</button>`:''}<button class="btn" onclick="closeM()">Закрыть</button></div>`);}
+  <div class="modal-f">${c&&canEdit('payments')?`<button class="btn ghost" onclick="accrueRentModal('${c.id}')">➕ Начислить аренду</button>`:''}${c&&canEdit('contracts')?`<button class="btn ghost" onclick="editContractModal('${c.id}')">✎ Изменить аренду</button>`:''}${canEdit('tenants')?`<button class="btn ghost" onclick="editTenantModal('${id}')">✎ Редактировать</button><button class="btn danger" onclick="delTenant('${id}')">Удалить</button>`:''}<button class="btn" onclick="closeM()">Закрыть</button></div>`);}
 function tenantSignageBlock(id){
   const items=(DB.signage||[]).filter(s=>s.owner==='tenant'&&s.tenant===id);
   const canAdd=canEdit('ads');
@@ -2907,21 +2908,36 @@ async function delTenant(id){const t=tenantOf(id);if(!t)return;
   closeM(); await afterStateChange();}
 function contractInfo(id){const c=contractOf(id);const t=tenantOf(c.tenant);const u=unitOf(c.unit);
   openM(`<div class="modal-h"><h3>Договор ${c.id.toUpperCase()}</h3><span class="x" onclick="closeM()">×</span></div>
-  <div class="modal-b">${infoRow('Арендатор',esc(t.name))}${infoRow('Помещение',esc(c.unit)+' · '+esc(u.area)+' м²')}${infoRow('Ставка',fmt(c.rate)+(c.rateType==='flat'?' ₽/мес (за помещение)':' ₽/м²/мес'))}${infoRow('Аренда/мес',money(monthlyRent(c)))}${infoRow('Депозит',money(c.deposit))}${infoRow('Индексация',c.indexation+'% / год')}${infoRow('Период',fmtD(c.start)+' — '+fmtD(c.end))}${infoRow('Осталось',daysLeft(c.end)+' дн')}
+  <div class="modal-b">${infoRow('Арендатор',esc(t.name))}${infoRow('Помещение',esc(c.unit)+' · '+esc(u.area)+' м²')}${infoRow('Ставка',fmt(c.rate)+(c.rateType==='flat'?' ₽/мес (за помещение)':' ₽/м²/мес'))}${infoRow('Аренда/мес',money(monthlyRent(c)))}${infoRow('Депозит',money(c.deposit))}${infoRow('Индексация',c.indexation+'% / год')}${infoRow('Период',fmtD(c.start)+' — '+fmtD(c.end))}${infoRow('Осталось',daysLeft(c.end)+' дн')}${infoRow('День начисления аренды',c.accrualDay?('число '+c.accrualDay+' каждого месяца'):'общий (Настройки → Автоматизация)')}
   ${(Array.isArray(c.rateHistory)&&c.rateHistory.length)?`<div class="sec-h">История индексаций ставки</div>${c.rateHistory.slice().reverse().map(h=>`<div class="doc"><div class="di">📈</div><div style="flex:1;min-width:0"><div class="t-strong">${money(h.oldRate)} → ${money(h.newRate)} /м²</div><div class="t-sub">${h.date?fmtD(h.date):''}</div></div></div>`).join('')}`:''}</div>
-  <div class="modal-f">${canEdit('contracts')?`<button class="btn ghost" onclick="editContractModal('${c.id}')">✎ Изменить аренду</button><button class="btn ghost" onclick="renewModal('${c.id}')">Продлить</button>`:''}<button class="btn" onclick="closeM()">Закрыть</button></div>`);}
+  <div class="modal-f">${canEdit('payments')?`<button class="btn ghost" onclick="accrueRentModal('${c.id}')">➕ Начислить аренду</button>`:''}${canEdit('contracts')?`<button class="btn ghost" onclick="editContractModal('${c.id}')">✎ Изменить аренду</button><button class="btn ghost" onclick="renewModal('${c.id}')">Продлить</button>`:''}<button class="btn" onclick="closeM()">Закрыть</button></div>`);}
 function editContractModal(id){ const c=contractOf(id); if(!c) return; const t=tenantOf(c.tenant); const u=unitOf(c.unit);
   openM(`<div class="modal-h"><h3>Изменить договор аренды</h3><span class="x" onclick="contractInfo('${id}')">×</span></div>
   <div class="modal-b">
     ${infoRow('Арендатор',esc(t?t.name:'—'))}${infoRow('Помещение',esc(c.unit)+(u?' · '+esc(u.area)+' м²':''))}
     <div class="row2"><div class="field"><label>Тип ставки</label>${rateTypeSelect('ec-ratetype',c.rateType)}</div><div class="field"><label id="ec-ratetype-lbl">${rateLblText(c.rateType)}</label><input id="ec-rate" type="number" value="${+c.rate||0}"></div></div>
     <div class="row2"><div class="field"><label>Индексация %/год</label><input id="ec-idx" type="number" value="${+c.indexation||0}"></div><div class="field"><label>Депозит, ₽</label><input id="ec-dep" type="number" value="${+c.deposit||0}"></div></div>
+    <div class="row2"><div class="field"><label>День начисления аренды (число месяца, 1–28)</label><input id="ec-accrualday" type="number" min="1" max="28" placeholder="общий из настроек" value="${c.accrualDay?+c.accrualDay:''}"></div><div class="field"><label>&nbsp;</label><div class="t-sub" style="padding-top:10px">Пусто — берётся общий день из «Настройки → Автоматизация».</div></div></div>
     <div class="row2"><div class="field"><label>Начало</label><input id="ec-start" type="date" value="${c.start||''}"></div><div class="field"><label>Окончание</label><input id="ec-end" type="date" value="${c.end||''}"></div></div>
     <div class="t-sub">Аренда/мес пересчитается автоматически по типу ставки.</div>
   </div>
   <div class="modal-f"><button class="btn ghost" onclick="contractInfo('${id}')">Отмена</button><button class="btn" onclick="saveContractEdit('${id}')">Сохранить</button></div>`);}
 async function saveContractEdit(id){ const c=contractOf(id); if(!c) return;
   c.rate=+val('ec-rate')||0; c.rateType=val('ec-ratetype')||'sqm'; c.indexation=+val('ec-idx')||0; c.deposit=+val('ec-dep')||0;
+  const ad=+val('ec-accrualday'); c.accrualDay=(ad>=1&&ad<=28)?ad:null;
   if(val('ec-start')) c.start=val('ec-start'); if(val('ec-end')) c.end=val('ec-end');
   closeM(); await afterStateChange(); }
+function accrueRentModal(cid){const c=contractOf(cid);if(!c)return;const t=tenantOf(c.tenant);
+  openM(`<div class="modal-h"><h3>Начислить аренду</h3><span class="x" onclick="tenantInfo('${c.tenant}')">×</span></div>
+  <div class="modal-b">${infoRow('Арендатор',esc(t?t.name:'—'))}${infoRow('Помещение',esc(c.unit))}${infoRow('Сумма аренды/мес',money(monthlyRent(c)))}
+  <div class="row2" style="margin-top:12px"><div class="field"><label>Период (месяц)</label><input id="ar-per" type="month" value="${payPeriod||new Date().toISOString().slice(0,7)}"></div><div class="field"><label>Срок оплаты (число 1–28)</label><input id="ar-due" type="number" min="1" max="28" value="5"></div></div>
+  <div class="t-sub">Создаст начисление аренды за выбранный месяц вручную (если за этот период его ещё нет).</div></div>
+  <div class="modal-f"><button class="btn ghost" onclick="tenantInfo('${c.tenant}')">Отмена</button><button class="btn" onclick="saveAccrueRent('${cid}')">Начислить</button></div>`);}
+async function saveAccrueRent(cid){const c=contractOf(cid);if(!c)return;const per=val('ar-per');if(!per)return alert('Укажите период');
+  if((DB.payments||[]).some(p=>p.contract===cid&&p.period===per))return alert('За этот период по договору уже есть начисление');
+  const amount=monthlyRent(c);if(amount<=0)return alert('Сумма аренды не определена — проверьте ставку договора');
+  const dd=Math.min(28,Math.max(1,+val('ar-due')||5));const due=per+'-'+String(dd).padStart(2,'0');
+  if(!DB.payments)DB.payments=[];
+  DB.payments.push({id:'p'+Date.now()+'_'+cid,contract:cid,period:per,amount,due,paid:0,paidDate:null,status:daysLeft(due)<0?'overdue':'pending'});
+  closeM();await afterStateChange();}
 function infoRow(k,v){return `<div style="display:flex;justify-content:space-between;padding:9px 0;border-bottom:1px solid var(--line);gap:14px"><span class="t-sub">${k}</span><span class="t-strong" style="text-align:right">${v}</span></div>`;}

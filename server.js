@@ -315,8 +315,7 @@ const pad2 = n => String(n).padStart(2,'0');
 function autoAccrueRent(st, today){
   const cfg = st.settings && st.settings.autoRent;
   if(!cfg || !cfg.enabled) return {created:0};
-  const accrualDay = Math.min(28, Math.max(1, +cfg.accrualDay || 1));
-  if(today.getDate() !== accrualDay) return {created:0};
+  const defAccrualDay = Math.min(28, Math.max(1, +cfg.accrualDay || 1));   // общий день начисления по умолчанию (для договоров без своего дня)
   const period = today.getFullYear()+'-'+pad2(today.getMonth()+1);
   const dueDay = Math.min(28, Math.max(1, +cfg.dueDay || 5));
   const due = period+'-'+pad2(dueDay);
@@ -327,6 +326,8 @@ function autoAccrueRent(st, today){
     if(c.status==='ended') return;
     if(c.end && new Date(c.end) < new Date(period+'-01')) return;   // договор уже завершился
     if(has.has(c.id)) return;                                       // начисление за период уже есть
+    const cDay = Math.min(28, Math.max(1, +c.accrualDay || defAccrualDay));  // день начисления этого договора (свой или общий)
+    if(today.getDate() !== cDay) return;                           // сегодня не день начисления по этому договору
     const u = units[c.unit]; if(!u) return;
     const amount = Math.round(c.rateType==='flat' ? (c.rate||0) : (c.rate||0)*(u.area||0)); if(amount<=0) return;
     st.payments.push({ id:'p'+Date.now()+'_'+c.id, contract:c.id, period, amount, due,
