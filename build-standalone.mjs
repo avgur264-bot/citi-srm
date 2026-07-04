@@ -19,7 +19,7 @@ async function api(path, method='GET', body){
     body: body? JSON.stringify(body) : undefined
   });
   let data=null; try{ data = await res.json(); }catch{}
-  if(!res.ok) throw new Error((data&&data.error) || \`Ошибка \${res.status}\`);
+  if(!res.ok){ const err=new Error((data&&data.error) || \`Ошибка \${res.status}\`); err.status=res.status; err.data=data; throw err; }
   return data;
 }`;
 

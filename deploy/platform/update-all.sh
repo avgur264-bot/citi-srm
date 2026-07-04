@@ -8,10 +8,13 @@ ROOT="$(cd "$(dirname "$0")" && pwd)"          # …/deploy/platform
 SRC="$(cd "$ROOT/../.." && pwd)"                # корень репозитория (там Dockerfile)
 
 echo "→ Забираю свежий код из GitHub…"
-git -C "$SRC" pull --ff-only || echo "  (git pull пропущен — проверьте вручную)"
+# при неудаче pull (расхождение истории / грязное дерево) — ПРЕРЫВАЕМ, иначе соберём старый код молча
+git -C "$SRC" pull --ff-only || { echo "✗ git pull не удался (расхождение/грязное дерево). Обновление прервано, код НЕ изменён."; exit 1; }
 
-echo "→ Пересобираю образ citi-srm:latest…"
-docker build -t citi-srm:latest "$SRC"
+echo "→ Пересобираю образ (тег с датой + latest, чтобы был откат)…"
+TAG="$(date +%Y%m%d-%H%M%S)"
+docker build -t "citi-srm:$TAG" -t citi-srm:latest "$SRC" || { echo "✗ Сборка образа не удалась. Клиенты НЕ трогались (работают на прежнем образе)."; exit 1; }
+echo "  Образ citi-srm:$TAG (и latest). Предыдущие теги можно посмотреть: docker images citi-srm"
 
 shopt -s nullglob
 clients=("$ROOT"/clients/*/)

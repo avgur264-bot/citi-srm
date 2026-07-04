@@ -34,6 +34,9 @@ function getSecret(){
   }
   return row.json;
 }
+// одиночная необработанная ошибка не должна ронять весь процесс (иначе рвутся сессии всех пользователей клиента)
+process.on('unhandledRejection', e => console.error('unhandledRejection', e && e.message ? e.message : e));
+process.on('uncaughtException',  e => console.error('uncaughtException', e && e.message ? e.message : e));
 const SECRET = getSecret();
 const DUMMY_HASH = hashPassword('not-a-real-password-timing-guard'); // для постоянного времени логина
 const b64 = o => Buffer.from(JSON.stringify(o)).toString('base64url');
@@ -241,7 +244,7 @@ function normalizeAction(raw, st, role){
       }
       case 'contract_rate': {
         need(canEditS(role,'contracts',st),'У вас нет прав на договоры.');
-        need(raw.rate!=null && +raw.rate>0,'Укажите новую ставку.');
+        need(raw.rate!=null && +raw.rate>0 && +raw.rate<=10_000_000,'Укажите корректную новую ставку.');
         const cs=findContract(raw); need(cs.length,'Не нашёл договор по этим данным.'); need(cs.length===1,'Нашёл несколько договоров — уточните арендатора или помещение.');
         const c=cs[0], t=tById(c.tenant), rt=raw.rateType==='flat'?'flat':'sqm';
         return { ok:true, action:{ type:'contract_rate', params:{contractId:c.id,rate:+raw.rate,rateType:rt}, label:`Изменить ставку договора «${t?t.name:c.id}» (${c.unit}) на ${_money(+raw.rate)}${rt==='flat'?' /мес за помещение':' /м²'}` } };
@@ -256,7 +259,7 @@ function normalizeAction(raw, st, role){
       case 'assign_tenant': {
         need(canEditS(role,'contracts',st),'У вас нет прав на договоры.');
         need(raw.unit,'Укажите помещение.'); const u=units.find(x=>x.id===raw.unit); need(u,'Не нашёл помещение «'+raw.unit+'».'); need(!u.tenant,'Помещение «'+raw.unit+'» уже занято.');
-        need(raw.tenant,'Укажите арендатора.'); need(raw.rate!=null && +raw.rate>0,'Укажите ставку.');
+        need(raw.tenant,'Укажите арендатора.'); need(raw.rate!=null && +raw.rate>0 && +raw.rate<=10_000_000,'Укажите корректную ставку.');
         const ex=tByName(raw.tenant); const rt=raw.rateType==='flat'?'flat':'sqm';
         need(ex || canEditS(role,'tenants',st),'Нет прав создавать нового арендатора.');
         return { ok:true, action:{ type:'assign_tenant', params:{unit:raw.unit,tenantId:ex?ex.id:null,tenantName:ex?ex.name:String(raw.tenant).slice(0,120),rate:+raw.rate,rateType:rt}, label:`Заселить «${ex?ex.name:raw.tenant}» в ${raw.unit} по ${_money(+raw.rate)}${rt==='flat'?' /мес':' /м²'}` } };
@@ -317,7 +320,8 @@ function autoAccrueRent(st, today){
   if(!cfg || !cfg.enabled) return {created:0};
   const defAccrualDay = Math.min(28, Math.max(1, +cfg.accrualDay || 1));   // общий день начисления по умолчанию (для договоров без своего дня)
   const period = today.getFullYear()+'-'+pad2(today.getMonth()+1);
-  const dueDay = Math.min(28, Math.max(1, +cfg.dueDay || 5));
+  // срок оплаты не раньше дня начисления — иначе платёж «рождался» бы сразу просроченным
+  const dueDay = Math.min(28, Math.max(1, Math.max(+cfg.dueDay || 5, defAccrualDay)));
   const due = period+'-'+pad2(dueDay);
   const units = Object.fromEntries((st.units||[]).map(u=>[u.id,u]));
   const has = new Set((st.payments||[]).filter(p=>p.period===period).map(p=>p.contract));
@@ -331,7 +335,7 @@ function autoAccrueRent(st, today){
     const u = units[c.unit]; if(!u) return;
     const amount = Math.round(c.rateType==='flat' ? (c.rate||0) : (c.rate||0)*(u.area||0)); if(amount<=0) return;
     st.payments.push({ id:'p'+Date.now()+'_'+c.id, contract:c.id, period, amount, due,
-      paid:0, paidDate:null, status:(new Date(due)<today?'overdue':'pending'), auto:true });
+      paid:0, paidDate:null, status:'pending', auto:true });   // только что начислено — ожидание, не просрочка
     has.add(c.id); created++;
   });
   return {created, period};
@@ -377,7 +381,8 @@ function autoIndexRates(st, today){
     if(newRate===oldRate) return;
     c.rateHistory.push({date:today.toISOString().slice(0,10), oldRate, newRate});
     c.rate=newRate;
-    out.push(`${tName[c.tenant]||c.id}: ${oldRate}→${newRate} ₽/м²`);
+    const unitLbl = c.rateType==='flat' ? ' ₽/мес' : ' ₽/м²';
+    out.push(`${tName[c.tenant]||c.id}: ${oldRate}→${newRate}${unitLbl}`);
   });
   if(out.length){ const tg=st.settings&&st.settings.notify&&st.settings.notify.telegram;
     if(tg&&tg.token&&tg.chatId) sendTelegram(tg.token, tg.chatId, `\u{1F4C8} Индексация ставок (${out.length})\n`+out.join('\n')); }
@@ -409,12 +414,18 @@ function runDailyAutomations(){
 let _lastDigest=null;
 setInterval(async ()=>{
   runDailyAutomations();
+  sweepMaps();
   const tg=notifyCfg();
   if(!tg||!tg.enabled||!tg.token||!tg.chatId) return;
   const now=new Date(); const hhmm=String(now.getHours()).padStart(2,'0')+':'+String(now.getMinutes()).padStart(2,'0');
   const today=now.toISOString().slice(0,10);
   if(hhmm===(tg.time||'08:00') && _lastDigest!==today){ _lastDigest=today; await sendTelegram(tg.token, tg.chatId, buildDigest()); }
 }, 60*1000);
+// очистка in-memory карт от устаревших записей (анти-утечка памяти под сканером/атакой)
+function sweepMaps(){ const now=Date.now();
+  for(const [k,r] of loginFails){ if(now-r.ts > 15*60*1000) loginFails.delete(k); }
+  for(const [k,r] of assistHits){ if(now-r.ts > 2*60*1000) assistHits.delete(k); }
+}
 setTimeout(runDailyAutomations, 5000); // прогон вскоре после старта
 // роли, которые можно выбрать при самостоятельной регистрации (без привилегированных)
 const SELF_ROLES = ['leasing','accountant','maintenance'];
@@ -519,22 +530,23 @@ async function api(req, res, url){
   if(path==='/api/auth/me' && method==='GET') return send(res,200,{ user: publicUser(me) });
 
   if(path==='/api/bootstrap' && method==='GET'){
-    const state = JSON.parse(db.prepare(`SELECT json FROM state WHERE key='main'`).get().json);
+    const row = db.prepare(`SELECT json, updated_at FROM state WHERE key='main'`).get();
+    const state = JSON.parse(row.json);
     const tasks = db.prepare(TASK_SELECT + ' ORDER BY t.id').all();
     const proj = canView(me.role,'employees') ? publicUser : liteUser; // контакты — только кадровым ролям
     const users = db.prepare('SELECT * FROM users ORDER BY full_name').all().map(proj);
     return send(res,200,{
       user: publicUser(me),
       roles: ROLES,
-      state: filterStateForRole(state, me.role), tasks, users
+      state: { ...filterStateForRole(state, me.role), _ver: row.updated_at }, tasks, users
     });
   }
 
   // ---- общее состояние (помещения/арендаторы/договоры/платежи/коммуналка/расходы) ----
   if(path==='/api/state'){
-    const cur = JSON.parse(db.prepare(`SELECT json FROM state WHERE key='main'`).get().json);
     if(method==='GET'){
-      return send(res,200, filterStateForRole(cur, me.role));
+      const row = db.prepare(`SELECT json, updated_at FROM state WHERE key='main'`).get();
+      return send(res,200, { ...filterStateForRole(JSON.parse(row.json), me.role), _ver: row.updated_at });
     }
     if(method==='POST'){
       const b = await readBody(req);
@@ -543,23 +555,32 @@ async function api(req, res, url){
         REQ.every(k => Array.isArray(b[k])) &&
         b.units.length > 0 && b.buildings.length > 0; // защита от случайной перезаписи пустыми данными
       if(!okShape) return send(res,400,{error:'Некорректная структура данных состояния'});
+      // читаем СВЕЖЕЕ состояние ПОСЛЕ разбора тела (минимизируем окно гонки)
+      const row = db.prepare(`SELECT json, updated_at FROM state WHERE key='main'`).get();
+      const cur = JSON.parse(row.json);
+      // ОПТИМИСТИЧНАЯ БЛОКИРОВКА: клиент шлёт версию (_ver), которую читал. Если на сервере уже новее —
+      // значит кто-то сохранил параллельно → не перетираем, просим клиента перечитать (409).
+      if(b._ver && b._ver !== row.updated_at){
+        return send(res,409,{ error:'Данные изменены другим пользователем. Обновите и повторите.',
+          state:{ ...filterStateForRole(cur, me.role), _ver: row.updated_at } });
+      }
       // СЕРВЕРНАЯ авторизация (БЕЛЫЙ список): для не-админа начинаем с текущего состояния
       // и накладываем ТОЛЬКО те коллекции, которые роли разрешено редактировать. Всё прочее
       // (settings, roleMatrix, history, _secret и любые неучтённые ключи) остаётся серверным.
       let toSave = b;
       if(!isFull(me.role)){
         const merged = {...cur};
-        // права — с учётом редактируемой матрицы клиента (roleMatrix берётся из текущего серверного состояния)
         for(const [k,mod] of Object.entries(STATE_MOD)){ if(canEditS(me.role, mod, cur)) merged[k] = b[k]; }
-        // журнал действий: только ДОПИСЫВАНИЕ (нельзя стереть/укоротить уже записанное) — защита от подделки аудита
         const oldAudit = Array.isArray(cur.audit)?cur.audit:[];
-        if(Array.isArray(b.audit) && b.audit.length >= oldAudit.length) merged.audit = b.audit;
+        if(Array.isArray(b.audit) && b.audit.length >= oldAudit.length) merged.audit = b.audit.slice(-500);
         else merged.audit = oldAudit;
         toSave = merged;
-      }
+      } else if(Array.isArray(b.audit)) { toSave = {...b, audit: b.audit.slice(-500)}; } // ограничиваем рост журнала
+      const {_ver, ...clean} = toSave; toSave = clean; // не храним служебное поле версии в состоянии
       if(hasBadIds(toSave)) return send(res,400,{error:'Недопустимые символы в идентификаторах (запрещены < > " \' ` \\).'});
+      const newVer = new Date().toISOString();
       db.prepare(`UPDATE state SET json=?, updated_at=?, updated_by=? WHERE key='main'`)
-        .run(JSON.stringify(toSave), new Date().toISOString(), me.email);
+        .run(JSON.stringify(toSave), newVer, me.email);
       // мгновенные оповещения о новых заявках
       try{
         const oldIds=new Set((cur.requests||[]).map(r=>r.id));
@@ -568,7 +589,7 @@ async function api(req, res, url){
         (toSave.requests||[]).filter(r=>!oldIds.has(r.id)).forEach(r=>
           notifyInstant(`\u{1F195} Новая заявка на обслуживание\n${r.title}\nТип: ${r.category||'—'} · приоритет: ${PR[r.priority]||r.priority||''}\nОбъект: ${bn[r.building]||r.building||'—'}${r.unit?', помещ. '+r.unit:''}`));
       }catch{}
-      return send(res,200,{ ok:true });
+      return send(res,200,{ ok:true, _ver:newVer });
     }
   }
 

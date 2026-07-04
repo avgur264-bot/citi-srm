@@ -10,7 +10,7 @@ async function api(path, method='GET', body){
     body: body? JSON.stringify(body) : undefined
   });
   let data=null; try{ data = await res.json(); }catch{}
-  if(!res.ok) throw new Error((data&&data.error) || `Ошибка ${res.status}`);
+  if(!res.ok){ const err=new Error((data&&data.error) || `Ошибка ${res.status}`); err.status=res.status; err.data=data; throw err; }
   return data;
 }
 
@@ -169,7 +169,8 @@ function ensureState(){
   if(typeof S.assistant.dailyLimit!=='number' || S.assistant.dailyLimit<1) S.assistant.dailyLimit=250;
   // тарифы для расчёта коммуналки по показаниям счётчиков
   if(!S.tariffs || typeof S.tariffs!=='object') S.tariffs={electricity:6.5,water:45,heating:35};
-  if(+S.tariffs.heating>200) S.tariffs.heating=35; // миграция: раньше отопление было в ₽/Гкал, теперь ₽/м²
+  // одноразовая миграция: раньше отопление было в ₽/Гкал (крупные значения), теперь ₽/м²
+  if(!S._heatMigrated){ if(+S.tariffs.heating>200) S.tariffs.heating=35; S._heatMigrated=true; }
 }
 /* ---- брендинг и модули из настроек клиента ---- */
 const isAdmin = ()=> ME && (ME.role==='admin'||ME.role==='owner');
@@ -385,7 +386,7 @@ async function assistConfirm(i){ const m=ASSIST_HIST[i]; if(!m||m.role!=='action
     else if(a.type==='request_create'){ ensureState(); DB.requests.unshift({id:'r'+Date.now(),building:p.building,unit:null,tenant:null,category:p.category,title:p.title,priority:p.priority,status:'new',assignee_id:null,created_by:ME.id,created_at:new Date().toISOString(),due:null,note:''}); await afterStateChange(); }
     else if(a.type==='request_take'){ const r=(DB.requests||[]).find(x=>(x.title||'').toLowerCase().includes((p.title||'').toLowerCase())&&reqOpen(x)); if(!r) throw 'заявка не найдена'; await advanceRequest(r.id); }
     else if(a.type==='contract_renew'){ const c=contractOf(p.contractId); if(!c) throw 'договор не найден'; c.end=p.end; c.status='active'; await afterStateChange(); }
-    else if(a.type==='contract_rate'){ const c=contractOf(p.contractId); if(!c) throw 'договор не найден'; c.rate=p.rate; c.rateType=p.rateType; await afterStateChange(); }
+    else if(a.type==='contract_rate'){ const c=contractOf(p.contractId); if(!c) throw 'договор не найден'; const old=c.rate; c.rate=p.rate; c.rateType=p.rateType||c.rateType||'sqm'; if(old!==c.rate){ c.rateHistory=Array.isArray(c.rateHistory)?c.rateHistory:[]; c.rateHistory.push({date:TODAY.toISOString().slice(0,10),oldRate:old,newRate:c.rate,by:'AI-помощник'}); } await afterStateChange(); }
     else if(a.type==='upkeep_done'){ const e=(DB.equipment||[]).find(x=>x.id===p.equipmentId); if(!e) throw 'оборудование не найдено'; const today=TODAY.toISOString().slice(0,10); e.lastService=today; e.nextService=addMonths(today,e.intervalMonths||12); await afterStateChange(); }
     else if(a.type==='assign_tenant'){ const u=unitOf(p.unit); if(!u||u.tenant) throw 'помещение занято или не найдено'; let tid=p.tenantId; if(!tid){ tid='t'+Date.now(); DB.tenants.push({id:tid,name:p.tenantName,contact:'',phone:'',email:'',inn:'',industry:''}); } const monthly=p.rateType==='flat'?p.rate:p.rate*(u.area||0); DB.contracts.push({id:'c'+Date.now(),tenant:tid,unit:p.unit,rate:p.rate,rateType:p.rateType,start:TODAY.toISOString().slice(0,10),end:addMonths(TODAY.toISOString().slice(0,10),12),deposit:monthly*2,indexation:6,status:'active'}); u.tenant=tid; await afterStateChange(); }
     else throw 'неизвестное действие';
@@ -541,7 +542,15 @@ function gotoTasks(){ document.getElementById('notif')?.classList.remove('show')
 document.addEventListener('click',e=>{ const n=document.getElementById('notif'); if(n&&!e.target.closest('#notif')&&!e.target.closest('.bell')) n.classList.remove('show'); });
 
 /* ---------- Сохранение общего состояния ---------- */
-async function saveState(){ try{ await api('/api/state','POST', DB); }catch(e){ alert('Не удалось сохранить: '+e.message); } }
+async function saveState(){
+  try{ const r=await api('/api/state','POST', DB); if(r&&r._ver) DB._ver=r._ver; }
+  catch(e){
+    // конфликт версий: кто-то сохранил параллельно — не перетираем, берём свежее и просим повторить
+    if(e.status===409 && e.data && e.data.state){ DB=e.data.state; ensureState(); applyRoleOverrides(); resetAuditBaseline(); render();
+      alert('Данные были изменены другим пользователем. Ваше последнее действие не сохранено — проверьте и повторите.'); return; }
+    alert('Не удалось сохранить: '+(e.message||e));
+  }
+}
 /* ---------- Журнал действий (аудит): сравнение состояния «до/после» ---------- */
 let _auditPrev=null;
 function stripAudit(db){ const {audit,...rest}=db||{}; const r={...rest};
@@ -602,7 +611,11 @@ function startPolling(){ stopPolling(); pollTimer=setInterval(silentRefresh, 300
 function stopPolling(){ if(pollTimer)clearInterval(pollTimer); pollTimer=null; }
 async function silentRefresh(){
   if(!ME) return;
-  if(document.getElementById('modalBg')?.classList.contains('show')) return; // не мешаем вводу
+  if(document.getElementById('modalBg')?.classList.contains('show')) return; // не мешаем вводу в модалке
+  if(document.getElementById('assistPanel')?.classList.contains('show')) return; // не мешаем чату помощника
+  // не перерисовываем, если пользователь что-то печатает или тащит виджет — иначе стирается ввод/срывается drag
+  const ae=document.activeElement; if(ae && (ae.tagName==='INPUT'||ae.tagName==='TEXTAREA'||ae.tagName==='SELECT')) return;
+  if(window._dashDragging) return;
   try{
     const b=await api('/api/bootstrap'); DB=b.state; TASKS=b.tasks; USERS=b.users; ROLES=b.roles; ensureState(); applyRoleOverrides(); resetAuditBaseline();
     updateBadges();
@@ -623,11 +636,11 @@ function dashRows(rows,emptyTxt){ return `<table><tbody>${rows.length?rows.join(
 /* каталог виджетов: id → {label, span (1=малый,2=широкий), build:()=>html, draw?:()=>void} */
 const DASH_CATALOG={
   occ:{label:'KPI · Заполняемость',span:1,build:()=>kpi('Заполняемость','#4f8cff','📐',_dashM.occPct+'%','+3% за месяц','up')},
-  billed:{label:'KPI · Начислено',span:1,build:()=>kpi('Начислено (мес.)','#a78bfa','🧾',fmt(_dashM.billed/1000)+' тыс','план аренды','')},
-  collected:{label:'KPI · Собрано',span:1,build:()=>kpi('Собрано (мес.)','#37d39b','💰',fmt(_dashM.collected/1000)+' тыс',pct(_dashM.collected,_dashM.billed)+'% от плана','up')},
+  billed:{label:'KPI · Начислено',span:1,build:()=>kpi('Начислено (всего)','#a78bfa','🧾',fmt(_dashM.billed/1000)+' тыс','по всем периодам','')},
+  collected:{label:'KPI · Собрано',span:1,build:()=>kpi('Собрано (всего)','#37d39b','💰',fmt(_dashM.collected/1000)+' тыс',pct(_dashM.collected,_dashM.billed)+'% собираемость','up')},
   debt:{label:'KPI · Задолженность',span:1,build:()=>kpi('Задолженность','#ff5d6c','⚠️',fmt(_dashM.debt/1000)+' тыс',DB.payments.filter(p=>p.amount-p.paid>0).length+' счёта','down')},
   net:{label:'KPI · Чистый доход',span:1,build:()=>kpi('Чистый доход','#39d0d8','📈',fmt(_dashM.net/1000)+' тыс','собрано − расходы','')},
-  fot:{label:'KPI · Зарплата (ФОТ)',span:1,build:()=>{const s=(DB.salaries||[]).reduce((a,x)=>a+(x.amount||0),0);return kpi('ФОТ (мес.)','#f59e42','💼',fmt(s/1000)+' тыс','фонд оплаты труда','');}},
+  fot:{label:'KPI · Зарплата (ФОТ)',span:1,build:()=>{const s=(DB.salaries||[]).reduce((a,x)=>a+(x.amount||0),0);return kpi('ФОТ (всего)','#f59e42','💼',fmt(s/1000)+' тыс','фонд оплаты труда','');}},
   adsKpi:{label:'KPI · Реклама',span:1,build:()=>{const ls=(DB.listings||[]).filter(a=>SCOPE==='all'||a.building===SCOPE);const act=ls.filter(a=>a.status==='active').length;const v=ls.reduce((s,a)=>s+(a.views||0),0);return kpi('Объявления','#22a7f0','📣',act+' активн.','👁 '+fmt(v)+' просмотров','');}},
   chIncome:{label:'График · Доходы и расходы',span:2,build:()=>`<div class="card"><div class="panel-title"><h3>Доходы и расходы</h3><span class="muted">тыс ₽ · 6 мес</span></div><canvas id="chIncome" height="120"></canvas></div>`,draw:drawIncome},
   chOcc:{label:'График · Структура площадей',span:1,build:()=>`<div class="card"><div class="panel-title"><h3>Структура площадей</h3><span class="muted">м²</span></div><canvas id="chOcc" height="120"></canvas></div>`,draw:drawOcc},
@@ -670,8 +683,8 @@ function dashboard(){
 }
 function dashDrag(){ const grid=document.getElementById('dashGrid'); if(!grid)return; let dragId=null;
   grid.querySelectorAll('.dash-tile').forEach(elm=>{
-    elm.addEventListener('dragstart',()=>{dragId=elm.dataset.wid;elm.style.opacity='.35';});
-    elm.addEventListener('dragend',()=>{elm.style.opacity='';});
+    elm.addEventListener('dragstart',()=>{dragId=elm.dataset.wid;elm.style.opacity='.35';window._dashDragging=true;});
+    elm.addEventListener('dragend',()=>{elm.style.opacity='';window._dashDragging=false;});
     elm.addEventListener('dragover',e=>e.preventDefault());
     elm.addEventListener('drop',e=>{e.preventDefault();const overId=elm.dataset.wid;if(!dragId||dragId===overId)return;
       const cfg=dashCfg();const o=cfg.order.slice();const from=o.indexOf(dragId),to=o.indexOf(overId);if(from<0||to<0)return;
@@ -917,7 +930,7 @@ function contracts(){
 }
 function contractRow(c){const t=tenantOf(c.tenant);const dl=daysLeft(c.end);
   const stPill=c.status==='expiring'||dl<90?`<span class="pill amber">Истекает (${dl} дн)</span>`:`<span class="pill green">Активен</span>`;
-  return `<tr style="cursor:pointer" onclick="contractInfo('${c.id}')"><td><div class="t-strong">${c.id.toUpperCase()}</div><div class="t-sub">${esc(t.name)}</div></td>
+  return `<tr style="cursor:pointer" onclick="contractInfo('${c.id}')"><td><div class="t-strong">${(c.id||'').toUpperCase()}</div><div class="t-sub">${esc(t?t.name:'—')}</div></td>
     <td>${c.unit}</td><td>${fmt(c.rate)}<div class="t-sub">${c.rateType==='flat'?'₽/мес за помещ.':'₽/м²'}</div></td><td class="t-strong">${money(monthlyRent(c))}</td>
     <td><div>${fmtD(c.start)} —</div><div class="t-sub">${fmtD(c.end)}</div></td><td>${c.indexation}%/год</td><td>${stPill}</td></tr>`;
 }
@@ -955,8 +968,8 @@ function payMethods(){ const m={...PAY_METHODS}; (stg().payMethodsExtra||[]).for
 const payLabel=k=>payMethods()[k]||k;
 const payMethodOpts=(sel='bank')=>Object.entries(payMethods()).map(([k,v])=>`<option value="${esc(k)}"${k===sel?' selected':''}>${esc(v)}</option>`).join('');
 function pTx(p){ if(p.transactions&&p.transactions.length) return p.transactions; if(p.paid>0) return [{amount:p.paid,date:p.paidDate||p.due,method:'bank',legacy:true}]; return []; }
-function paymentRow(p){const c=contractOf(p.contract);const t=tenantOf(c.tenant);const bal=p.amount-p.paid;
-  return `<tr><td class="t-strong">${esc(t.name)}</td><td>${c.unit}</td><td>${p.period}</td><td>${money(p.amount)}</td>
+function paymentRow(p){const c=contractOf(p.contract);const t=c&&tenantOf(c.tenant);const bal=p.amount-p.paid;
+  return `<tr><td class="t-strong">${esc(t?t.name:'—')}</td><td>${esc(c?c.unit:'—')}</td><td>${p.period}</td><td>${money(p.amount)}</td>
     <td>${p.paid?money(p.paid):'—'}</td><td class="t-sub">${fmtD(p.due)}</td><td>${payPill(p)}</td>
     <td style="text-align:right;white-space:nowrap">
       ${bal>0&&canEdit('payments')?`<button class="btn sm" title="Отметить полностью оплаченным (сегодня, безналичный)" onclick="quickPay('${p.id}')">✓ Оплачено</button> `:''}
@@ -976,10 +989,11 @@ async function quickPay(id){
   await afterStateChange();
 }
 function payPill(p){const m={paid:['green','Оплачен'],overdue:['red','Просрочен'],partial:['amber','Частично'],pending:['blue','Ожидание']};const x=m[p.status]||['gray','—'];return `<span class="pill ${x[0]}">${x[1]}</span>`;}
-function payModal(id){const p=DB.payments.find(x=>x.id===id);if(!p)return;const c=contractOf(p.contract);const t=tenantOf(c.tenant);const rem=p.amount-p.paid;const tx=pTx(p);const editable=rem>0&&canEdit('payments');
+function payModal(id){const p=DB.payments.find(x=>x.id===id);if(!p)return;const c=contractOf(p.contract);const t=c&&tenantOf(c.tenant);const rem=p.amount-p.paid;const tx=pTx(p);const editable=rem>0&&canEdit('payments');
+  const cUnit=c?c.unit:'—';const tName=t?t.name:'—';
   openM(`<div class="modal-h"><h3>Оплата · ${p.period}</h3><span class="x" onclick="closeM()">×</span></div>
   <div class="modal-b">
-    ${infoRow('Арендатор',esc(t.name))}${infoRow('Помещение',esc(c.unit))}
+    ${infoRow('Арендатор',esc(tName))}${infoRow('Помещение',esc(cUnit))}
     ${infoRow('Начислено',money(p.amount))}${infoRow('Оплачено',money(p.paid))}${infoRow('Остаток',rem>0?`<span style="color:var(--red)">${money(rem)}</span>`:'<span style="color:var(--green)">0 ₽</span>')}
     <div class="sec-h">История платежей <button class="btn ghost sm" ${p.paid>0?'':'disabled'} onclick="printReceipt('${p.id}')">🖶 Квитанция (итог)</button></div>
     ${tx.length?tx.map((x,i)=>`<div class="doc"><div class="di">💳</div><div style="flex:1;min-width:0"><div class="t-strong">${money(x.amount)} · ${esc(payLabel(x.method))}</div><div class="t-sub">${x.date?fmtD(x.date):'—'}</div></div><button class="btn ghost sm" onclick="printReceipt('${p.id}',${i})">🖶</button></div>`).join(''):'<div class="empty" style="padding:14px">Оплат ещё не было</div>'}
@@ -1000,7 +1014,7 @@ async function savePay(id){const p=DB.payments.find(x=>x.id===id);if(!p)return;
   closeM(); await afterStateChange();}
 function printReceipt(pid, txIndex){
   const p=DB.payments.find(x=>x.id===pid);if(!p)return;
-  const c=contractOf(p.contract);const t=tenantOf(c.tenant);const u=unitOf(c.unit);const b=buildingOf(u&&u.building);
+  const c=contractOf(p.contract)||{};const t=tenantOf(c.tenant)||{name:'—',inn:'—'};const u=unitOf(c.unit);const b=buildingOf(u&&u.building);
   const tx=pTx(p); const x=(txIndex!=null&&tx[txIndex])?tx[txIndex]:(tx.length?tx[tx.length-1]:{amount:p.paid,date:p.paidDate,method:'bank'});
   const rem=Math.max(0,p.amount-p.paid);
   const num=esc((''+pid).toUpperCase()+'-'+((txIndex!=null?txIndex:Math.max(0,tx.length-1))+1));
@@ -1870,7 +1884,7 @@ function reports(){
   const bs = SCOPE==='all'? buildingsList() : [buildingOf(SCOPE)].filter(Boolean);
   el(head('Отчёты и аналитика',`Сводная отчётность · ${scopeSub()}`,`<button class="btn ghost sm" onclick="exportCSV()">⤓ Экспорт CSV</button>`)+
   `<div class="grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:18px">
-    ${miniStat('Валовый доход (мес.)',money(m.collected),'green')}${miniStat('Операц. расходы',money(m.exp),'amber')}
+    ${miniStat('Собрано (всего)',money(m.collected),'green')}${miniStat('Операц. расходы',money(m.exp),'amber')}
     ${miniStat('NOI (чистый опер. доход)',money(m.net),'blue')}${miniStat('Маржа NOI',pct(m.net,m.collected)+'%','violet')}
   </div>
   <div class="grid" style="grid-template-columns:1fr 1fr;margin-bottom:18px">
@@ -1880,7 +1894,7 @@ function reports(){
   <div id="rbcards"></div>`);
   document.getElementById('rbcards').innerHTML = bs.map(b=>{
     const ps=DB.payments.filter(p=>{const c=contractOf(p.contract);return c&&unitOf(c.unit)?.building===b.id;});
-    const byTenant=ps.map(p=>{const c=contractOf(p.contract);return{name:tenantOf(c.tenant).name,billed:p.amount,paid:p.paid,debt:p.amount-p.paid};}).sort((a,b)=>b.debt-a.debt);
+    const byTenant=ps.map(p=>{const c=contractOf(p.contract);const t=c&&tenantOf(c.tenant);return{name:t?t.name:'—',billed:p.amount,paid:p.paid,debt:p.amount-p.paid};}).sort((a,b)=>b.debt-a.debt);
     const be=DB.expenses.filter(e=>(e.building||'b1')===b.id);
     const exTot=be.reduce((s,e)=>s+e.amount,0);
     const billed=byTenant.reduce((s,r)=>s+r.billed,0), paid=byTenant.reduce((s,r)=>s+r.paid,0);
@@ -2575,8 +2589,14 @@ async function delBuilding(id){const b=buildingOf(id);if(!b)return;
   if(units.length) return alert(`Нельзя удалить объект «${b.name}»: в нём ${units.length} помещ. Сначала удалите или перенесите помещения.`);
   if(!confirm(`Удалить объект «${b.name}»?`))return;
   DB.buildings=DB.buildings.filter(x=>x.id!==id);
+  // чистим связанные с объектом записи, чтобы не осталось «мусора» в ОДПУ/ТО/рекламе/бюджете
+  DB.buildingMeters=(DB.buildingMeters||[]).filter(m=>m.building!==id);
+  DB.equipment=(DB.equipment||[]).filter(e=>e.building!==id);
+  DB.listings=(DB.listings||[]).filter(a=>a.building!==id);
+  DB.signage=(DB.signage||[]).filter(s=>s.building!==id);
+  if(DB.budgets) delete DB.budgets[id];
   if(SCOPE===id){SCOPE='all';localStorage.setItem('citi_srm_scope','all');}
-  closeM(); await saveState(); showApp();}
+  closeM(); await afterStateChange(); showApp();}
 
 /* арендатор */
 function tenantModal(presetBuilding){const def=presetBuilding||(SCOPE!=='all'?SCOPE:(buildingsList()[0]||{}).id);
@@ -2628,12 +2648,14 @@ async function saveContract(){const u=val('f-unit');const unit=unitOf(u); if(!un
   unit.tenant=ten;closeM();await afterStateChange();}
 
 /* платёж */
-function paymentModal(){openM(`<div class="modal-h"><h3>Новый платёж</h3><span class="x" onclick="closeM()">×</span></div>
-  <div class="modal-b"><div class="field"><label>Договор</label><select id="f-c">${sContracts().map(c=>`<option value="${c.id}">${c.id.toUpperCase()} · ${esc(tenantOf(c.tenant).name)} · ${c.unit}</option>`).join('')}</select></div>
-  <div class="row2"><div class="field"><label>Период</label><input id="f-period" type="month" value="${payPeriod||'2026-07'}"></div><div class="field"><label>Сумма</label><input id="f-amount" type="number"></div></div></div>
+function paymentModal(){const cs=sContracts();openM(`<div class="modal-h"><h3>Новый платёж</h3><span class="x" onclick="closeM()">×</span></div>
+  <div class="modal-b"><div class="field"><label>Договор</label><select id="f-c">${cs.map(c=>{const t=tenantOf(c.tenant);return `<option value="${c.id}">${(c.id||'').toUpperCase()} · ${esc(t?t.name:'—')} · ${esc(c.unit)}</option>`;}).join('')}</select></div>
+  <div class="row2"><div class="field"><label>Период</label><input id="f-period" type="month" value="${payPeriod||'2026-07'}"></div><div class="field"><label>Сумма, ₽</label><input id="f-amount" type="number" min="0"></div></div></div>
   <div class="modal-f"><button class="btn ghost" onclick="closeM()">Отмена</button><button class="btn" onclick="savePayment()">Добавить</button></div>`);}
-async function savePayment(){const per=val('f-period')||'2026-07';const due=per+'-05';
-  DB.payments.push({id:'p'+Date.now(),contract:val('f-c'),period:per,amount:+val('f-amount'),due,paid:0,paidDate:null,status:daysLeft(due)<0?'overdue':'pending'});
+async function savePayment(){const cid=val('f-c'); if(!cid)return alert('Выберите договор');
+  const amount=+val('f-amount')||0; if(amount<=0)return alert('Укажите сумму начисления');
+  const per=val('f-period')||'2026-07';const due=per+'-05';
+  DB.payments.push({id:'p'+Date.now(),contract:cid,period:per,amount,due,paid:0,paidDate:null,status:daysLeft(due)<0?'overdue':'pending'});
   closeM();await afterStateChange();}
 
 /* расход */
@@ -2865,6 +2887,8 @@ async function delUnit(id){const u=unitOf(id);if(!u)return;
   DB.contracts=DB.contracts.filter(c=>c.unit!==id);
   DB.payments=DB.payments.filter(p=>!cids.includes(p.contract));
   DB.utilities=DB.utilities.filter(x=>x.unit!==id);
+  DB.listings=(DB.listings||[]).filter(a=>a.unit!==id);
+  DB.signage=(DB.signage||[]).filter(s=>s.unit!==id);
   DB.units=DB.units.filter(x=>x.id!==id);
   closeM(); await afterStateChange();}
 
@@ -2906,9 +2930,9 @@ async function delTenant(id){const t=tenantOf(id);if(!t)return;
   DB.payments=DB.payments.filter(p=>!cids.includes(p.contract));
   DB.tenants=DB.tenants.filter(x=>x.id!==id);
   closeM(); await afterStateChange();}
-function contractInfo(id){const c=contractOf(id);const t=tenantOf(c.tenant);const u=unitOf(c.unit);
-  openM(`<div class="modal-h"><h3>Договор ${c.id.toUpperCase()}</h3><span class="x" onclick="closeM()">×</span></div>
-  <div class="modal-b">${infoRow('Арендатор',esc(t.name))}${infoRow('Помещение',esc(c.unit)+' · '+esc(u.area)+' м²')}${infoRow('Ставка',fmt(c.rate)+(c.rateType==='flat'?' ₽/мес (за помещение)':' ₽/м²/мес'))}${infoRow('Аренда/мес',money(monthlyRent(c)))}${infoRow('Депозит',money(c.deposit))}${infoRow('Индексация',c.indexation+'% / год')}${infoRow('Период',fmtD(c.start)+' — '+fmtD(c.end))}${infoRow('Осталось',daysLeft(c.end)+' дн')}${infoRow('День начисления аренды',c.accrualDay?('число '+c.accrualDay+' каждого месяца'):'общий (Настройки → Автоматизация)')}
+function contractInfo(id){const c=contractOf(id);if(!c)return;const t=tenantOf(c.tenant);const u=unitOf(c.unit);
+  openM(`<div class="modal-h"><h3>Договор ${(c.id||'').toUpperCase()}</h3><span class="x" onclick="closeM()">×</span></div>
+  <div class="modal-b">${infoRow('Арендатор',esc(t?t.name:'—'))}${infoRow('Помещение',esc(c.unit)+(u?' · '+esc(u.area)+' м²':''))}${infoRow('Ставка',fmt(c.rate)+(c.rateType==='flat'?' ₽/мес (за помещение)':' ₽/м²/мес'))}${infoRow('Аренда/мес',money(monthlyRent(c)))}${infoRow('Депозит',money(c.deposit))}${infoRow('Индексация',c.indexation+'% / год')}${infoRow('Период',fmtD(c.start)+' — '+fmtD(c.end))}${infoRow('Осталось',daysLeft(c.end)+' дн')}${infoRow('День начисления аренды',c.accrualDay?('число '+c.accrualDay+' каждого месяца'):'общий (Настройки → Автоматизация)')}
   ${(Array.isArray(c.rateHistory)&&c.rateHistory.length)?`<div class="sec-h">История индексаций ставки</div>${c.rateHistory.slice().reverse().map(h=>`<div class="doc"><div class="di">📈</div><div style="flex:1;min-width:0"><div class="t-strong">${money(h.oldRate)} → ${money(h.newRate)} /м²</div><div class="t-sub">${h.date?fmtD(h.date):''}</div></div></div>`).join('')}`:''}</div>
   <div class="modal-f">${canEdit('payments')?`<button class="btn ghost" onclick="accrueRentModal('${c.id}')">➕ Начислить аренду</button>`:''}${canEdit('contracts')?`<button class="btn ghost" onclick="editContractModal('${c.id}')">✎ Изменить аренду</button><button class="btn ghost" onclick="renewModal('${c.id}')">Продлить</button>`:''}<button class="btn" onclick="closeM()">Закрыть</button></div>`);}
 function editContractModal(id){ const c=contractOf(id); if(!c) return; const t=tenantOf(c.tenant); const u=unitOf(c.unit);
@@ -2923,7 +2947,9 @@ function editContractModal(id){ const c=contractOf(id); if(!c) return; const t=t
   </div>
   <div class="modal-f"><button class="btn ghost" onclick="contractInfo('${id}')">Отмена</button><button class="btn" onclick="saveContractEdit('${id}')">Сохранить</button></div>`);}
 async function saveContractEdit(id){ const c=contractOf(id); if(!c) return;
-  c.rate=+val('ec-rate')||0; c.rateType=val('ec-ratetype')||'sqm'; c.indexation=+val('ec-idx')||0; c.deposit=+val('ec-dep')||0;
+  const oldRate=c.rate; const newRate=+val('ec-rate')||0;
+  if(oldRate!==newRate){ c.rateHistory=Array.isArray(c.rateHistory)?c.rateHistory:[]; c.rateHistory.push({date:TODAY.toISOString().slice(0,10),oldRate,newRate,by:ME.full_name}); }
+  c.rate=newRate; c.rateType=val('ec-ratetype')||'sqm'; c.indexation=+val('ec-idx')||0; c.deposit=+val('ec-dep')||0;
   const ad=+val('ec-accrualday'); c.accrualDay=(ad>=1&&ad<=28)?ad:null;
   if(val('ec-start')) c.start=val('ec-start'); if(val('ec-end')) c.end=val('ec-end');
   closeM(); await afterStateChange(); }

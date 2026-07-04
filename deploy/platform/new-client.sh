@@ -71,6 +71,9 @@ $( [ "${SEED_DEMO:-1}" = "0" ] && echo "      - SEED_DEMO=0" )
       - ./files:/app/files
     networks: [srmnet]
     restart: unless-stopped
+    logging:                     # ротация логов, чтобы они не забили диск
+      driver: json-file
+      options: { max-size: "10m", max-file: "5" }
 networks:
   srmnet:
     name: srmnet
