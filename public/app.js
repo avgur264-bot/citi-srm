@@ -393,7 +393,7 @@ async function assistConfirm(i){ const m=ASSIST_HIST[i]; if(!m||m.role!=='action
     else if(a.type==='contract_renew'){ const c=contractOf(p.contractId); if(!c) throw 'договор не найден'; c.end=p.end; c.status='active'; await afterStateChange(); }
     else if(a.type==='contract_rate'){ const c=contractOf(p.contractId); if(!c) throw 'договор не найден'; const old=c.rate; c.rate=p.rate; c.rateType=p.rateType||c.rateType||'sqm'; if(old!==c.rate){ c.rateHistory=Array.isArray(c.rateHistory)?c.rateHistory:[]; c.rateHistory.push({date:TODAY.toISOString().slice(0,10),oldRate:old,newRate:c.rate,by:'AI-помощник'}); } await afterStateChange(); }
     else if(a.type==='upkeep_done'){ const e=(DB.equipment||[]).find(x=>x.id===p.equipmentId); if(!e) throw 'оборудование не найдено'; const today=TODAY.toISOString().slice(0,10); e.lastService=today; e.nextService=addMonths(today,e.intervalMonths||12); await afterStateChange(); }
-    else if(a.type==='assign_tenant'){ const u=unitOf(p.unit); if(!u||u.tenant) throw 'помещение занято или не найдено'; let tid=p.tenantId; if(!tid){ tid='t'+Date.now(); DB.tenants.push({id:tid,name:p.tenantName,contact:'',phone:'',email:'',inn:'',industry:''}); } const monthly=p.rateType==='flat'?p.rate:p.rate*(u.area||0); DB.contracts.push({id:'c'+Date.now(),tenant:tid,unit:p.unit,rate:p.rate,rateType:p.rateType,start:TODAY.toISOString().slice(0,10),end:addMonths(TODAY.toISOString().slice(0,10),12),deposit:monthly*2,indexation:6,status:'active'}); u.tenant=tid; await afterStateChange(); }
+    else if(a.type==='assign_tenant'){ const u=unitOf(p.unit); if(!u||u.tenant) throw 'помещение занято или не найдено'; let tid=p.tenantId; if(!tid){ tid='t'+Date.now(); DB.tenants.push({id:tid,name:p.tenantName,contact:'',phone:'',email:'',inn:'',industry:''}); } const monthly=p.rateType==='flat'?p.rate:p.rate*(u.area||0); DB.contracts.push({id:'c'+Date.now(),tenant:tid,unit:p.unit,rate:p.rate,rateType:p.rateType,start:TODAY.toISOString().slice(0,10),end:addMonths(TODAY.toISOString().slice(0,10),12),deposit:Math.round(monthly),indexation:6,status:'active'}); u.tenant=tid; await afterStateChange(); }
     else throw 'неизвестное действие';
     m.done=true; m.ok=true; m.result='✓ Выполнено.';
   }catch(e){ m.done=true; m.ok=false; m.result='Не удалось: '+(e.message||e); }
@@ -2563,7 +2563,7 @@ function buildImportRec(type,get,errors,line){
     const u=DB.units.find(x=>x.id===un); if(!u){errors.push(`Строка ${line}: помещение «${un}» не найдено`);return null;}
     if(DB.contracts.some(c=>c.unit===un&&c.status!=='ended')){errors.push(`Строка ${line}: по помещению «${un}» уже есть договор`);return null;}
     const rate=+get('rate')||0; const start=get('start'),end=get('end');
-    return {id:'c'+Date.now()+'_'+line,tenant:t.id,unit:un,rate,start,end,deposit:rate*(u.area||0)*2,indexation:+get('indexation')||0,status:'active',_setTenant:t.id}; }
+    return {id:'c'+Date.now()+'_'+line,tenant:t.id,unit:un,rate,start,end,deposit:Math.round(rate*(u.area||0)),indexation:+get('indexation')||0,status:'active',_setTenant:t.id}; }
   return null;
 }
 async function importApply(type){
@@ -2616,7 +2616,7 @@ async function wizNext(){ const s=_wiz.step;
   if(s===1){ const name=val('wz-bname').trim(); if(!name) return alert('Укажите название объекта'); const id='b'+Date.now(); DB.buildings.push({id,name,address:val('wz-baddr').trim()}); _wiz.buildingId=id; }
   if(s===2){ const id=val('wz-uid').trim(); if(!id) return alert('Укажите номер помещения'); if(DB.units.some(u=>u.id===id)) return alert('Такое помещение уже есть'); DB.units.push({id,building:_wiz.buildingId||(buildingsList()[0]||{}).id,floor:+val('wz-ufloor')||1,area:+val('wz-uarea')||0,type:val('wz-utype')||'Офис',tenant:null,status:'free',ownership:'own',owner:null,responsible:null,documents:[]}); _wiz.unitId=id; }
   if(s===3){ const name=val('wz-tname').trim(); if(!name) return alert('Укажите название арендатора'); const id='t'+Date.now(); DB.tenants.push({id,name,inn:val('wz-tinn').trim(),contact:val('wz-tcontact').trim(),phone:val('wz-tphone').trim(),email:'',industry:''}); _wiz.tenantId=id; }
-  if(s===4){ if(_wiz.tenantId&&_wiz.unitId){ const u=unitOf(_wiz.unitId); const rate=+val('wz-crate')||0; const rt=val('wz-cratetype')||'sqm'; const monthly=rt==='flat'?rate:rate*(u?u.area:0); DB.contracts.push({id:'c'+Date.now(),tenant:_wiz.tenantId,unit:_wiz.unitId,rate,rateType:rt,start:val('wz-cstart'),end:val('wz-cend'),deposit:monthly*2,indexation:+val('wz-cidx')||0,status:'active'}); if(u)u.tenant=_wiz.tenantId; } }
+  if(s===4){ if(_wiz.tenantId&&_wiz.unitId){ const u=unitOf(_wiz.unitId); const rate=+val('wz-crate')||0; const rt=val('wz-cratetype')||'sqm'; const monthly=rt==='flat'?rate:rate*(u?u.area:0); DB.contracts.push({id:'c'+Date.now(),tenant:_wiz.tenantId,unit:_wiz.unitId,rate,rateType:rt,start:val('wz-cstart'),end:val('wz-cend'),deposit:Math.round(monthly),indexation:+val('wz-cidx')||0,status:'active'}); if(u)u.tenant=_wiz.tenantId; } }
   _wiz.step++; recordAudit(); await saveState(); wizardModal();
 }
 function wizSkip(){ _wiz.step++; wizardModal(); }
@@ -2980,7 +2980,7 @@ async function saveTenant(){
   DB.tenants.push({id,name:val('f-name'),contact:val('f-contact'),phone:val('f-phone'),email:val('f-email'),inn:val('f-inn'),industry:val('f-industry')});
   const uid=val('f-tunit');
   if(uid){ const u=unitOf(uid); const rate=+val('f-trate')||0; const rt=val('f-tratetype')||'sqm'; const monthly=rt==='flat'?rate:rate*(u?u.area:0);
-    DB.contracts.push({id:'c'+Date.now(),tenant:id,unit:uid,rate,rateType:rt,start:TODAY.toISOString().slice(0,10),end:val('f-tend')||'2029-06-30',deposit:monthly*2,indexation:6,status:'active'});
+    DB.contracts.push({id:'c'+Date.now(),tenant:id,unit:uid,rate,rateType:rt,start:TODAY.toISOString().slice(0,10),end:val('f-tend')||'2029-06-30',deposit:Math.round(monthly),indexation:6,status:'active'});
     if(u) u.tenant=id;
   }
   closeM();await afterStateChange();
@@ -2998,7 +2998,7 @@ async function saveContract(){const u=val('f-unit');const unit=unitOf(u); if(!un
   const ten=val('f-ten'); if(!ten) return alert('Выберите арендатора.');
   const rate=+val('f-rate')||0;const rt=val('f-ratetype')||'sqm';const monthly=rt==='flat'?rate:rate*(unit.area||0);
   const ad=+val('f-accrualday');
-  DB.contracts.push({id:'c'+Date.now(),tenant:ten,unit:u,rate,rateType:rt,start:val('f-start'),end:val('f-end'),deposit:monthly*2,indexation:+val('f-idx')||0,accrualDay:(ad>=1&&ad<=28)?ad:null,status:'active'});
+  DB.contracts.push({id:'c'+Date.now(),tenant:ten,unit:u,rate,rateType:rt,start:val('f-start'),end:val('f-end'),deposit:Math.round(monthly),indexation:+val('f-idx')||0,accrualDay:(ad>=1&&ad<=28)?ad:null,status:'active'});
   unit.tenant=ten;closeM();await afterStateChange();}
 
 /* платёж */
@@ -3186,7 +3186,7 @@ async function assignTenant(uid){ const u=unitOf(uid); if(!u||u.tenant) return; 
   if(tid==='__new'){ const nm=val('as-name').trim(); if(!nm) return alert('Укажите название нового арендатора');
     tid='t'+Date.now(); DB.tenants.push({id:tid,name:nm,contact:val('as-contact').trim(),phone:val('as-phone').trim(),email:'',inn:'',industry:''}); }
   const rate=+val('as-rate')||0; const rt=val('as-ratetype')||'sqm'; const monthly=rt==='flat'?rate:rate*(u.area||0);
-  DB.contracts.push({id:'c'+Date.now(),tenant:tid,unit:uid,rate,rateType:rt,start:val('as-start'),end:val('as-end'),deposit:monthly*2,indexation:6,status:'active'});
+  DB.contracts.push({id:'c'+Date.now(),tenant:tid,unit:uid,rate,rateType:rt,start:val('as-start'),end:val('as-end'),deposit:Math.round(monthly),indexation:6,status:'active'});
   u.tenant=tid; closeM(); await afterStateChange(); }
 
 function editUnitModal(id){const u=unitOf(id);if(!u)return;const r=u.responsible||{};const o=u.owner||{};
@@ -3298,7 +3298,7 @@ function editContractModal(id){ const c=contractOf(id); if(!c) return; const t=t
   <div class="modal-b">
     ${infoRow('Арендатор',esc(t?t.name:'—'))}${infoRow('Помещение',esc(c.unit)+(u?' · '+esc(u.area)+' м²':''))}
     <div class="row2"><div class="field"><label>Тип ставки</label>${rateTypeSelect('ec-ratetype',c.rateType)}</div><div class="field"><label id="ec-ratetype-lbl">${rateLblText(c.rateType)}</label><input id="ec-rate" type="number" value="${+c.rate||0}"></div></div>
-    <div class="row2"><div class="field"><label>Индексация %/год</label><input id="ec-idx" type="number" value="${+c.indexation||0}"></div><div class="field"><label>Депозит, ₽</label><input id="ec-dep" type="number" value="${+c.deposit||0}"></div></div>
+    <div class="row2"><div class="field"><label>Индексация %/год</label><input id="ec-idx" type="number" value="${+c.indexation||0}"></div><div class="field"><label>Депозит, ₽ <span class="t-sub">пусто = аренда за месяц</span></label><input id="ec-dep" type="number" value="${Math.round(+c.deposit||0)}" placeholder="${Math.round(monthlyRent(c))}"><div class="t-sub" style="margin-top:4px"><button class="btn ghost sm" type="button" onclick="document.getElementById('ec-dep').value=''">= аренда за месяц</button></div></div></div>
     <div class="row2"><div class="field"><label>День начисления аренды (число месяца, 1–28)</label><input id="ec-accrualday" type="number" min="1" max="28" placeholder="общий из настроек" value="${c.accrualDay?+c.accrualDay:''}"></div><div class="field"><label>&nbsp;</label><div class="t-sub" style="padding-top:10px">Пусто — берётся общий день из «Настройки → Автоматизация».</div></div></div>
     <div class="row2"><div class="field"><label>Начало</label><input id="ec-start" type="date" value="${c.start||''}"></div><div class="field"><label>Окончание</label><input id="ec-end" type="date" value="${c.end||''}"></div></div>
     <div class="t-sub">Аренда/мес пересчитается автоматически по типу ставки.</div>
@@ -3307,7 +3307,9 @@ function editContractModal(id){ const c=contractOf(id); if(!c) return; const t=t
 async function saveContractEdit(id){ const c=contractOf(id); if(!c) return;
   const oldRate=c.rate; const newRate=+val('ec-rate')||0;
   if(oldRate!==newRate){ c.rateHistory=Array.isArray(c.rateHistory)?c.rateHistory:[]; c.rateHistory.push({date:TODAY.toISOString().slice(0,10),oldRate,newRate,by:ME.full_name}); }
-  c.rate=newRate; c.rateType=val('ec-ratetype')||'sqm'; c.indexation=+val('ec-idx')||0; c.deposit=+val('ec-dep')||0;
+  c.rate=newRate; c.rateType=val('ec-ratetype')||'sqm'; c.indexation=+val('ec-idx')||0;
+  // депозит: пусто → по умолчанию аренда за месяц; иначе указанное (без дробного хвоста)
+  const depRaw=val('ec-dep'); c.deposit = (depRaw==='' ? Math.round(monthlyRent(c)) : Math.round(+depRaw||0));
   const ad=+val('ec-accrualday'); c.accrualDay=(ad>=1&&ad<=28)?ad:null;
   if(val('ec-start')) c.start=val('ec-start'); if(val('ec-end')) c.end=val('ec-end');
   closeM(); await afterStateChange(); }
