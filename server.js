@@ -298,9 +298,12 @@ function buildDigest(){
   const head=`\u{1F4CA} СИТИ SRM — сводка на ${new Date().toLocaleDateString('ru-RU')}`;
   return lines.length ? head+'\n\n'+lines.join('\n') : head+'\n\n✅ Срочных дел на сегодня нет.';
 }
+// Базовый адрес Telegram Bot API. По умолчанию официальный; если сервер не имеет маршрута до
+// Telegram (частая блокировка на рос. хостингах) — задаётся relay (Cloudflare Worker) через env.
+const TG_API_BASE = (process.env.TELEGRAM_API_BASE || 'https://api.telegram.org').replace(/\/+$/,'');
 async function sendTelegram(token, chatId, text){
   try{
-    const r = await fetch(`https://api.telegram.org/bot${String(token||'').trim()}/sendMessage`,
+    const r = await fetch(`${TG_API_BASE}/bot${String(token||'').trim()}/sendMessage`,
       { method:'POST', headers:{'content-type':'application/json'},
         body: JSON.stringify({ chat_id: String(chatId||'').trim(), text: (text&&String(text).trim())?text:'СИТИ SRM: тестовое сообщение.' }) });
     let data=null; try{ data = await r.json(); }catch{}
