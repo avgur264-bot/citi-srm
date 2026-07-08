@@ -164,6 +164,7 @@ function ensureState(){
   if(!S.autoRent || typeof S.autoRent!=='object') S.autoRent={enabled:false,accrualDay:1,dueDay:5};
   if(!S.autoRemind || typeof S.autoRemind!=='object') S.autoRemind={enabled:false,everyDays:7};
   if(!S.autoIndex || typeof S.autoIndex!=='object') S.autoIndex={enabled:false};
+  if(!S.autoOwnerUtil || typeof S.autoOwnerUtil!=='object') S.autoOwnerUtil={enabled:false,day:1};
   if(!S.assistant || typeof S.assistant!=='object') S.assistant={enabled:false,provider:'gigachat',actions:true};
   if(typeof S.assistant.actions!=='boolean') S.assistant.actions=true;
   if(typeof S.assistant.dailyLimit!=='number' || S.assistant.dailyLimit<1) S.assistant.dailyLimit=250;
@@ -2129,6 +2130,8 @@ function settingsPage(){
     <label style="display:flex;align-items:center;gap:10px;padding:10px 0 7px;cursor:pointer;border-top:1px solid var(--line);margin-top:10px"><input type="checkbox" id="s-autoremind" ${s.autoRemind?.enabled?'checked':''}> <span><b>Авто-напоминания должникам</b><div class="t-sub">По просроченным платежам система готовит сводку должников (и шлёт в Telegram, если подключён). Не чаще одного напоминания на долг в заданное число дней.</div></span></label>
     <div class="field" style="max-width:240px"><label>Не чаще, чем раз в (дней)</label><input id="s-autoremind-days" type="number" min="1" max="90" value="${Math.max(1,+s.autoRemind?.everyDays||7)}"></div>
     <label style="display:flex;align-items:center;gap:10px;padding:10px 0 7px;cursor:pointer;border-top:1px solid var(--line);margin-top:10px"><input type="checkbox" id="s-autoindex" ${s.autoIndex?.enabled?'checked':''}> <span><b>Автоиндексация ставок</b><div class="t-sub">В годовщину начала договора ставка повышается на заложенный % индексации. История изменений видна в карточке договора. По умолчанию выключено (повышение ставки — чувствительно).</div></span></label>
+    <label style="display:flex;align-items:center;gap:10px;padding:10px 0 7px;cursor:pointer;border-top:1px solid var(--line);margin-top:10px"><input type="checkbox" id="s-autoowner" ${s.autoOwnerUtil?.enabled?'checked':''}> <span><b>Автоначисление коммуналки собственникам</b><div class="t-sub">Каждый месяц в заданный день система начисляет коммуналку (отопление) сторонним собственникам по фиксированной сумме, заданной в карточке помещения. Помещения без проданного статуса и без суммы — пропускаются.</div></span></label>
+    <div class="field" style="max-width:240px"><label>День начисления (число месяца)</label><input id="s-autoowner-day" type="number" min="1" max="28" value="${Math.min(28,Math.max(1,+s.autoOwnerUtil?.day||1))}"></div>
   </div>
   <div class="card" style="margin-top:16px">
     <div class="sec-h">📟 Тарифы для показаний счётчиков</div>
@@ -2199,6 +2202,7 @@ async function saveSettings(){
   if(document.getElementById('s-autoremind')) S.autoRemind={enabled:document.getElementById('s-autoremind').checked,everyDays:Math.max(1,+val('s-autoremind-days')||7)};
   if(document.getElementById('s-tar-electricity')) S.tariffs={electricity:+val('s-tar-electricity')||0,water:+val('s-tar-water')||0,heating:+val('s-tar-heating')||0};
   if(document.getElementById('s-autoindex')) S.autoIndex={enabled:document.getElementById('s-autoindex').checked};
+  if(document.getElementById('s-autoowner')) S.autoOwnerUtil={enabled:document.getElementById('s-autoowner').checked,day:Math.min(28,Math.max(1,+val('s-autoowner-day')||1))};
   if(document.getElementById('s-assist-on')) S.assistant={enabled:document.getElementById('s-assist-on').checked,provider:val('s-assist-prov')||'gigachat',actions:!!document.getElementById('s-assist-act')?.checked,dailyLimit:Math.max(1,+val('s-assist-limit')||250)};
   await afterStateChange();
   applyAccent(); showApp();
@@ -2870,7 +2874,7 @@ function unitInfo(id){const u=unitOf(id);const c=DB.contracts.find(c=>c.unit===i
     ${u.name?infoRow('Название',esc(u.name)):''}${infoRow('Объект',esc(buildingOf(u.building)?.name||'—'))}${infoRow('Тип',esc(u.type))}${infoRow('Площадь',esc(u.area)+' м²')}${infoRow('Этаж',esc(u.floor))}
     ${infoRow('Форма владения',u.ownership==='sold'?'<span class="pill amber">Продано · сторонний собственник</span>':'<span class="pill green">В собственности компании</span>')}
     ${t?infoRow('Арендатор',esc(t.name))+infoRow('Ставка',fmt(c.rate)+(c.rateType==='flat'?' ₽/мес (за помещение)':' ₽/м²'))+infoRow('Аренда/мес',money(monthlyRent(c)))+infoRow('Договор до',fmtD(c.end)):infoRow('Статус',u.status==='reserved'?'Бронь':'Свободно / доступно к сдаче')}
-    ${u.ownership==='sold'&&u.owner?`<div class="sec-h">Собственник помещения</div>${infoRow('Собственник',esc(u.owner.name))}${infoRow('ИНН / реквизиты',u.owner.inn||'—')}${infoRow('Контакт',esc(u.owner.contact||'—'))}`:''}
+    ${u.ownership==='sold'&&u.owner?`<div class="sec-h">Собственник помещения</div>${infoRow('Собственник',esc(u.owner.name))}${infoRow('ИНН / реквизиты',u.owner.inn||'—')}${infoRow('Контакт',esc(u.owner.contact||'—'))}${infoRow('Фикс. платёж за коммуналку',u.ownerUtilFee?money(u.ownerUtilFee)+' /мес':'не задан')}`:''}
     <div class="sec-h">Ответственное лицо</div>
     ${infoRow('ФИО',esc(r.name||'—'))}${r.role?infoRow('Должность',esc(r.role)):''}${infoRow('Телефон',r.phone||'—')}${infoRow('Email',esc(r.email||'—'))}
     ${docsBlock('unit',u.id,u.documents)}
@@ -2920,7 +2924,8 @@ function editUnitModal(id){const u=unitOf(id);if(!u)return;const r=u.responsible
       <option value="sold"${u.ownership==='sold'?' selected':''}>Продано стороннему собственнику</option></select></div>
     <div id="owner-box" style="display:${u.ownership==='sold'?'block':'none'}">
       <div class="field"><label>Собственник (наименование / ФИО)</label><input id="e-oname" value="${esc(o.name||'')}"></div>
-      <div class="row2"><div class="field"><label>ИНН / реквизиты</label><input id="e-oinn" value="${esc(o.inn||'')}"></div><div class="field"><label>Контакт</label><input id="e-ocontact" value="${esc(o.contact||'')}"></div></div></div>
+      <div class="row2"><div class="field"><label>ИНН / реквизиты</label><input id="e-oinn" value="${esc(o.inn||'')}"></div><div class="field"><label>Контакт</label><input id="e-ocontact" value="${esc(o.contact||'')}"></div></div>
+      <div class="field"><label>Фикс. платёж за коммуналку (отопление), ₽/мес</label><input id="e-ownerfee" type="number" min="0" value="${+u.ownerUtilFee||''}" placeholder="напр. 5000"><div class="t-sub" style="margin-top:4px">Если задан и включено «Автоначисление коммуналки собственникам» (Настройки → Автоматизация) — эта сумма начисляется каждый месяц.</div></div></div>
   </div>
   <div class="modal-f"><button class="btn ghost" onclick="unitInfo('${u.id}')">Отмена</button><button class="btn" onclick="saveUnitEdit('${u.id}')">Сохранить</button></div>`);}
 async function saveUnitEdit(id){const u=unitOf(id);if(!u)return;
@@ -2946,6 +2951,7 @@ async function saveUnitEdit(id){const u=unitOf(id);if(!u)return;
   u.responsible={name:val('e-rname'),role:val('e-rrole'),phone:val('e-rphone'),email:val('e-remail')};
   u.ownership=val('e-own');
   u.owner=u.ownership==='sold'?{name:val('e-oname'),inn:val('e-oinn'),contact:val('e-ocontact')}:null;
+  u.ownerUtilFee=u.ownership==='sold'?(Math.max(0,+val('e-ownerfee')||0)||null):null;
   closeM(); await afterStateChange();}
 async function delUnit(id){const u=unitOf(id);if(!u)return;
   const c=DB.contracts.find(c=>c.unit===id);

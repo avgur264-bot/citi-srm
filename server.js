@@ -395,6 +395,25 @@ function autoIndexRates(st, today){
   return {applied:out.length, list:out};
 }
 let _lastAuto=null;
+// Автоначисление коммуналки (фикс. платёж = отопление) сторонним собственникам — раз в месяц в заданный день.
+function autoAccrueOwnerUtil(st, today){
+  const cfg = st.settings && st.settings.autoOwnerUtil;
+  if(!cfg || !cfg.enabled) return {created:0};
+  const day = Math.min(28, Math.max(1, +cfg.day || 1));
+  if(today.getDate() !== day) return {created:0};
+  const period = today.getFullYear()+'-'+pad2(today.getMonth()+1);
+  if(!Array.isArray(st.utilities)) st.utilities=[];
+  const has = new Set(st.utilities.filter(u=>u.period===period).map(u=>u.unit));   // уже есть запись за период
+  let created=0;
+  (st.units||[]).forEach(u=>{
+    if(u.ownership!=='sold') return;                              // только сторонние собственники
+    const fee = Math.round(+u.ownerUtilFee||0); if(fee<=0) return; // задан фиксированный платёж
+    if(has.has(u.id)) return;                                     // не дублировать за период
+    st.utilities.push({ id:'u'+Date.now()+'_'+u.id, unit:u.id, period, electricity:0, water:0, heating:fee, status:'invoiced', auto:true });
+    has.add(u.id); created++;
+  });
+  return {created, period};
+}
 function runDailyAutomations(){
   const today=new Date(); const dstr=today.toISOString().slice(0,10);
   if(_lastAuto===dstr) return; _lastAuto=dstr;
@@ -404,6 +423,8 @@ function runDailyAutomations(){
     if(idx.applied>0) entries.push(`Автоиндексация ставок: ${idx.applied} (${idx.list.join('; ')})`);
     const rent=autoAccrueRent(st, today);
     if(rent.created>0) entries.push(`Автоначисление аренды за ${rent.period}: ${rent.created} начисл.`);
+    const ou=autoAccrueOwnerUtil(st, today);
+    if(ou.created>0) entries.push(`Автоначисление коммуналки собственникам за ${ou.period}: ${ou.created}`);
     const rem=autoRemindDebtors(st, today);
     if(rem.sent>0) entries.push(`Авто-напоминания должникам: ${rem.sent}`);
     if(entries.length){
