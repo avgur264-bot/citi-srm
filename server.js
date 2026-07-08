@@ -69,7 +69,7 @@ const TASK_SELECT = `
 
 const publicUser = u => u && ({
   id:u.id, email:u.email, full_name:u.full_name, position:u.position,
-  role:u.role, roleTitle:(ROLES[u.role]||{}).title, phone:u.phone,
+  role:u.role, roleTitle:(ROLES[u.role]||{}).title, phone:u.phone, building:u.building||'',
   active:!!u.active, created_at:u.created_at,
   permissions: perms(u.role)
 });
@@ -81,7 +81,7 @@ const liteUser = u => u && ({
 });
 // карта: коллекция состояния → модуль прав (для серверной авторизации записи/чтения)
 const STATE_MOD = { buildings:'objects', units:'objects', tenants:'tenants', contracts:'contracts',
-  payments:'payments', utilities:'utilities', expenses:'utilities', buildingMeters:'utilities', salaries:'salaries',
+  payments:'payments', utilities:'utilities', expenses:'utilities', buildingMeters:'utilities', heatCost:'utilities', salaries:'salaries',
   requests:'requests', equipment:'upkeep', listings:'ads', signage:'ads',
   budgets:'budget', penaltyRate:'budget', integrations:'integrations' };
 const isFull = role => role==='admin' || role==='owner';
@@ -675,9 +675,10 @@ async function api(req, res, url){
       if(db.prepare('SELECT 1 FROM users WHERE email=?').get(email)) return send(res,409,{error:'Email уже занят'});
       let role = ROLE_KEYS.includes(b.role)?b.role:'maintenance';
       if((role==='admin'||role==='owner') && !isFull(me.role)) role='manager'; // привилегированную роль выдаёт только admin/owner
-      const info = db.prepare(`INSERT INTO users(email,password,full_name,position,role,phone,active,created_at)
-                               VALUES(?,?,?,?,?,?,1,?)`)
-        .run(email, hashPassword(b.password), b.full_name.trim(), (b.position||'').trim(), role, (b.phone||'').trim(), new Date().toISOString());
+      const bld = String(b.building||'').replace(/[<>"'`\\]/g,'').slice(0,60);
+      const info = db.prepare(`INSERT INTO users(email,password,full_name,position,role,phone,building,active,created_at)
+                               VALUES(?,?,?,?,?,?,?,1,?)`)
+        .run(email, hashPassword(b.password), b.full_name.trim(), (b.position||'').trim(), role, (b.phone||'').trim(), bld, new Date().toISOString());
       return send(res,200, publicUser(db.prepare('SELECT * FROM users WHERE id=?').get(info.lastInsertRowid)));
     }
   }
@@ -690,6 +691,7 @@ async function api(req, res, url){
       const b=await readBody(req);
       const fields=[],vals=[];
       for(const k of ['full_name','position','phone']) if(k in b){ fields.push(`${k}=?`); vals.push((b[k]||'').trim()); }
+      if('building' in b){ fields.push('building=?'); vals.push(String(b.building||'').replace(/[<>"'`\\]/g,'').slice(0,60)); }
       if('role' in b && ROLE_KEYS.includes(b.role)){
         if((b.role==='admin'||b.role==='owner') && !isFull(me.role)) return send(res,403,{error:'Повышать до администратора/собственника может только администратор'});
         if((u.role==='admin'||u.role==='owner') && !isFull(me.role)) return send(res,403,{error:'Менять роль администратора может только администратор'});

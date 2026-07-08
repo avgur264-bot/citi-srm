@@ -10,7 +10,7 @@ const SRM_ROLES={
   maintenance:{title:'Эксплуатация',view:['dashboard','objects','utilities','tasks','requests','upkeep'],edit:['utilities','tasks','requests','upkeep']},
 };
 const _perms=r=>SRM_ROLES[r]||SRM_ROLES.maintenance;
-const _pubUser=u=>u&&({id:u.id,email:u.email,full_name:u.full_name,position:u.position,role:u.role,roleTitle:(SRM_ROLES[u.role]||{}).title,phone:u.phone,active:!!u.active,created_at:u.created_at,permissions:_perms(u.role)});
+const _pubUser=u=>u&&({id:u.id,email:u.email,full_name:u.full_name,position:u.position,role:u.role,roleTitle:(SRM_ROLES[u.role]||{}).title,phone:u.phone,building:u.building||'',active:!!u.active,created_at:u.created_at,permissions:_perms(u.role)});
 
 function srmBuildState(){
   const S={
@@ -197,7 +197,7 @@ async function api(path, method='GET', body){
     if(!email||!body.password||!body.full_name) E('Заполните email, пароль и ФИО');
     if(db.users.some(u=>u.email===email)) E('Пользователь с таким email уже существует');
     const id=++db.seq.user;
-    const u={id,email,password:body.password,full_name:body.full_name.trim(),position:(body.position||'').trim(),role:SRM_ROLES[body.role]?body.role:'maintenance',phone:(body.phone||'').trim(),active:1,created_at:new Date().toISOString()};
+    const u={id,email,password:body.password,full_name:body.full_name.trim(),position:(body.position||'').trim(),role:SRM_ROLES[body.role]?body.role:'maintenance',phone:(body.phone||'').trim(),building:(body.building||'').trim(),active:1,created_at:new Date().toISOString()};
     db.users.push(u); db.session=id; _srmSave(db); return {user:_pubUser(u)};
   }
   if(path==='/api/auth/login'&&method==='POST'){
@@ -229,11 +229,11 @@ async function api(path, method='GET', body){
     if(method==='POST'){ const email=(body.email||'').toLowerCase().trim();
       if(!email||!body.password||!body.full_name) E('Заполните email, пароль и ФИО');
       if(db.users.some(u=>u.email===email)) E('Email уже занят'); const id=++db.seq.user;
-      const u={id,email,password:body.password,full_name:body.full_name.trim(),position:(body.position||'').trim(),role:SRM_ROLES[body.role]?body.role:'maintenance',phone:(body.phone||'').trim(),active:1,created_at:new Date().toISOString()};
+      const u={id,email,password:body.password,full_name:body.full_name.trim(),position:(body.position||'').trim(),role:SRM_ROLES[body.role]?body.role:'maintenance',phone:(body.phone||'').trim(),building:(body.building||'').trim(),active:1,created_at:new Date().toISOString()};
       db.users.push(u); _srmSave(db); return _pubUser(u); }
   }
   if(seg[1]==='users'&&seg[2]){ const id=+seg[2]; const u=db.users.find(x=>x.id===id); if(!u) E('Сотрудник не найден');
-    if(method==='PATCH'){ for(const k of ['full_name','position','phone']) if(k in body) u[k]=(body[k]||'').trim();
+    if(method==='PATCH'){ for(const k of ['full_name','position','phone','building']) if(k in body) u[k]=(body[k]||'').trim();
       if('role' in body&&SRM_ROLES[body.role]) u.role=body.role; if('active' in body) u.active=body.active?1:0;
       if('password' in body&&body.password) u.password=body.password; _srmSave(db); return _pubUser(u); }
     if(method==='DELETE'){ if(id===M.id) E('Нельзя удалить самого себя'); db.users=db.users.filter(x=>x.id!==id); _srmSave(db); return {ok:true}; }

@@ -176,6 +176,11 @@ export function seed(){
 
 // Миграция: одиночное здание -> массив объектов (для ранее созданных БД)
 export function migrate(){
+  // идемпотентная миграция схемы users: колонка building (объект сотрудника, напр. кочегара котельной)
+  try{
+    const cols = db.prepare(`PRAGMA table_info(users)`).all().map(c=>c.name);
+    if(!cols.includes('building')) db.exec(`ALTER TABLE users ADD COLUMN building TEXT DEFAULT ''`);
+  }catch(e){ console.error('migrate users.building', e.message); }
   const row=db.prepare(`SELECT json FROM state WHERE key='main'`).get();
   if(!row) return;
   let s; try{ s=JSON.parse(row.json); }catch{ return; }

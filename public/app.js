@@ -135,6 +135,7 @@ function ensureState(){
   DB.listings.forEach(a=>{ if(!Array.isArray(a.documents)) a.documents=[]; });
   DB.signage.forEach(s=>{ if(!Array.isArray(s.documents)) s.documents=[]; });
   if(!Array.isArray(DB.buildingMeters)) DB.buildingMeters=[];
+  if(!Array.isArray(DB.heatCost)) DB.heatCost=[]; // себестоимость отопления по объекту/периоду (топливо+кочегар+котёл)
   if(!Array.isArray(DB.audit)) DB.audit=[];
   if(!DB.integrations) DB.integrations={};
   const I=DB.integrations;
@@ -1073,7 +1074,7 @@ function utilities(){
   const ut=UT.reduce((s,u)=>s+u.electricity+u.water+u.heating,0);
   const ex=EX.reduce((s,e)=>s+e.amount,0);
   const pers=periodsList();
-  el(head('Коммуналка и расходы на содержание',`${utilPeriod?'Период: '+fmtPeriod(utilPeriod):'Все периоды'} · ${scopeSub()}`,canEdit('utilities')?`<button class="btn ghost" onclick="readingsModal()">📟 Показания помещений</button> <button class="btn ghost" onclick="odpuEntry()">🏢 Показания ОДПУ</button> <button class="btn" onclick="expenseModal()">+ Расход</button>`:'')+
+  el(head('Коммуналка и расходы на содержание',`${utilPeriod?'Период: '+fmtPeriod(utilPeriod):'Все периоды'} · ${scopeSub()}`,canEdit('utilities')?`<button class="btn ghost" onclick="readingsModal()">📟 Показания помещений</button> <button class="btn ghost" onclick="odpuEntry()">🏢 Показания ОДПУ</button> <button class="btn ghost" onclick="boilerEntry()">🔥 Котельная</button> <button class="btn" onclick="expenseModal()">+ Расход</button>`:'')+
   `<div class="toolbar"><span class="t-sub">Период:</span><select class="search" style="width:auto;min-width:160px" onchange="setUtilPeriod(this.value)"><option value="">Все периоды</option>${pers.map(p=>`<option value="${p}"${utilPeriod===p?' selected':''}>${fmtPeriod(p)}</option>`).join('')}</select></div>
   <div class="grid" style="grid-template-columns:repeat(3,1fr);margin-bottom:18px">
     ${miniStat('Коммунальные начисления',money(ut),'violet')}${miniStat('Расходы на содержание',money(ex),'amber')}${miniStat('Итого затраты',money(ut+ex),'red')}
@@ -1119,9 +1120,11 @@ function odpuBilledFor(bid){
   meters.forEach(m=>{const a=odpuAccrued(m); if(a){any=true; t.electricity+=a.electricity; t.water+=a.water; t.heating+=a.heating;}});
   return any?t:null;
 }
-function utilReportRowsFor(cur, hist, odpu){
+function utilReportRowsFor(cur, hist, odpu, bid){
+  const heat = bid ? heatingCostFor(bid, utilPeriod) : null;   // себестоимость отопления (топливо+кочегар+котёл)
   return [['electricity','⚡ Электроэнергия'],['water','💧 Вода'],['heating','🔥 Отопление']].map(([k,label])=>{
-    const supplier  = odpu ? (+odpu[k]||0) : null;   // выставлено НАМ снабжающей организацией (ОДПУ)
+    // отопление: «Выставлено нам» = себестоимость (не ОДПУ); электро/вода — по ОДПУ
+    const supplier  = k==='heating' ? (heat?heat.total:null) : (odpu ? (+odpu[k]||0) : null);
     const billed    = cur.filter(u=>UTIL_ISSUED(u.status)).reduce((s,u)=>s+(+u[k]||0),0);   // начислено арендаторам
     const collected = cur.filter(u=>u.status==='paid').reduce((s,u)=>s+(+u[k]||0),0);        // собрано с арендаторов
     const hb = hist.filter(u=>UTIL_ISSUED(u.status)).reduce((s,u)=>s+(+u[k]||0),0);
@@ -1138,7 +1141,7 @@ function utilReportTable(rows){
   const anyO=rows.some(r=>r.supplier!=null);
   const tS=sum('supplier'),tB=sum('billed'),tC=sum('collected'),tF=sum('forecast');
   const m=v=>v==null?'—':money(v);
-  return `<div style="overflow-x:auto"><table><thead><tr><th>Услуга</th><th>Выставлено нам (ОДПУ)</th><th>Начислено арендаторам</th><th>Собрано с них</th><th>Прогноз сбора</th><th>Разница (ОДН/потери)</th></tr></thead><tbody>
+  return `<div style="overflow-x:auto"><table><thead><tr><th>Услуга</th><th>Выставлено нам</th><th>Начислено арендаторам</th><th>Собрано с них</th><th>Прогноз сбора</th><th>Разница (ОДН/потери)</th></tr></thead><tbody>
   ${rows.map(r=>`<tr><td class="t-strong">${r.label}</td><td>${m(r.supplier)}</td><td>${money(r.billed)}</td><td class="t-strong" style="color:var(--green)">${money(r.collected)}</td><td style="color:var(--accent2)">${money(r.forecast)}</td><td${r.loss?` style="color:var(--amber)"`:''}>${m(r.loss)}</td></tr>`).join('')}
   <tr style="border-top:2px solid var(--line2)"><td class="t-strong">Итого по объекту</td><td class="t-strong">${anyO?money(tS):'—'}</td><td class="t-strong">${money(tB)}</td><td class="t-strong" style="color:var(--green)">${money(tC)}</td><td class="t-strong" style="color:var(--accent2)">${money(tF)}</td><td class="t-strong"${anyO&&(tS-tB)?` style="color:var(--amber)"`:''}>${anyO?money(tS-tB):'—'}</td></tr>
   </tbody></table></div>`;
@@ -1153,18 +1156,24 @@ function utilReportBuildings(){
 }
 function utilReportCard(){
   const secs = utilReportBuildings();
-  const body = secs.map(({b,cur,hist,odpu})=>`<div class="sec-h" style="margin-top:14px">🏢 ${esc(b.name)}${odpu?'':' <span class="t-sub">— показания ОДПУ за период не внесены</span>'}</div>${utilReportTable(utilReportRowsFor(cur,hist,odpu))}`).join('') || '<div class="empty" style="padding:16px">Объекты не найдены</div>';
+  const body = secs.map(({b,cur,hist,odpu})=>{ const heat=heatingCostFor(b.id, utilPeriod);
+    const breakdown = heat ? `<div class="t-sub" style="margin-top:6px">🔥 Отопление (себестоимость): топливо ${money(heat.fuel)} + зарплата кочегара ${money(heat.stoker)} + котёл ${money(heat.boiler)} = <b>${money(heat.total)}</b>${canEdit('utilities')?` · <button class="btn ghost sm" onclick="boilerEntry('${b.id}')">✎ Котельная</button>`:''}</div>`
+      : `<div class="t-sub" style="margin-top:6px">🔥 Отопление: данные котельной за период не внесены — «Выставлено нам» = «—». ${canEdit('utilities')?`<button class="btn ghost sm" onclick="boilerEntry('${b.id}')">🔥 Внести</button>`:''}</div>`;
+    return `<div class="sec-h" style="margin-top:14px">🏢 ${esc(b.name)}${odpu?'':' <span class="t-sub">— показания ОДПУ за период не внесены</span>'}</div>${utilReportTable(utilReportRowsFor(cur,hist,odpu,b.id))}${breakdown}`;
+  }).join('') || '<div class="empty" style="padding:16px">Объекты не найдены</div>';
   return `<div class="card" style="margin-bottom:18px"><div class="panel-title"><h3>📊 Отчёт по коммунальным услугам</h3><span class="muted">${utilPeriod?fmtPeriod(utilPeriod):'все периоды'} · по объектам</span></div>
   ${body}
-  <div class="t-sub" style="margin-top:10px">«Выставлено нам (ОДПУ)» — начислено снабжающими организациями по общедомовым счётчикам (нужны внесённые показания ОДПУ за период — кнопка «🏢 Показания ОДПУ»). «Начислено арендаторам» — по их счётчикам. «Собрано с них» — оплачено арендаторами. «Прогноз сбора» = собрано + недобор × историческая собираемость. «Разница (ОДН/потери)» = ОДПУ − начислено арендаторам (общедомовые нужды / потери). <button class="btn ghost sm" onclick="exportUtilReport()">⤓ Экспорт CSV</button></div></div>`;
+  <div class="t-sub" style="margin-top:10px">«Выставлено нам» — для электро/воды это ОДПУ (общедомовые счётчики, кнопка «🏢 Показания ОДПУ»); для отопления это <b>себестоимость</b> (топливо + зарплата кочегара + котёл, кнопка «🔥 Котельная»). «Начислено арендаторам» — по их счётчикам. «Собрано с них» — оплачено арендаторами. «Прогноз сбора» = собрано + недобор × историческая собираемость. «Разница (ОДН/потери)» = ОДПУ − начислено арендаторам (общедомовые нужды / потери). <button class="btn ghost sm" onclick="exportUtilReport()">⤓ Экспорт CSV</button></div></div>`;
 }
 function exportUtilReport(){
-  let out=[['Объект','Услуга','Выставлено нам (ОДПУ)','Начислено арендаторам','Собрано','Прогноз сбора','Разница (ОДН/потери)']];
+  let out=[['Объект','Услуга','Выставлено нам','Начислено арендаторам','Собрано','Прогноз сбора','Разница (ОДН/потери)']];
   utilReportBuildings().forEach(({b,cur,hist,odpu})=>{
-    const rows=utilReportRowsFor(cur,hist,odpu);
+    const rows=utilReportRowsFor(cur,hist,odpu,b.id);
     rows.forEach(r=>out.push([b.name,r.label.replace(/^[^ ]+ /,''),r.supplier==null?'—':r.supplier,r.billed,r.collected,r.forecast,r.loss==null?'—':r.loss]));
     const s=k=>rows.reduce((a,r)=>a+(r[k]||0),0); const anyO=rows.some(r=>r.supplier!=null);
     out.push([b.name,'Итого',anyO?s('supplier'):'—',s('billed'),s('collected'),s('forecast'),anyO?(s('supplier')-s('billed')):'—']);
+    const heat=heatingCostFor(b.id, utilPeriod);
+    if(heat) out.push([b.name,'Отопление — себестоимость (топливо / кочегар / котёл)',heat.fuel,heat.stoker,heat.boiler,'',heat.total]);
   });
   const csv='﻿'+out.map(r=>r.map(csvCell).join(';')).join('\n');
   const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));a.download='kommunalka_otchet_'+(utilPeriod||'all')+'.csv';a.click();
@@ -1272,6 +1281,62 @@ function odpuAccrued(m){ if(!m)return null; const e=m.electricity||{},w=m.water|
 function odpuCollected(bid,period){ const us=DB.utilities.filter(u=>unitOf(u.unit)?.building===bid && u.period===period);
   return { electricity:us.reduce((s,u)=>s+(+u.electricity||0),0), water:us.reduce((s,u)=>s+(+u.water||0),0), heating:us.reduce((s,u)=>s+(+u.heating||0),0) }; }
 function odpuEntry(bid){ if(!canEdit('utilities')) return; const id=bid||(SCOPE!=='all'?SCOPE:(buildingsList()[0]||{}).id); if(!id) return alert('Сначала добавьте объект'); buildingMeterModal(id, utilPeriod); }
+/* ---------- 🔥 Котельная: себестоимость отопления = топливо + зарплата кочегара(ов объекта) + обслуживание котла ---------- */
+function heatCostRec(bid,period){ return (DB.heatCost||[]).find(h=>h.building===bid && h.period===period)||null; }
+// зарплата кочегаров объекта за период (сотрудник с должностью «кочегар» и building===bid)
+function stokerSalaryFor(bid,period){
+  const stokerIds=new Set((USERS||[]).filter(u=>/кочегар/i.test(u.position||'') && u.building===bid).map(u=>u.id));
+  if(!stokerIds.size) return 0;
+  return (DB.salaries||[]).filter(s=>stokerIds.has(s.user_id) && (!period||s.period===period)).reduce((a,s)=>a+(+s.amount||0),0);
+}
+// себестоимость отопления за период (или все периоды, если period пустой)
+function heatingCostFor(bid,period){
+  let fuel=0,boiler=0;
+  (DB.heatCost||[]).filter(h=>h.building===bid && (!period||h.period===period)).forEach(h=>{ fuel+=Math.round((+h.fuelQty||0)*(+h.fuelPrice||0)); boiler+=(+h.boilerMaint||0); });
+  const stoker=stokerSalaryFor(bid,period);
+  const total=fuel+stoker+boiler;
+  if(total===0 && !heatCostRec(bid,period) && !stoker) return null;   // данных нет → в отчёте «—»
+  return {fuel,stoker,boiler,total};
+}
+function boilerEntry(bid){ if(!canEdit('utilities')) return; const id=bid||(SCOPE!=='all'?SCOPE:(buildingsList()[0]||{}).id); if(!id) return alert('Сначала добавьте объект'); boilerModal(id, utilPeriod); }
+function boilerModal(bid,period){
+  if(!canEdit('utilities')) return; const b=buildingOf(bid); if(!b) return;
+  period=period||utilPeriod||TODAY.toISOString().slice(0,7);
+  const h=heatCostRec(bid,period)||{};
+  openM(`<div class="modal-h"><h3>🔥 Котельная — себестоимость отопления</h3><span class="x" onclick="closeM()">×</span></div>
+  <div class="modal-b">
+    <div class="row2">
+      <div class="field"><label>Объект</label><select id="hb-building" onchange="boilerModal(this.value, document.getElementById('hb-period').value)">${buildingsList().map(x=>`<option value="${x.id}"${x.id===bid?' selected':''}>${esc(x.name)}</option>`).join('')}</select></div>
+      <div class="field"><label>Период</label><input id="hb-period" type="month" value="${period}"></div>
+    </div>
+    <div class="t-sub" style="margin-bottom:8px">Себестоимость = топливо (кол-во × цена) + зарплата кочегаров этого объекта за период + обслуживание котла. Зарплата берётся из ФОТ по сотрудникам с должностью «кочегар», привязанным к объекту (поле «Объект» в карточке сотрудника).</div>
+    <div class="card" style="background:var(--bg2);margin-bottom:8px"><div class="t-strong" style="margin-bottom:6px">Топливо</div>
+      <div class="grid" style="grid-template-columns:repeat(3,1fr);gap:8px">
+        <div class="field" style="margin:0"><label>Количество</label><input id="hb-qty" type="number" step="any" value="${+h.fuelQty||0}" oninput="hbRecalc()"></div>
+        <div class="field" style="margin:0"><label>Единица</label><input id="hb-unit" value="${esc(h.fuelUnit||'т')}" placeholder="т / м³ / л"></div>
+        <div class="field" style="margin:0"><label>Цена за единицу, ₽</label><input id="hb-price" type="number" step="any" value="${+h.fuelPrice||0}" oninput="hbRecalc()"></div>
+      </div><div class="t-sub" style="margin-top:6px">Стоимость топлива: <b id="hb-fuel">0 ₽</b></div></div>
+    <div class="field"><label>Обслуживание котла за период, ₽</label><input id="hb-boiler" type="number" step="any" value="${+h.boilerMaint||0}" oninput="hbRecalc()"></div>
+    <div class="doc" style="background:var(--bg2)"><div class="di">💼</div><div style="flex:1;min-width:0"><div class="t-strong">Зарплата кочегаров объекта за период</div><div class="t-sub">из ФОТ (должность «кочегар» + этот объект)</div></div><b id="hb-stoker">${money(stokerSalaryFor(bid,period))}</b></div>
+    <div class="sec-h" style="display:flex;justify-content:space-between"><span>Итого себестоимость отопления</span><b id="hb-total">0 ₽</b></div>
+  </div>
+  <div class="modal-f">${heatCostRec(bid,period)?`<button class="btn ghost sm" onclick="delBoiler('${bid}','${period}')">🗑 Удалить</button>`:''}<div class="spacer"></div><button class="btn ghost" onclick="closeM()">Отмена</button><button class="btn" onclick="saveBoiler('${bid}')">Сохранить</button></div>`);
+  hbRecalc();
+}
+function hbRecalc(){
+  const fuel=Math.round((+val('hb-qty')||0)*(+val('hb-price')||0));
+  const boiler=+val('hb-boiler')||0;
+  const stoker=+(document.getElementById('hb-stoker')?.textContent||'0').replace(/[^\d]/g,'')||0;
+  const set=(id,v)=>{const el=document.getElementById(id);if(el)el.textContent=money(v);};
+  set('hb-fuel',fuel); set('hb-total',fuel+boiler+stoker);
+}
+async function saveBoiler(bid){ if(!Array.isArray(DB.heatCost)) DB.heatCost=[];
+  bid=val('hb-building')||bid; const period=val('hb-period'); if(!period) return alert('Укажите период');
+  const data={ building:bid, period, fuelQty:+val('hb-qty')||0, fuelUnit:(val('hb-unit')||'').trim().slice(0,10), fuelPrice:+val('hb-price')||0, boilerMaint:+val('hb-boiler')||0 };
+  const ex=DB.heatCost.find(h=>h.building===bid && h.period===period);
+  if(ex) Object.assign(ex,data); else DB.heatCost.push({id:'hc'+Date.now(),...data});
+  closeM(); await afterStateChange(); }
+async function delBoiler(bid,period){ if(!confirm('Удалить данные котельной за этот период?'))return; DB.heatCost=(DB.heatCost||[]).filter(h=>!(h.building===bid && h.period===period)); closeM(); await afterStateChange(); }
 function odpuSummary(bid,period){
   const ed=canEdit('utilities');
   const entryBtn = ed?`<button class="btn ghost sm" style="margin-top:6px" onclick="odpuEntry('${bid}')">🏢 Внести / изменить показания ОДПУ</button>`:'';
@@ -2816,19 +2881,21 @@ function userModal(id){
      :`<div class="field"><label>Логин</label><div style="display:flex"><input id="u-email" placeholder="ivanov" style="border-top-right-radius:0;border-bottom-right-radius:0"><span style="padding:9px 11px;border:1px solid var(--line2);border-left:none;border-radius:0 10px 10px 0;background:var(--bg2);color:var(--muted);white-space:nowrap;display:flex;align-items:center">@citisrm.ru</span></div><div class="t-sub" style="margin-top:4px">Введите только имя — домен подставится. Можно и полный email.</div></div>`}
   <div class="field"><label>${u?'Новый пароль (если менять)':'Пароль'}</label><input id="u-pw" type="password" placeholder="${u?'оставьте пустым':'не короче 6 символов'}"></div>
   <div class="field"><label>Роль (права доступа)</label><select id="u-role">${roleOpts}</select></div>
+  <div class="field"><label>Объект <span class="t-sub">(необязательно; для кочегара — объект, чью котельную он обслуживает)</span></label>
+    <select id="u-building"><option value="">— не привязан —</option>${buildingsList().map(b=>`<option value="${b.id}"${u&&u.building===b.id?' selected':''}>${esc(b.name)}</option>`).join('')}</select></div>
   ${u?`<div class="field"><label>Доступ</label><select id="u-active"><option value="1"${u.active?' selected':''}>Активен</option><option value="0"${!u.active?' selected':''}>Отключён</option></select></div>`:''}
   </div>
   <div class="modal-f"><button class="btn ghost" onclick="closeM()">Отмена</button><button class="btn" onclick="saveUser(${id||0})">${u?'Сохранить':'Добавить'}</button></div>`);}
 async function saveUser(id){
   try{
     if(id){
-      const body={full_name:val('u-name'),position:val('u-pos'),phone:val('u-phone'),role:val('u-role'),active:val('u-active')==='1'};
+      const body={full_name:val('u-name'),position:val('u-pos'),phone:val('u-phone'),role:val('u-role'),building:val('u-building'),active:val('u-active')==='1'};
       if(val('u-pw'))body.password=val('u-pw');
       await api('/api/users/'+id,'PATCH',body);
     }else{
       const pw=val('u-pw'); if(pw.length<6)return alert('Пароль не короче 6 символов');
       const email=mkLogin(val('u-email')); if(!email)return alert('Укажите логин');
-      await api('/api/users','POST',{full_name:val('u-name'),position:val('u-pos'),phone:val('u-phone'),email,password:pw,role:val('u-role')});
+      await api('/api/users','POST',{full_name:val('u-name'),position:val('u-pos'),phone:val('u-phone'),email,password:pw,role:val('u-role'),building:val('u-building')});
     }
     closeM(); USERS=await api('/api/users'); if(id===ME.id){const me=await api('/api/auth/me');ME=me.user;} render();
   }catch(e){alert(e.message);}
