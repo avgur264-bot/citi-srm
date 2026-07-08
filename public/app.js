@@ -1395,26 +1395,31 @@ function gsmModal(bid,period){
   <div class="modal-f">${fuelRec(bid,period)?`<button class="btn ghost sm" onclick="delGsm('${bid}','${period}')">🗑 Удалить</button>`:''}<div class="spacer"></div><button class="btn ghost" onclick="closeM()">Отмена</button><button class="btn" onclick="saveGsm('${bid}')">Сохранить</button></div>`);
   renderGsmRows(); gsRecalc();
 }
+// читаем строки поставок прямо из полей (надёжно, без зависимости от inline-переменных)
+function gsReadRows(){ return [...document.querySelectorAll('#gs-rows .gs-row')].map(el=>({
+  date: el.querySelector('.gs-d')?.value||'',
+  qty: +el.querySelector('.gs-q')?.value||0,
+  price: +el.querySelector('.gs-p')?.value||0 })); }
 function renderGsmRows(){ const box=document.getElementById('gs-rows'); if(!box) return;
-  box.innerHTML = _gsmRows.length ? _gsmRows.map((r,i)=>`<div style="display:grid;grid-template-columns:1.1fr 1fr 1fr auto;gap:6px;align-items:end;margin-bottom:6px">
-    <div class="field" style="margin:0"><label class="t-sub">Дата</label><input type="date" value="${esc(r.date||'')}" onchange="_gsmRows[${i}].date=this.value"></div>
-    <div class="field" style="margin:0"><label class="t-sub">Кол-во, л</label><input type="number" step="any" value="${r.qty||0}" oninput="_gsmRows[${i}].qty=+this.value||0;gsRecalc()"></div>
-    <div class="field" style="margin:0"><label class="t-sub">Цена, ₽/л</label><input type="number" step="any" value="${r.price||0}" oninput="_gsmRows[${i}].price=+this.value||0;gsRecalc()"></div>
+  box.innerHTML = _gsmRows.length ? _gsmRows.map((r,i)=>`<div class="gs-row" style="display:grid;grid-template-columns:1.1fr 1fr 1fr auto;gap:6px;align-items:end;margin-bottom:6px">
+    <div class="field" style="margin:0"><label class="t-sub">Дата</label><input class="gs-d" type="date" value="${esc(r.date||'')}"></div>
+    <div class="field" style="margin:0"><label class="t-sub">Кол-во, л</label><input class="gs-q" type="number" step="any" value="${r.qty||0}" oninput="gsRecalc()"></div>
+    <div class="field" style="margin:0"><label class="t-sub">Цена, ₽/л</label><input class="gs-p" type="number" step="any" value="${r.price||0}" oninput="gsRecalc()"></div>
     <button class="btn ghost sm" style="height:38px" onclick="gsmDelRow(${i})" title="Удалить поставку">🗑</button></div>`).join('')
     : '<div class="empty" style="padding:10px">Поставок пока нет — нажмите «+ Поставка».</div>';
 }
-function gsmAddRow(){ _gsmRows.push({date:TODAY.toISOString().slice(0,10),qty:0,price:0}); renderGsmRows(); gsRecalc(); }
-function gsmDelRow(i){ _gsmRows.splice(i,1); renderGsmRows(); gsRecalc(); }
-function gsRecalc(){ const o=+val('gs-open')||0, c=+val('gs-close')||0;
-  const p=_gsmRows.reduce((s,r)=>s+(+r.qty||0),0);
-  const cost=_gsmRows.reduce((s,r)=>s+(+r.qty||0)*(+r.price||0),0);
+function gsmAddRow(){ _gsmRows=gsReadRows(); _gsmRows.push({date:TODAY.toISOString().slice(0,10),qty:0,price:0}); renderGsmRows(); gsRecalc(); }
+function gsmDelRow(i){ _gsmRows=gsReadRows(); _gsmRows.splice(i,1); renderGsmRows(); gsRecalc(); }
+function gsRecalc(){ const o=+val('gs-open')||0, c=+val('gs-close')||0; const rows=gsReadRows();
+  const p=rows.reduce((s,r)=>s+(+r.qty||0),0);
+  const cost=rows.reduce((s,r)=>s+(+r.qty||0)*(+r.price||0),0);
   const avg=p>0?Math.round(cost/p*100)/100:0; const cons=Math.max(0,o+p-c);
   const set=(id,v)=>{const e=document.getElementById(id);if(e)e.textContent=v;};
   set('gs-purchtot',fmt(p)+' л'); set('gs-avg',fmt(avg)+' ₽/л'); set('gs-cons',fmt(cons)+' л');
   const fm=document.getElementById('gs-formula'); if(fm) fm.innerHTML=`${fmt(o)} (начало) + ${fmt(p)} (приход) − ${fmt(c)} (конец) = <b>${fmt(cons)} л</b> · средняя цена <b>${fmt(avg)} ₽/л</b> → в котельную (кол-во × цена)`; }
 async function saveGsm(bid){ if(!Array.isArray(DB.fuelLog)) DB.fuelLog=[];
   bid=val('gs-building')||bid; const period=val('gs-period'); if(!period) return alert('Укажите период');
-  const purchases=_gsmRows.filter(r=>(+r.qty||0)>0).map(r=>({date:r.date||'',qty:+r.qty||0,price:+r.price||0}));
+  const purchases=gsReadRows().filter(r=>(+r.qty||0)>0).map(r=>({date:r.date||'',qty:+r.qty||0,price:+r.price||0}));
   const ex=DB.fuelLog.find(f=>f.building===bid && f.period===period);
   if(ex){ ex.opening=+val('gs-open')||0; ex.closing=+val('gs-close')||0; ex.purchases=purchases; delete ex.purchased; delete ex.fuelPrice; }
   else DB.fuelLog.push({id:'fl'+Date.now(),building:bid,period,opening:+val('gs-open')||0,closing:+val('gs-close')||0,purchases});
