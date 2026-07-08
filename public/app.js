@@ -3343,14 +3343,23 @@ async function saveContractEdit(id){ const c=contractOf(id); if(!c) return;
 function accrueRentModal(cid){const c=contractOf(cid);if(!c)return;const t=tenantOf(c.tenant);
   openM(`<div class="modal-h"><h3>Начислить аренду</h3><span class="x" onclick="tenantInfo('${c.tenant}')">×</span></div>
   <div class="modal-b">${infoRow('Арендатор',esc(t?t.name:'—'))}${infoRow('Помещение',esc(c.unit))}${infoRow('Сумма аренды/мес',money(monthlyRent(c)))}
-  <div class="row2" style="margin-top:12px"><div class="field"><label>Период (месяц)</label><input id="ar-per" type="month" value="${payPeriod||new Date().toISOString().slice(0,7)}"></div><div class="field"><label>Срок оплаты (число 1–28)</label><input id="ar-due" type="number" min="1" max="28" value="5"></div></div>
-  <div class="t-sub">Создаст начисление аренды за выбранный месяц вручную (если за этот период его ещё нет).</div></div>
+  <div class="row2" style="margin-top:12px"><div class="field"><label>Период — с месяца</label><input id="ar-per" type="month" value="${payPeriod||new Date().toISOString().slice(0,7)}"></div><div class="field"><label>Срок оплаты (число 1–28)</label><input id="ar-due" type="number" min="1" max="28" value="5"></div></div>
+  <div class="field"><label>На сколько месяцев</label><input id="ar-count" type="number" min="1" max="24" value="1"></div>
+  <div class="t-sub">Создаст начисления аренды за выбранные месяцы (начиная с указанного). Периоды, по которым начисление уже есть, пропускаются.</div></div>
   <div class="modal-f"><button class="btn ghost" onclick="tenantInfo('${c.tenant}')">Отмена</button><button class="btn" onclick="saveAccrueRent('${cid}')">Начислить</button></div>`);}
 async function saveAccrueRent(cid){const c=contractOf(cid);if(!c)return;const per=val('ar-per');if(!per)return alert('Укажите период');
-  if((DB.payments||[]).some(p=>p.contract===cid&&p.period===per))return alert('За этот период по договору уже есть начисление');
   const amount=monthlyRent(c);if(amount<=0)return alert('Сумма аренды не определена — проверьте ставку договора');
-  const dd=Math.min(28,Math.max(1,+val('ar-due')||5));const due=per+'-'+String(dd).padStart(2,'0');
+  const count=Math.min(24,Math.max(1,+val('ar-count')||1));
+  const dd=Math.min(28,Math.max(1,+val('ar-due')||5));
   if(!DB.payments)DB.payments=[];
-  DB.payments.push({id:'p'+Date.now()+'_'+cid,contract:cid,period:per,amount,due,paid:0,paidDate:null,status:daysLeft(due)<0?'overdue':'pending'});
-  closeM();await afterStateChange();}
+  const [y,m]=per.split('-').map(Number); let created=0, skipped=0;
+  for(let i=0;i<count;i++){ const idx=y*12+(m-1)+i; const p2=Math.floor(idx/12)+'-'+String(idx%12+1).padStart(2,'0');
+    if((DB.payments||[]).some(p=>p.contract===cid&&p.period===p2)){skipped++;continue;}
+    const due=p2+'-'+String(dd).padStart(2,'0');
+    DB.payments.push({id:'p'+Date.now()+'_'+i+'_'+cid,contract:cid,period:p2,amount,due,paid:0,paidDate:null,status:daysLeft(due)<0?'overdue':'pending'});
+    created++;
+  }
+  closeM();await afterStateChange();
+  if(created===0) alert('Начисления за выбранные месяцы уже есть — ничего не создано.');
+  else if(skipped>0) alert(`Создано начислений: ${created}. Пропущено (уже были): ${skipped}.`);}
 function infoRow(k,v){return `<div style="display:flex;justify-content:space-between;padding:9px 0;border-bottom:1px solid var(--line);gap:14px"><span class="t-sub">${k}</span><span class="t-strong" style="text-align:right">${v}</span></div>`;}
