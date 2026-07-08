@@ -1098,8 +1098,9 @@ function utilities(){
       if(cv.offsetParent!==null) chartFactories['chExp-'+b.id](); }});
 }
 function utilTable(list){
+  const rows=[...list].sort((a,b)=>String(a.unit).localeCompare(String(b.unit),'ru',{numeric:true}));   // по номеру помещения, а не по порядку внесения
   return `<div style="overflow-x:auto"><table><thead><tr><th>Помещение</th><th>Эл-во</th><th>Вода</th><th>Отопл.</th><th>Итого</th><th>Статус</th></tr></thead><tbody>
-    ${list.length?list.map(u=>{const tot=u.electricity+u.water+u.heating;const clk=canEdit('utilities');const un=unitOf(u.unit);return `<tr${clk?` style="cursor:pointer" onclick="utilEdit('${esc(u.id)}')"`:''}><td class="t-strong">${esc(u.unit)}${un&&un.name?`<div class="t-sub">${esc(un.name)}</div>`:''}</td><td>${fmt(u.electricity)}</td><td>${fmt(u.water)}</td><td>${fmt(u.heating)}</td><td class="t-strong">${money(tot)}</td><td>${utilPill(u.status)}</td></tr>`;}).join(''):'<tr><td colspan="6" class="empty">Нет начислений</td></tr>'}
+    ${rows.length?rows.map(u=>{const tot=u.electricity+u.water+u.heating;const clk=canEdit('utilities');const un=unitOf(u.unit);return `<tr${clk?` style="cursor:pointer" onclick="utilEdit('${esc(u.id)}')"`:''}><td class="t-strong">${esc(u.unit)}${un&&un.name?`<div class="t-sub">${esc(un.name)}</div>`:''}</td><td>${fmt(u.electricity)}</td><td>${fmt(u.water)}</td><td>${fmt(u.heating)}</td><td class="t-strong">${money(tot)}</td><td>${utilPill(u.status)}</td></tr>`;}).join(''):'<tr><td colspan="6" class="empty">Нет начислений</td></tr>'}
     </tbody></table></div>`;
 }
 function expenseTable(list){
@@ -2109,7 +2110,7 @@ function settingsPage(){
   <div class="card" style="margin-top:16px">
     <div class="sec-h" style="display:flex;align-items:center;justify-content:space-between"><span>📨 Уведомления в Telegram</span><button class="btn ghost sm" onclick="botHelp()">ℹ️ Как настроить бота</button></div>
     <div class="t-sub" style="margin-bottom:10px">Бот присылает сводку утром и/или мгновенные оповещения о новых заявках и задачах. Не знаете, как подключить — нажмите «ℹ️ Как настроить бота».</div>
-    <label style="display:flex;align-items:center;gap:10px;padding:6px 0;cursor:pointer"><input type="checkbox" id="s-tg-on" ${s.notify?.telegram?.enabled?'checked':''}> Включить ежедневную сводку (по времени)</label>
+    <label style="display:flex;align-items:center;gap:10px;padding:6px 0;cursor:pointer"><input type="checkbox" id="s-tg-on" ${s.notify?.telegram?.enabled?'checked':''}> Включить ежедневную сводку (по московскому времени)</label>
     <label style="display:flex;align-items:center;gap:10px;padding:6px 0;cursor:pointer"><input type="checkbox" id="s-tg-instant" ${s.notify?.telegram?.instant?'checked':''}> Мгновенные оповещения о новых заявках и задачах</label>
     <div class="row2"><div class="field"><label>Токен бота (от @BotFather)</label><input id="s-tg-token" value="${esc(s.notify?.telegram?.token||'')}" placeholder="123456:ABC-..."></div>
       <div class="field"><label>Chat ID (куда слать)</label><input id="s-tg-chat" value="${esc(s.notify?.telegram?.chatId||'')}" placeholder="напр. 123456789 или -100..."></div></div>

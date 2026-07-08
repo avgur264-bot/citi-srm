@@ -423,8 +423,10 @@ setInterval(async ()=>{
   sweepMaps();
   const tg=notifyCfg();
   if(!tg||!tg.enabled||!tg.token||!tg.chatId) return;
-  const now=new Date(); const hhmm=String(now.getHours()).padStart(2,'0')+':'+String(now.getMinutes()).padStart(2,'0');
-  const today=now.toISOString().slice(0,10);
+  const now=new Date();
+  const msk=new Date(now.getTime()+3*3600*1000);   // время по Москве (МСК = UTC+3; контейнер в UTC, без перехода на лето)
+  const hhmm=String(msk.getUTCHours()).padStart(2,'0')+':'+String(msk.getUTCMinutes()).padStart(2,'0');
+  const today=msk.toISOString().slice(0,10);
   if(hhmm===(tg.time||'08:00') && _lastDigest!==today){ _lastDigest=today; await sendTelegram(tg.token, tg.chatId, buildDigest()); }
 }, 60*1000);
 // очистка in-memory карт от устаревших записей (анти-утечка памяти под сканером/атакой)
