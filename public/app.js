@@ -1438,24 +1438,52 @@ async function saveGsm(bid){ if(!Array.isArray(DB.fuelLog)) DB.fuelLog=[];
   closeM(); await afterStateChange(); }
 async function delGsm(bid,period){ if(!confirm('Удалить запись ГСМ за этот период?'))return; DB.fuelLog=(DB.fuelLog||[]).filter(f=>!(f.building===bid && f.period===period)); closeM(); await afterStateChange(); }
 // 📖 Журнал всех поставок топлива по объекту (все периоды)
-function fuelJournalModal(bid){ const b=buildingOf(bid); if(!b) return;
-  // разворачиваем поставки из всех записей ГСМ объекта в единый список
+function fuelJournalModal(bid){ const b=buildingOf(bid); if(!b) return; const ed=canEdit('utilities');
+  // разворачиваем поставки из всех записей ГСМ объекта в единый список (с ссылкой период+индекс — для правки/удаления)
   const items=[];
   (DB.fuelLog||[]).filter(f=>f.building===bid).forEach(f=>{
-    (Array.isArray(f.purchases)?f.purchases:[]).forEach(p=>items.push({period:f.period,date:p.date||'',qty:+p.qty||0,price:+p.price||0}));
+    (Array.isArray(f.purchases)?f.purchases:[]).forEach((p,pidx)=>items.push({period:f.period,pidx,date:p.date||'',qty:+p.qty||0,price:+p.price||0}));
   });
   items.sort((a,b)=>String(b.date||b.period).localeCompare(String(a.date||a.period)));
   const totQty=items.reduce((s,x)=>s+x.qty,0), totCost=items.reduce((s,x)=>s+x.qty*x.price,0);
-  const rows=items.map(x=>`<tr><td class="t-sub">${fmtPeriod(x.period)}</td><td>${x.date?fmtD(x.date):'—'}</td><td>${fmt(x.qty)} л</td><td>${fmt(x.price)} ₽/л</td><td class="t-strong">${money(x.qty*x.price)}</td></tr>`).join('');
+  const cols=ed?6:5;
+  const rows=items.map(x=>`<tr><td class="t-sub">${fmtPeriod(x.period)}</td><td>${x.date?fmtD(x.date):'—'}</td><td>${fmt(x.qty)} л</td><td>${fmt(x.price)} ₽/л</td><td class="t-strong">${money(x.qty*x.price)}</td>${ed?`<td style="white-space:nowrap"><button class="btn ghost sm" title="Изменить" onclick="fuelDeliveryEdit('${bid}','${x.period}',${x.pidx})">✎</button> <button class="btn ghost sm" title="Удалить" onclick="delFuelDelivery('${bid}','${x.period}',${x.pidx})">🗑</button></td>`:''}</tr>`).join('');
   openM(`<div class="modal-h"><h3>📖 Журнал поставок топлива — ${esc(b.name)}</h3><span class="x" onclick="closeM()">×</span></div>
   <div class="modal-b">
-    <div class="t-sub" style="margin-bottom:8px">Все поставки по объекту за всё время. Средняя цена — средневзвешенная по всем поставкам.</div>
-    <div style="overflow-x:auto"><table><thead><tr><th>Период</th><th>Дата</th><th>Количество</th><th>Цена</th><th>Сумма</th></tr></thead><tbody>
-    ${rows||'<tr><td colspan="5" class="empty">Поставок пока нет</td></tr>'}
-    ${items.length?`<tr style="border-top:2px solid var(--line2)"><td class="t-strong" colspan="2">Итого</td><td class="t-strong">${fmt(totQty)} л</td><td class="t-strong">${totQty>0?fmt(Math.round(totCost/totQty*100)/100):0} ₽/л</td><td class="t-strong">${money(totCost)}</td></tr>`:''}
+    <div class="t-sub" style="margin-bottom:8px">Все поставки по объекту за всё время. Средняя цена — средневзвешенная по всем поставкам.${ed?' Можно изменить (✎) или удалить (🗑) любую запись.':''}</div>
+    <div style="overflow-x:auto"><table><thead><tr><th>Период</th><th>Дата</th><th>Количество</th><th>Цена</th><th>Сумма</th>${ed?'<th></th>':''}</tr></thead><tbody>
+    ${rows||`<tr><td colspan="${cols}" class="empty">Поставок пока нет</td></tr>`}
+    ${items.length?`<tr style="border-top:2px solid var(--line2)"><td class="t-strong" colspan="2">Итого</td><td class="t-strong">${fmt(totQty)} л</td><td class="t-strong">${totQty>0?fmt(Math.round(totCost/totQty*100)/100):0} ₽/л</td><td class="t-strong">${money(totCost)}</td>${ed?'<td></td>':''}</tr>`:''}
     </tbody></table></div>
   </div>
   <div class="modal-f"><div class="spacer"></div><button class="btn" onclick="gsmModal('${bid}', utilPeriod)">← Назад к ГСМ</button></div>`);
+}
+// удалить одну поставку из журнала (запись период+индекс)
+async function delFuelDelivery(bid,period,pidx){ if(!canEdit('utilities'))return;
+  const f=(DB.fuelLog||[]).find(x=>x.building===bid && x.period===period); if(!f||!Array.isArray(f.purchases)||!f.purchases[pidx])return;
+  const p=f.purchases[pidx];
+  if(!confirm(`Удалить поставку ${p.date?fmtD(p.date):''} — ${fmt(+p.qty||0)} л по ${fmt(+p.price||0)} ₽/л?`))return;
+  f.purchases.splice(pidx,1);
+  await afterStateChange(); fuelJournalModal(bid);
+}
+// изменить одну поставку из журнала — компактное окно даты/кол-ва/цены
+function fuelDeliveryEdit(bid,period,pidx){ if(!canEdit('utilities'))return; const b=buildingOf(bid); if(!b)return;
+  const f=(DB.fuelLog||[]).find(x=>x.building===bid && x.period===period); if(!f||!Array.isArray(f.purchases)||!f.purchases[pidx])return;
+  const p=f.purchases[pidx];
+  openM(`<div class="modal-h"><h3>Изменить поставку — ${esc(b.name)}, ${fmtPeriod(period)}</h3><span class="x" onclick="fuelJournalModal('${bid}')">×</span></div>
+  <div class="modal-b">
+    <div class="field"><label>Дата поставки</label><input id="fd-date" type="date" value="${esc(p.date||'')}"></div>
+    <div class="row2">
+      <div class="field"><label>Количество, л</label><input id="fd-qty" type="number" step="any" value="${+p.qty||0}"></div>
+      <div class="field"><label>Цена, ₽/л</label><input id="fd-price" type="number" step="any" value="${+p.price||0}"></div>
+    </div>
+  </div>
+  <div class="modal-f"><button class="btn ghost sm" onclick="delFuelDelivery('${bid}','${period}',${pidx})">🗑 Удалить</button><div class="spacer"></div><button class="btn ghost" onclick="fuelJournalModal('${bid}')">Отмена</button><button class="btn" onclick="saveFuelDelivery('${bid}','${period}',${pidx})">Сохранить</button></div>`);
+}
+async function saveFuelDelivery(bid,period,pidx){ if(!canEdit('utilities'))return;
+  const f=(DB.fuelLog||[]).find(x=>x.building===bid && x.period===period); if(!f||!Array.isArray(f.purchases)||!f.purchases[pidx])return;
+  f.purchases[pidx]={date:val('fd-date')||'',qty:+val('fd-qty')||0,price:+val('fd-price')||0};
+  await afterStateChange(); fuelJournalModal(bid);
 }
 function odpuSummary(bid,period){
   const ed=canEdit('utilities');
