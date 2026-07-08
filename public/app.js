@@ -905,6 +905,8 @@ function tenants(){
   renderTenants();
 }
 function tenantBuilding(t){const c=DB.contracts.find(c=>c.tenant===t.id);return c?(unitOf(c.unit)?.building||null):null;}
+function tenantUnit(t){const c=DB.contracts.find(c=>c.tenant===t.id);return c?(c.unit||''):'';}
+const byUnitNo=(a,b)=>String(tenantUnit(a)).localeCompare(String(tenantUnit(b)),undefined,{numeric:true});
 function tenantTable(list){
   return `<div style="overflow-x:auto"><table><thead><tr><th>Арендатор</th><th>Контакт</th><th>Отрасль</th><th>Помещение</th><th>Аренда/мес</th><th>Статус оплат</th></tr></thead><tbody>${list.map(tenantRow).join('')}</tbody></table></div>`;
 }
@@ -921,7 +923,7 @@ function renderTenants(){
   const match=t=>!q||t.name.toLowerCase().includes(q)||(t.inn||'').includes(q)||(t.contact||'').toLowerCase().includes(q);
   const bs = SCOPE==='all'? buildingsList() : [buildingOf(SCOPE)].filter(Boolean);
   let html = bs.map(b=>{
-    const list=DB.tenants.filter(t=>tenantBuilding(t)===b.id && match(t));
+    const list=DB.tenants.filter(t=>tenantBuilding(t)===b.id && match(t)).sort(byUnitNo);
     const body = list.length? tenantTable(list) : '<div class="empty" style="padding:20px">Нет арендаторов в объекте</div>';
     return collapseCard('ten-'+b.id, buildingHeader(b, list.length+' аренд.'), body, !!q);
   }).join('');
