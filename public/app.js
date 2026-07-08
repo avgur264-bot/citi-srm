@@ -1379,7 +1379,7 @@ function gsmModal(bid,period){
   <div class="modal-b">
     <div class="row2">
       <div class="field"><label>Объект</label><select id="gs-building" onchange="gsmModal(this.value, document.getElementById('gs-period').value)">${buildingsList().map(x=>`<option value="${x.id}"${x.id===bid?' selected':''}>${esc(x.name)}</option>`).join('')}</select></div>
-      <div class="field"><label>Период</label><input id="gs-period" type="month" value="${period}"></div>
+      <div class="field"><label>Период</label><input id="gs-period" type="month" value="${period}" onchange="gsmModal(document.getElementById('gs-building').value, this.value)"></div>
     </div>
     <div class="t-sub" style="margin-bottom:8px">Израсходовано = остаток на начало + приход (по журналу поставок) − остаток на конец. Это количество и средняя цена поставок автоматически идут в котельную для расчёта себестоимости.</div>
     <div class="sec-h" style="display:flex;justify-content:space-between;align-items:center;margin-top:0"><span>📒 Поставки за ${fmtPeriod(period)}</span><span><button class="btn ghost sm" onclick="fuelJournalModal('${bid}')">📖 Журнал</button> <button class="btn ghost sm" onclick="gsmAddRow()">+ Поставка</button></span></div>
