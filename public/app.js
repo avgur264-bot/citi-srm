@@ -1295,10 +1295,10 @@ function prevFuelClosing(bid,period){
 function fuelPurchasedQty(f){ if(!f) return 0; if(Array.isArray(f.purchases)) return f.purchases.reduce((s,x)=>s+(+x.qty||0),0); return +f.purchased||0; }
 // средневзвешенная цена закупки по поставкам месяца (для себестоимости)
 function fuelAvgPrice(f){ if(!f) return 0; if(Array.isArray(f.purchases)&&f.purchases.length){ const q=fuelPurchasedQty(f); const cost=f.purchases.reduce((s,x)=>s+(+x.qty||0)*(+x.price||0),0); return q>0?cost/q:0; } return +f.fuelPrice||0; }
-// израсходовано за период = остаток на начало + приход − остаток на конец (не меньше 0)
+// израсходовано за период = остаток на начало + приход − остаток на конец + корректировка (недостача +, излишек −)
 function fuelConsumed(bid,period){ const f=fuelRec(bid,period); if(!f) return null;
   const open=(f.opening!=null?+f.opening:prevFuelClosing(bid,period))||0;
-  return Math.max(0, open + fuelPurchasedQty(f) - (+f.closing||0)); }
+  return Math.max(0, open + fuelPurchasedQty(f) - (+f.closing||0) + (+f.correction||0)); }
 // зарплата кочегаров объекта за период (сотрудник с должностью «кочегар» и building===bid)
 function stokerSalaryFor(bid,period){
   const stokerIds=new Set((USERS||[]).filter(u=>/кочегар/i.test(u.position||'') && u.building===bid).map(u=>u.id));
@@ -1385,10 +1385,13 @@ function gsmModal(bid,period){
     <div class="sec-h" style="display:flex;justify-content:space-between;align-items:center;margin-top:0"><span>📒 Поставки за ${fmtPeriod(period)}</span><span><button class="btn ghost sm" onclick="fuelJournalModal('${bid}')">📖 Журнал</button> <button class="btn ghost sm" onclick="gsmAddRow()">+ Поставка</button></span></div>
     <div id="gs-rows"></div>
     <div class="t-sub" style="margin:4px 0 10px">Приход всего: <b id="gs-purchtot">0 л</b> · средняя цена: <b id="gs-avg">0 ₽/л</b></div>
+    <div class="sec-h" style="margin-top:0">Сверка остатков</div>
     <div class="row2">
-      <div class="field"><label>Остаток на начало (л) <span class="t-sub">авто из прошлого месяца, можно исправить</span></label><input id="gs-open" type="number" step="any" value="${openDef}" oninput="gsRecalc()"></div>
-      <div class="field"><label>Остаток на конец месяца (л)</label><input id="gs-close" type="number" step="any" value="${+f.closing||0}" oninput="gsRecalc()"></div>
+      <div class="field"><label>Остаток на начало (л) <span class="t-sub">факт (замер)</span></label><input id="gs-open" type="number" step="any" value="${openDef}" oninput="gsRecalc()"></div>
+      <div class="field"><label>Остаток на конец месяца (л) <span class="t-sub">факт (замер)</span></label><input id="gs-close" type="number" step="any" value="${+f.closing||0}" oninput="gsRecalc()"></div>
     </div>
+    <div class="t-sub" id="gs-reconc" data-prev="${prevFuelClosing(bid,period)}" style="margin-bottom:8px"></div>
+    <div class="field"><label>Корректировка расхода (±л) <span class="t-sub">недостача +, излишек −; для списания потерь/сверки</span></label><input id="gs-corr" type="number" step="any" value="${+f.correction||0}" oninput="gsRecalc()"></div>
     <div class="sec-h" style="display:flex;justify-content:space-between"><span>Израсходовано за месяц</span><b id="gs-cons">0 л</b></div>
     <div class="t-sub" id="gs-formula"></div>
   </div>
@@ -1410,19 +1413,22 @@ function renderGsmRows(){ const box=document.getElementById('gs-rows'); if(!box)
 }
 function gsmAddRow(){ _gsmRows=gsReadRows(); _gsmRows.push({date:TODAY.toISOString().slice(0,10),qty:0,price:0}); renderGsmRows(); gsRecalc(); }
 function gsmDelRow(i){ _gsmRows=gsReadRows(); _gsmRows.splice(i,1); renderGsmRows(); gsRecalc(); }
-function gsRecalc(){ const o=+val('gs-open')||0, c=+val('gs-close')||0; const rows=gsReadRows();
+function gsRecalc(){ const o=+val('gs-open')||0, c=+val('gs-close')||0, corr=+val('gs-corr')||0; const rows=gsReadRows();
   const p=rows.reduce((s,r)=>s+(+r.qty||0),0);
   const cost=rows.reduce((s,r)=>s+(+r.qty||0)*(+r.price||0),0);
-  const avg=p>0?Math.round(cost/p*100)/100:0; const cons=Math.max(0,o+p-c);
+  const avg=p>0?Math.round(cost/p*100)/100:0; const avail=o+p; const cons=Math.max(0,o+p-c+corr);
   const set=(id,v)=>{const e=document.getElementById(id);if(e)e.textContent=v;};
   set('gs-purchtot',fmt(p)+' л'); set('gs-avg',fmt(avg)+' ₽/л'); set('gs-cons',fmt(cons)+' л');
-  const fm=document.getElementById('gs-formula'); if(fm) fm.innerHTML=`${fmt(o)} (начало) + ${fmt(p)} (приход) − ${fmt(c)} (конец) = <b>${fmt(cons)} л</b> · средняя цена <b>${fmt(avg)} ₽/л</b> → в котельную (кол-во × цена)`; }
+  // сверка: расчётный остаток на начало (из прошлого месяца) против указанного факта
+  const rec=document.getElementById('gs-reconc'); if(rec){ const prev=+rec.dataset.prev||0; const d=Math.round((o-prev)*100)/100;
+    rec.innerHTML=`Доступно (начало + приход): <b>${fmt(avail)} л</b>. Расчётный остаток на начало (из прошлого месяца): ${fmt(prev)} л`+(d!==0?` · <span style="color:var(--amber)">расхождение ${d>0?'+':''}${fmt(d)} л</span> — учтено как корректировка начального остатка`:` · ✓ совпадает`); }
+  const fm=document.getElementById('gs-formula'); if(fm) fm.innerHTML=`${fmt(o)} (начало) + ${fmt(p)} (приход) − ${fmt(c)} (конец)${corr?(corr>0?' + '+fmt(corr)+' (недостача)':' − '+fmt(-corr)+' (излишек)'):''} = <b>${fmt(cons)} л</b> израсходовано · средняя цена <b>${fmt(avg)} ₽/л</b> → в котельную`; }
 async function saveGsm(bid){ if(!Array.isArray(DB.fuelLog)) DB.fuelLog=[];
   bid=val('gs-building')||bid; const period=val('gs-period'); if(!period) return alert('Укажите период');
   const purchases=gsReadRows().filter(r=>(+r.qty||0)>0).map(r=>({date:r.date||'',qty:+r.qty||0,price:+r.price||0}));
   const ex=DB.fuelLog.find(f=>f.building===bid && f.period===period);
-  if(ex){ ex.opening=+val('gs-open')||0; ex.closing=+val('gs-close')||0; ex.purchases=purchases; delete ex.purchased; delete ex.fuelPrice; }
-  else DB.fuelLog.push({id:'fl'+Date.now(),building:bid,period,opening:+val('gs-open')||0,closing:+val('gs-close')||0,purchases});
+  if(ex){ ex.opening=+val('gs-open')||0; ex.closing=+val('gs-close')||0; ex.correction=+val('gs-corr')||0; ex.purchases=purchases; delete ex.purchased; delete ex.fuelPrice; }
+  else DB.fuelLog.push({id:'fl'+Date.now(),building:bid,period,opening:+val('gs-open')||0,closing:+val('gs-close')||0,correction:+val('gs-corr')||0,purchases});
   closeM(); await afterStateChange(); }
 async function delGsm(bid,period){ if(!confirm('Удалить запись ГСМ за этот период?'))return; DB.fuelLog=(DB.fuelLog||[]).filter(f=>!(f.building===bid && f.period===period)); closeM(); await afterStateChange(); }
 // 📖 Журнал всех поставок топлива по объекту (все периоды)
