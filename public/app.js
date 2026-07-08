@@ -2164,7 +2164,7 @@ async function testNotify(){ ensureState();
   DB.settings.notify={telegram:{enabled:document.getElementById('s-tg-on').checked,instant:!!document.getElementById('s-tg-instant')?.checked,token:val('s-tg-token').trim(),chatId:val('s-tg-chat').trim(),time:val('s-tg-time')||'08:00'}};
   if(!DB.settings.notify.telegram.token||!DB.settings.notify.telegram.chatId){ return alert('Сначала введите токен бота и Chat ID.'); }
   await saveState();
-  try{ const r=await api('/api/notify/test','POST'); alert(r.ok?'✅ Тестовая сводка отправлена в Telegram. Проверьте чат с ботом.':'❌ Не удалось отправить. Проверьте токен и Chat ID (и что вы написали боту хотя бы раз).'); }
+  try{ const r=await api('/api/notify/test','POST'); alert(r.ok?'✅ Тестовое сообщение отправлено в Telegram. Проверьте чат с ботом.':('❌ Не удалось отправить.\n\nПричина: '+(r.error||'неизвестна')+'\n\nПроверьте токен и Chat ID и что вы написали боту хотя бы раз.')); }
   catch(e){ alert('Ошибка: '+(e.message||e)); }
 }
 function onLogoFile(input){ const f=input.files&&input.files[0]; if(!f)return;

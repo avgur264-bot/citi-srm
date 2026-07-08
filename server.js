@@ -300,10 +300,13 @@ function buildDigest(){
 }
 async function sendTelegram(token, chatId, text){
   try{
-    const r = await fetch(`https://api.telegram.org/bot${token}/sendMessage`,
-      { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({ chat_id: chatId, text }) });
-    return r.ok;
-  }catch{ return false; }
+    const r = await fetch(`https://api.telegram.org/bot${String(token||'').trim()}/sendMessage`,
+      { method:'POST', headers:{'content-type':'application/json'},
+        body: JSON.stringify({ chat_id: String(chatId||'').trim(), text: (text&&String(text).trim())?text:'СИТИ SRM: тестовое сообщение.' }) });
+    let data=null; try{ data = await r.json(); }catch{}
+    if(r.ok && data && data.ok) return {ok:true};
+    return {ok:false, error:(data&&data.description)?('Telegram: '+data.description):('HTTP '+r.status)};
+  }catch(e){ return {ok:false, error:'Сеть/TLS: '+((e&&e.message)||String(e))}; }
 }
 function notifyCfg(){ try{ const st=JSON.parse(db.prepare(`SELECT json FROM state WHERE key='main'`).get().json); return (st.settings&&st.settings.notify&&st.settings.notify.telegram)||null; }catch{ return null; } }
 // мгновенное оповещение (если включено instant) — не блокирует ответ
@@ -689,8 +692,8 @@ async function api(req, res, url){
     if(!isFull(me.role)) return send(res,403,{error:'Только администратор'});
     const tg=notifyCfg();
     if(!tg||!tg.token||!tg.chatId) return send(res,400,{error:'Не заданы токен бота и chat_id. Сохраните настройки.'});
-    const ok=await sendTelegram(tg.token, tg.chatId, buildDigest());
-    return send(res,200,{ ok });
+    const r2=await sendTelegram(tg.token, tg.chatId, '✅ СИТИ SRM: проверка связи с Telegram прошла успешно. Уведомления настроены.');
+    return send(res,200,{ ok:r2.ok, error:r2.error||null });
   }
 
   // ---- AI-помощник (Фаза 1: только чтение/подсказки) ----
