@@ -186,7 +186,9 @@ async function api(path, method='GET', body){
     return {...t,assignee_name:a?a.full_name:null,assignee_position:a?a.position:null,creator_name:c?c.full_name:null};};
 
   // В автономном демо регистрация и демо-доступ остаются открытыми.
-  if(path==='/api/config') return {allowRegistration:true, assistantKey:false, assistantProvider:'gigachat'};
+  if(path==='/api/config') return {allowRegistration:true, assistantKey:false, assistantProvider:'gigachat', avitoConfigured:false, cianConfigured:false};
+  // Реклама: в автономном демо API площадок недоступно — синхронизация идёт в демо-режиме на клиенте.
+  if(path==='/api/ads/info') return {avitoConfigured:false, cianConfigured:false, feedProtected:false, feedAvito:'', feedCian:''};
   // Telegram-отправка и AI-помощник работают только на реальном сервере, не в автономном демо.
   if(path==='/api/notify/test') return {ok:false, demo:true};
   if(path==='/api/assistant'&&method==='POST') return {enabled:false};

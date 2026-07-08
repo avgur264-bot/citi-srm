@@ -13,6 +13,7 @@ import {
   ROLES, ROLE_KEYS, perms, canView, canEdit, canViewS, canEditS
 } from './db.js';
 import { ask as llmAsk, hasModelKey, providerName } from './llm.js';
+import { avitoConfigured, cianConfigured, feedTokenOk, feedUrls, avitoStats, buildAvitoFeedXml } from './ads.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PUBLIC = join(__dirname, 'public');
@@ -318,6 +319,15 @@ function notifyInstant(text){ const tg=notifyCfg(); if(tg&&tg.instant&&tg.token&
 // ---------- автоматизации (ежедневная проверка, серверная запись состояния) ----------
 function loadMain(){ return JSON.parse(db.prepare(`SELECT json FROM state WHERE key='main'`).get().json); }
 function saveMain(st, by){ db.prepare(`UPDATE state SET json=?, updated_at=?, updated_by=? WHERE key='main'`).run(JSON.stringify(st), new Date().toISOString(), by||'system'); }
+// запись в журнал обмена (совместимо с клиентским logSync: DB.integrations.log)
+function logAdsSync(st, by, updated, skipped, err){
+  if(!st.integrations) st.integrations={};
+  if(!Array.isArray(st.integrations.log)) st.integrations.log=[];
+  st.integrations.log.unshift({ ts:new Date().toISOString(), key:'avito', icon:'📣', title:'Авито', dir:'in',
+    text: err ? ('Ошибка синхронизации: '+String(err).slice(0,160)) : `Обновлено объявлений: ${updated}${skipped?`, пропущено: ${skipped}`:''}`,
+    count: updated||0, sum:0, items: err?[]:[`обновлено ${updated}`,`пропущено ${skipped}`] });
+  st.integrations.log = st.integrations.log.slice(0,50);
+}
 const pad2 = n => String(n).padStart(2,'0');
 // A1. Автоначисление аренды: в день начисления создаём начисления по активным договорам за текущий период.
 // Идемпотентно (ключ договор+период) — повторный прогон и ручное начисление не плодят дублей.
@@ -517,7 +527,8 @@ async function api(req, res, url){
   // Публичный флаг: разрешена ли самостоятельная регистрация (по умолчанию — нет).
   if(path==='/api/config' && method==='GET'){
     // assistantKey — задан ли ключ модели в окружении (UI помощника показывается только тогда + при включении в Настройках)
-    return send(res,200,{ allowRegistration: ALLOW_REGISTRATION, assistantKey: hasModelKey(), assistantProvider: providerName() });
+    return send(res,200,{ allowRegistration: ALLOW_REGISTRATION, assistantKey: hasModelKey(), assistantProvider: providerName(),
+      avitoConfigured: avitoConfigured(), cianConfigured: cianConfigured() });
   }
   if(path==='/api/auth/register' && method==='POST'){
     if(!ALLOW_REGISTRATION) return send(res,403,{error:'Регистрация закрыта. Учётную запись создаёт администратор.'});
@@ -557,6 +568,49 @@ async function api(req, res, url){
   if(!me) return send(res,401,{error:'Требуется вход'});
 
   if(path==='/api/auth/me' && method==='GET') return send(res,200,{ user: publicUser(me) });
+
+  // ---- Реклама: статус интеграции + ссылки на XML-фид (для вставки в кабинет площадки) ----
+  if(path==='/api/ads/info' && method==='GET'){
+    const origin = `${(req.headers['x-forwarded-proto']||'http')}://${req.headers.host}`;
+    const urls = feedUrls(origin);
+    return send(res,200,{ avitoConfigured: avitoConfigured(), cianConfigured: cianConfigured(),
+      feedProtected: !!process.env.FEED_TOKEN, feedAvito: urls.avito, feedCian: urls.cian });
+  }
+  // ---- Реклама: реальная синхронизация статистики (Фаза 1 — Авито) ----
+  if(path==='/api/ads/sync' && method==='POST'){
+    const b = await readBody(req);
+    const platform = (b.platform||'').toLowerCase();
+    const row = db.prepare(`SELECT json FROM state WHERE key='main'`).get();
+    const st = JSON.parse(row.json);
+    if(!canEditS(me.role,'ads',st)) return send(res,403,{error:'Нет прав на изменение раздела «Реклама».'});
+    if(platform!=='avito') return send(res,400,{error:'Пока поддерживается только синхронизация с Авито.'});
+    if(!avitoConfigured()) return send(res,400,{error:'Ключи Авито не заданы в окружении клиента. Подключите API (AVITO_CLIENT_ID/SECRET/USER_ID).'});
+    const listings = Array.isArray(st.listings) ? st.listings : [];
+    const active = listings.filter(a=>a.platform==='avito' && a.status==='active');
+    const withId = active.filter(a=>a.extId);
+    if(!active.length) return send(res,200,{ updated:0, skipped:0, note:'На Авито нет активных объявлений.' });
+    // период: последние 30 дней (Авито отдаёт статистику по дням)
+    const to = new Date().toISOString().slice(0,10);
+    const from = new Date(Date.now()-30*864e5).toISOString().slice(0,10);
+    const ctl = new AbortController(); const timer = setTimeout(()=>ctl.abort(), 25000);
+    let stats;
+    try{ stats = await avitoStats(withId.map(a=>a.extId), from, to, ctl.signal); }
+    catch(e){ clearTimeout(timer);
+      active.forEach(a=>{ a.lastSyncError = String(e.message||e).slice(0,200); });
+      saveMain(st, me.email); logAdsSync(st, me.email, 0, active.length, String(e.message||e));
+      return send(res,502,{error:'Ошибка Авито: '+String(e.message||e).slice(0,200)});
+    }
+    clearTimeout(timer);
+    let updated=0; const now=new Date().toISOString();
+    active.forEach(a=>{
+      const s = a.extId ? stats.get(String(a.extId)) : null;
+      if(s){ a.views = s.views; a.leads = s.contacts; a.source='api'; a.lastSync=now; a.lastSyncError=null; updated++; }
+      else { a.lastSyncError = a.extId ? 'Нет данных по этому extId' : 'Не указан ID на площадке (extId)'; }
+    });
+    logAdsSync(st, me.email, updated, active.length-updated, null);
+    saveMain(st, me.email);
+    return send(res,200,{ updated, skipped: active.length-updated, updated_at: now });
+  }
 
   if(path==='/api/bootstrap' && method==='GET'){
     const row = db.prepare(`SELECT json, updated_at FROM state WHERE key='main'`).get();
@@ -847,9 +901,33 @@ async function serveStatic(req,res,url){
 }
 
 // ============================================================
+// ============================================================
+// XML-фид объявлений (площадка забирает по постоянной ссылке)
+// ============================================================
+function serveFeed(req,res,url){
+  const p = url.pathname;
+  if(!feedTokenOk(url.searchParams.get('token'))){ res.writeHead(403,{'Content-Type':'text/plain; charset=utf-8'}); return res.end('Forbidden'); }
+  let st; try{ st = loadMain(); }catch{ res.writeHead(500); return res.end('state error'); }
+  const buildings = Array.isArray(st.buildings)?st.buildings:[];
+  const addr = bid => { const b = buildings.find(x=>x.id===bid); return b ? (b.address || b.name || '') : ''; };
+  const phone = (st.settings && (st.settings.contactPhone || st.settings.phone || (st.settings.brand&&st.settings.brand.phone))) || '';
+  const origin = `${(req.headers['x-forwarded-proto']||'http')}://${req.headers.host}`;
+  if(p==='/feed/avito.xml'){
+    const xml = buildAvitoFeedXml(st.listings||[], { address:addr, phone, origin });
+    res.writeHead(200, { 'Content-Type':'application/xml; charset=utf-8', 'Cache-Control':'public, max-age=600', 'X-Content-Type-Options':'nosniff' });
+    return res.end(xml);
+  }
+  if(p==='/feed/cian.xml'){   // Фаза 2 — заглушка валидным пустым фидом
+    res.writeHead(200, { 'Content-Type':'application/xml; charset=utf-8', 'Cache-Control':'public, max-age=600' });
+    return res.end('<?xml version="1.0" encoding="UTF-8"?>\n<feed><!-- ЦИАН-фид будет реализован в Фазе 2 --></feed>\n');
+  }
+  res.writeHead(404,{'Content-Type':'text/plain; charset=utf-8'}); return res.end('Not found');
+}
+
 const srv = http.createServer(async (req,res)=>{
   const url = new URL(req.url, `http://${req.headers.host}`);
   try{
+    if(url.pathname.startsWith('/feed/')) return serveFeed(req,res,url);
     if(url.pathname.startsWith('/api/')) return await api(req,res,url);
     return await serveStatic(req,res,url);
   }catch(err){

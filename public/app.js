@@ -37,6 +37,8 @@ const LOGO_FULL='logo.jpg'; // полный логотип (здания + СИ�
 let ME=null, ROLES={}, DB=null, TASKS=[], USERS=[];
 let ALLOW_REG=false; // разрешена ли самостоятельная регистрация (с сервера)
 let ASSIST_KEY=false, ASSIST_PROVIDER='gigachat'; // задан ли ключ модели в окружении (AI-помощник)
+let ADS_AVITO=false, ADS_CIAN=false; // заданы ли ключи площадок (реклама) — реальная синхронизация
+let ADS_INFO=null;          // {feedAvito, feedCian, feedProtected} — грузится на странице «Реклама»
 let IS_DEMO=false;          // true только в автономной демо-версии (выставляется сборщиком)
 const DEMO_LIMIT=1000;      // лимит записей в демо-версии
 let current='dashboard';
@@ -116,7 +118,7 @@ function myReminders(){
    BOOT
    ============================================================ */
 (async function boot(){
-  try{ const c = await api('/api/config'); ALLOW_REG = !!c.allowRegistration; ASSIST_KEY = !!c.assistantKey; ASSIST_PROVIDER = c.assistantProvider||'gigachat'; }catch{ ALLOW_REG=false; }
+  try{ const c = await api('/api/config'); ALLOW_REG = !!c.allowRegistration; ASSIST_KEY = !!c.assistantKey; ASSIST_PROVIDER = c.assistantProvider||'gigachat'; ADS_AVITO = !!c.avitoConfigured; ADS_CIAN = !!c.cianConfigured; }catch{ ALLOW_REG=false; }
   try{
     const {user} = await api('/api/auth/me');
     ME=user; await loadData(); showApp();
@@ -132,7 +134,7 @@ function ensureState(){
   if(typeof DB.penaltyRate!=='number') DB.penaltyRate=0.1;
   if(!Array.isArray(DB.listings)) DB.listings=[];
   if(!Array.isArray(DB.signage)) DB.signage=[];
-  DB.listings.forEach(a=>{ if(!Array.isArray(a.documents)) a.documents=[]; });
+  DB.listings.forEach(a=>{ if(!Array.isArray(a.documents)) a.documents=[]; if(!a.source) a.source = a.lastSync?'demo':'manual'; });
   DB.signage.forEach(s=>{ if(!Array.isArray(s.documents)) s.documents=[]; });
   if(!Array.isArray(DB.buildingMeters)) DB.buildingMeters=[];
   if(!Array.isArray(DB.heatCost)) DB.heatCost=[]; // себестоимость отопления по объекту/периоду (топливо+кочегар+котёл)
@@ -612,6 +614,10 @@ async function afterStateChange(){
 let pollTimer=null;
 function startPolling(){ stopPolling(); pollTimer=setInterval(silentRefresh, 30000); }
 function stopPolling(){ if(pollTimer)clearInterval(pollTimer); pollTimer=null; }
+// принудительно перечитать состояние с сервера и перерисовать (после серверных мутаций — напр. синхронизация рекламы)
+async function reloadState(){
+  const b=await api('/api/bootstrap'); DB=b.state; TASKS=b.tasks; USERS=b.users; ROLES=b.roles; ensureState(); applyRoleOverrides(); resetAuditBaseline(); updateBadges(); render();
+}
 async function silentRefresh(){
   if(!ME) return;
   if(document.getElementById('modalBg')?.classList.contains('show')) return; // не мешаем вводу в модалке
@@ -1956,6 +1962,8 @@ function copyRemind(){ const t=document.getElementById('rem-text'); if(!t)return
 const AD_PLATFORMS={cian:['ЦИАН','#0468ff'],avito:['Авито','#00aaff'],other:['Другая','#888']};
 const SIGN_KINDS=['Настенная вывеска','Световой короб','Медиафасад','Рекламная стела','Баннер','Штендер','Витрина','Крышная установка'];
 const adPlatform=p=>AD_PLATFORMS[p]||AD_PLATFORMS.other;
+// метка источника текущих просмотров/заявок
+const adSourceBadge=s=>({api:'🌐 с площадки',demo:'🧪 демо',manual:'✍ вручную'}[s]||'синх.');
 function listingStatusPill(s){const m={active:['green','Активно'],paused:['amber','На паузе'],archived:['gray','В архиве']};const x=m[s]||['gray',s];return `<span class="pill ${x[0]}">${x[1]}</span>`;}
 function signageStatus(s){ const dl=daysLeft(s.expiry); if(s.expiry==null||dl===9999) return ['gray','Бессрочно','—']; if(dl<0) return ['red','Истекло',`${-dl} дн назад`]; if(dl<=60) return ['amber','Истекает',`через ${dl} дн`]; return ['green','Действует',`через ${dl} дн`]; }
 const sListings=()=>(DB.listings||[]).filter(a=>SCOPE==='all'||a.building===SCOPE);
@@ -1964,6 +1972,7 @@ let signFilter='all';
 function setSignFilter(f){ signFilter=f; render(); }
 function ads(){
   const ed=canEdit('ads');
+  if(ed && ADS_INFO===null && !IS_DEMO) loadAdsInfo();   // подтянуть статус интеграции/ссылки фида (один раз)
   const list=sListings(); const totV=list.reduce((s,a)=>s+(a.views||0),0); const totL=list.reduce((s,a)=>s+(a.leads||0),0); const active=list.filter(a=>a.status==='active').length;
   const sign=sSignage(); const filtered=sign.filter(s=>signFilter==='all'||s.owner===signFilter);
   const tabs=[['all','Все'],['tenant','Арендаторов'],['self','Собственника']];
@@ -1979,10 +1988,10 @@ function ads(){
         <td class="t-sub">${esc(b?b.name:a.building)}${a.unit?' · '+esc(a.unit):''}</td>
         <td class="t-strong" style="cursor:pointer" onclick="listingInfo('${a.id}')">${esc(a.title)}${a.documents&&a.documents.length?` 📎${a.documents.length}`:''}${safeUrl(a.url)?` <a href="${esc(safeUrl(a.url))}" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()" style="font-size:12px">↗</a>`:''}</td>
         <td>${money(a.price)}</td><td>👁 ${fmt(a.views||0)}</td><td>📞 ${a.leads||0}</td>
-        <td>${listingStatusPill(a.status)}${a.lastSync?`<div class="t-sub">синх. ${fmtDateTime(a.lastSync)}</div>`:''}</td>
+        <td>${listingStatusPill(a.status)}${a.lastSync?`<div class="t-sub">${adSourceBadge(a.source)} ${fmtDateTime(a.lastSync)}</div>`:''}${a.lastSyncError?`<div class="t-sub" style="color:var(--amber)" title="${esc(a.lastSyncError)}">⚠ ошибка синх.</div>`:''}</td>
         ${ed?`<td><button class="btn ghost sm" onclick="delListing('${a.id}')">🗑</button></td>`:''}</tr>`;}).join(''):`<tr><td colspan="8" class="empty">Объявлений нет</td></tr>`}
     </tbody></table>
-    <div class="t-sub" style="padding:10px 16px">⚠️ Демо-синхронизация: обновляет просмотры/заявки по тестовым данным. В боевой версии — через API ЦИАН/Авито (личный кабинет, ключ доступа).</div>
+    ${ed?adsIntegrationBlock():''}
   </div>
   <div class="card" style="padding:0;overflow-x:auto">
     <div class="sec-h" style="padding:14px 16px 0;display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap"><span>Разрешения на вывески и наружную рекламу</span>
@@ -1999,15 +2008,44 @@ function ads(){
         ${ed?`<td><button class="btn ghost sm" onclick="signageModal('${s.id}')">✎</button></td>`:''}</tr>`;}).join(''):`<tr><td colspan="8" class="empty">Разрешений нет</td></tr>`}
     </tbody></table></div>`);
 }
+// блок статуса интеграции с площадками + ссылки на XML-фид (для вставки в кабинет площадки)
+function adsIntegrationBlock(){
+  const st = (ok)=> ok?'<b style="color:var(--green)">подключён ✓</b>':'<b style="color:var(--muted)">не подключён (демо-режим)</b>';
+  const feed = ADS_INFO ? `<div class="t-sub" style="margin-top:6px">Ссылка на XML-фид для автозагрузки Авито (вставьте в кабинете площадки):<br>
+    <code style="user-select:all;word-break:break-all">${esc(ADS_INFO.feedAvito||'')}</code>${ADS_INFO.feedProtected?' <span class="t-sub">(защищён токеном)</span>':''}</div>` : '';
+  return `<div class="t-sub" style="padding:10px 16px;border-top:1px solid var(--line)">
+    📣 <b>API Авито:</b> ${st(ADS_AVITO)} · <b>ЦИАН:</b> ${st(ADS_CIAN)} <span class="t-sub">(Фаза 2)</span>
+    ${feed}
+    <div style="margin-top:6px">Кнопка «↻ Авито» при подключённых ключах тянет реальные просмотры/заявки по «ID на площадке (extId)». Без ключей — демо-прирост. Ключи задаются в окружении клиента (скрипт <code>set-ads-keys.sh</code>), в браузер не передаются.</div>
+  </div>`;
+}
+// подгрузить статус интеграции/ссылки фида и обновить блок (вызывается при открытии раздела)
+async function loadAdsInfo(){
+  if(IS_DEMO){ return; }
+  try{ ADS_INFO = await api('/api/ads/info'); ADS_AVITO=!!ADS_INFO.avitoConfigured; ADS_CIAN=!!ADS_INFO.cianConfigured; if(current==='ads') render(); }catch{}
+}
 async function syncListings(platform){
+  const pname=adPlatform(platform)[0];
+  const configured = platform==='avito'?ADS_AVITO : platform==='cian'?ADS_CIAN : false;
+  // Боевой режим: ключи заданы — реальный запрос к площадке через сервер
+  if(configured && !IS_DEMO){
+    try{
+      const r=await api('/api/ads/sync',{method:'POST',body:JSON.stringify({platform})});
+      await reloadState();
+      alert(`Синхронизация с «${pname}» завершена.\nОбновлено объявлений: ${r.updated||0}${r.skipped?`\nПропущено (нет extId/данных): ${r.skipped}`:''}${r.note?`\n${r.note}`:''}`);
+    }catch(e){ alert('Ошибка синхронизации с «'+pname+'»:\n'+(e.message||e)); }
+    return;
+  }
+  // Ключи не заданы: раздел работает как раньше — демо-прирост (ничего не ломаем)
   ensureState(); const now=new Date().toISOString();
   const items=(DB.listings||[]).filter(a=>a.platform===platform && a.status==='active');
-  if(!items.length) return alert(`На площадке «${adPlatform(platform)[0]}» нет активных объявлений для синхронизации.`);
+  if(!items.length) return alert(`На площадке «${pname}» нет активных объявлений для синхронизации.`);
+  if(!confirm(`API «${pname}» не подключён (ключи не заданы в окружении).\nВыполнить демо-синхронизацию (тестовый прирост просмотров)?`)) return;
   let dV=0,dL=0;
   items.forEach(a=>{ const addV=Math.max(5,Math.round((a.views||0)*0.08)); const addL=Math.max(0,Math.round(addV/40));
-    a.views=(a.views||0)+addV; a.leads=(a.leads||0)+addL; a.lastSync=now; dV+=addV; dL+=addL; });
-  logSync(platform,'📣',adPlatform(platform)[0],'in',`Обновлено объявлений: ${items.length}`,items.length,0,[`+${dV} просмотров`,`+${dL} заявок`]);
-  await afterStateChange(); alert(`Синхронизация с «${adPlatform(platform)[0]}» завершена.\nОбъявлений: ${items.length}\n+${dV} просмотров, +${dL} заявок.`);
+    a.views=(a.views||0)+addV; a.leads=(a.leads||0)+addL; a.lastSync=now; a.source='demo'; dV+=addV; dL+=addL; });
+  logSync(platform,'📣',pname,'in',`Демо-синхронизация: ${items.length} объявл.`,items.length,0,[`+${dV} просмотров`,`+${dL} заявок`]);
+  await afterStateChange(); alert(`Демо-синхронизация с «${pname}» завершена.\nОбъявлений: ${items.length}\n+${dV} просмотров, +${dL} заявок.\n\nДля реальных данных подключите API площадки в окружении клиента.`);
 }
 function listingModal(id){
   const a=id?(DB.listings||[]).find(x=>x.id===id):null;
@@ -2021,14 +2059,16 @@ function listingModal(id){
       <div class="field"><label>Помещение</label><input id="ad-unit" value="${a?esc(a.unit||''):''}" placeholder="1-03"></div></div>
     <div class="row2"><div class="field"><label>Цена, ₽/мес</label><input id="ad-price" type="number" value="${a?a.price||0:0}"></div>
       <div class="field"><label>Ссылка</label><input id="ad-url" value="${a?esc(a.url||''):''}" placeholder="https://"></div></div>
+    <div class="field"><label>ID на площадке (extId) <span class="t-sub">id объявления на Авито/ЦИАН — для подтяжки статистики и сопоставления с фидом</span></label><input id="ad-extid" value="${a?esc(a.extId||''):''}" placeholder="напр. 1234567890"></div>
+    <div class="field"><label>Описание <span class="t-sub">идёт в XML-фид площадки</span></label><textarea id="ad-desc" rows="3" placeholder="Описание объекта для площадки">${a?esc(a.description||''):''}</textarea></div>
   </div>
   <div class="modal-f">${a?`<button class="btn ghost sm" onclick="delListing('${a.id}')">🗑 Удалить</button>`:''}<div class="spacer"></div><button class="btn ghost" onclick="closeM()">Отмена</button><button class="btn" onclick="saveListing(${a?`'${a.id}'`:''})">${a?'Сохранить':'Добавить'}</button></div>`);
 }
 async function saveListing(id){
   const title=val('ad-title').trim(); if(!title)return alert('Укажите заголовок объявления'); ensureState();
-  const data={platform:val('ad-platform'),status:val('ad-status'),title,building:val('ad-building'),unit:val('ad-unit').trim(),price:+val('ad-price')||0,url:val('ad-url').trim()};
+  const data={platform:val('ad-platform'),status:val('ad-status'),title,building:val('ad-building'),unit:val('ad-unit').trim(),price:+val('ad-price')||0,url:val('ad-url').trim(),extId:val('ad-extid').trim(),description:val('ad-desc').trim()};
   if(id){const a=DB.listings.find(x=>x.id===id); if(a)Object.assign(a,data);}
-  else DB.listings.unshift({id:'ad'+Date.now(),...data,views:0,leads:0,posted:TODAY.toISOString().slice(0,10),lastSync:null,documents:[]});
+  else DB.listings.unshift({id:'ad'+Date.now(),...data,views:0,leads:0,source:'manual',posted:TODAY.toISOString().slice(0,10),lastSync:null,lastSyncError:null,documents:[]});
   closeM(); await afterStateChange();
 }
 async function delListing(id){ if(!confirm('Удалить объявление?'))return; DB.listings=(DB.listings||[]).filter(x=>x.id!==id); closeM(); await afterStateChange(); }
@@ -2071,8 +2111,12 @@ function listingInfo(id){ const a=(DB.listings||[]).find(x=>x.id===id); if(!a)re
     ${infoRow('Цена',money(a.price))}
     ${infoRow('Статус',listingStatusPill(a.status))}
     ${infoRow('Просмотры / заявки',`👁 ${fmt(a.views||0)} · 📞 ${a.leads||0}`)}
+    ${a.extId?infoRow('ID на площадке',esc(a.extId)):''}
+    ${infoRow('Источник данных',adSourceBadge(a.source))}
     ${a.posted?infoRow('Размещено',fmtD(a.posted)):''}
     ${a.lastSync?infoRow('Синхронизация',fmtDateTime(a.lastSync)):''}
+    ${a.lastSyncError?infoRow('Ошибка синх.',`<span style="color:var(--amber)">${esc(a.lastSyncError)}</span>`):''}
+    ${a.description?infoRow('Описание',esc(a.description)):''}
     ${safeUrl(a.url)?infoRow('Ссылка',`<a href="${esc(safeUrl(a.url))}" target="_blank" rel="noopener noreferrer">открыть ↗</a>`):(a.url?infoRow('Ссылка',esc(a.url)+' (небезопасная ссылка)'):'')}
     <div style="margin-top:12px">${docsBlock('listing',id,a.documents)}</div>
   </div>
