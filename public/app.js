@@ -1382,7 +1382,7 @@ function gsmModal(bid,period){
       <div class="field"><label>Период</label><input id="gs-period" type="month" value="${period}"></div>
     </div>
     <div class="t-sub" style="margin-bottom:8px">Израсходовано = остаток на начало + приход (по журналу поставок) − остаток на конец. Это количество и средняя цена поставок автоматически идут в котельную для расчёта себестоимости.</div>
-    <div class="sec-h" style="display:flex;justify-content:space-between;align-items:center;margin-top:0"><span>📒 Журнал поставок топлива</span><button class="btn ghost sm" onclick="gsmAddRow()">+ Поставка</button></div>
+    <div class="sec-h" style="display:flex;justify-content:space-between;align-items:center;margin-top:0"><span>📒 Поставки за ${fmtPeriod(period)}</span><span><button class="btn ghost sm" onclick="fuelJournalModal('${bid}')">📖 Журнал</button> <button class="btn ghost sm" onclick="gsmAddRow()">+ Поставка</button></span></div>
     <div id="gs-rows"></div>
     <div class="t-sub" style="margin:4px 0 10px">Приход всего: <b id="gs-purchtot">0 л</b> · средняя цена: <b id="gs-avg">0 ₽/л</b></div>
     <div class="row2">
@@ -1425,6 +1425,26 @@ async function saveGsm(bid){ if(!Array.isArray(DB.fuelLog)) DB.fuelLog=[];
   else DB.fuelLog.push({id:'fl'+Date.now(),building:bid,period,opening:+val('gs-open')||0,closing:+val('gs-close')||0,purchases});
   closeM(); await afterStateChange(); }
 async function delGsm(bid,period){ if(!confirm('Удалить запись ГСМ за этот период?'))return; DB.fuelLog=(DB.fuelLog||[]).filter(f=>!(f.building===bid && f.period===period)); closeM(); await afterStateChange(); }
+// 📖 Журнал всех поставок топлива по объекту (все периоды)
+function fuelJournalModal(bid){ const b=buildingOf(bid); if(!b) return;
+  // разворачиваем поставки из всех записей ГСМ объекта в единый список
+  const items=[];
+  (DB.fuelLog||[]).filter(f=>f.building===bid).forEach(f=>{
+    (Array.isArray(f.purchases)?f.purchases:[]).forEach(p=>items.push({period:f.period,date:p.date||'',qty:+p.qty||0,price:+p.price||0}));
+  });
+  items.sort((a,b)=>String(b.date||b.period).localeCompare(String(a.date||a.period)));
+  const totQty=items.reduce((s,x)=>s+x.qty,0), totCost=items.reduce((s,x)=>s+x.qty*x.price,0);
+  const rows=items.map(x=>`<tr><td class="t-sub">${fmtPeriod(x.period)}</td><td>${x.date?fmtD(x.date):'—'}</td><td>${fmt(x.qty)} л</td><td>${fmt(x.price)} ₽/л</td><td class="t-strong">${money(x.qty*x.price)}</td></tr>`).join('');
+  openM(`<div class="modal-h"><h3>📖 Журнал поставок топлива — ${esc(b.name)}</h3><span class="x" onclick="closeM()">×</span></div>
+  <div class="modal-b">
+    <div class="t-sub" style="margin-bottom:8px">Все поставки по объекту за всё время. Средняя цена — средневзвешенная по всем поставкам.</div>
+    <div style="overflow-x:auto"><table><thead><tr><th>Период</th><th>Дата</th><th>Количество</th><th>Цена</th><th>Сумма</th></tr></thead><tbody>
+    ${rows||'<tr><td colspan="5" class="empty">Поставок пока нет</td></tr>'}
+    ${items.length?`<tr style="border-top:2px solid var(--line2)"><td class="t-strong" colspan="2">Итого</td><td class="t-strong">${fmt(totQty)} л</td><td class="t-strong">${totQty>0?fmt(Math.round(totCost/totQty*100)/100):0} ₽/л</td><td class="t-strong">${money(totCost)}</td></tr>`:''}
+    </tbody></table></div>
+  </div>
+  <div class="modal-f"><div class="spacer"></div><button class="btn" onclick="gsmModal('${bid}', utilPeriod)">← Назад к ГСМ</button></div>`);
+}
 function odpuSummary(bid,period){
   const ed=canEdit('utilities');
   const entryBtn = ed?`<button class="btn ghost sm" style="margin-top:6px" onclick="odpuEntry('${bid}')">🏢 Внести / изменить показания ОДПУ</button>`:'';
