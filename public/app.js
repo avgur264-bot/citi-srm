@@ -1077,6 +1077,7 @@ function utilities(){
   <div class="grid" style="grid-template-columns:repeat(3,1fr);margin-bottom:18px">
     ${miniStat('Коммунальные начисления',money(ut),'violet')}${miniStat('Расходы на содержание',money(ex),'amber')}${miniStat('Итого затраты',money(ut+ex),'red')}
   </div>
+  ${utilReportCard()}
   <div id="ubcards"></div>`);
   const bs = SCOPE==='all'? buildingsList() : [buildingOf(SCOPE)].filter(Boolean);
   document.getElementById('ubcards').innerHTML = bs.map(b=>{
@@ -1107,6 +1108,43 @@ function expenseTable(list){
     </tbody></table></div>`;
 }
 function utilPill(s){const m={paid:['green','Оплачено'],invoiced:['blue','Выставлен'],overdue:['red','Просрочен'],planned:['gray','План']};const x=m[s]||['gray',s];return `<span class="pill ${x[0]}">${x[1]}</span>`;}
+/* Отчёт по коммунальным услугам: выставлено по счётчикам / собрано фактически / % / прогноз сбора, по типам */
+const UTIL_ISSUED = st => st==='invoiced'||st==='overdue'||st==='paid';   // «выставлено» — реально начислено (не «План»)
+function utilReportRows(){
+  const inPer = x => !utilPeriod || x.period===utilPeriod;
+  const cur = sUtilities().filter(inPer);
+  const all = sUtilities();   // для исторической собираемости (по этому же объекту/scope)
+  return [['electricity','⚡ Электроэнергия'],['water','💧 Вода'],['heating','🔥 Отопление']].map(([k,label])=>{
+    const billed    = cur.filter(u=>UTIL_ISSUED(u.status)).reduce((s,u)=>s+(+u[k]||0),0);
+    const collected = cur.filter(u=>u.status==='paid').reduce((s,u)=>s+(+u[k]||0),0);
+    const hb = all.filter(u=>UTIL_ISSUED(u.status)).reduce((s,u)=>s+(+u[k]||0),0);
+    const hc = all.filter(u=>u.status==='paid').reduce((s,u)=>s+(+u[k]||0),0);
+    const rate = hb>0 ? hc/hb : (billed>0?collected/billed:0);
+    const forecast = Math.min(billed, Math.round(collected + (billed-collected)*rate));
+    const pct = billed>0 ? Math.round(collected/billed*100) : 0;
+    return {k,label,billed,collected,forecast,pct};
+  });
+}
+function utilReportCard(){
+  const rows = utilReportRows();
+  const tB=rows.reduce((s,r)=>s+r.billed,0), tC=rows.reduce((s,r)=>s+r.collected,0), tF=rows.reduce((s,r)=>s+r.forecast,0);
+  const tPct = tB>0?Math.round(tC/tB*100):0;
+  return `<div class="card" style="margin-bottom:18px"><div class="panel-title"><h3>📊 Отчёт по коммунальным услугам</h3><span class="muted">${utilPeriod?fmtPeriod(utilPeriod):'все периоды'} · ${scopeSub()}</span></div>
+  <div style="overflow-x:auto"><table><thead><tr><th>Услуга</th><th>Выставлено (по счётчикам)</th><th>Собрано фактически</th><th>% сбора</th><th>Прогноз сбора</th></tr></thead><tbody>
+  ${rows.map(r=>`<tr><td class="t-strong">${r.label}</td><td>${money(r.billed)}</td><td class="t-strong" style="color:var(--green)">${money(r.collected)}</td><td class="t-strong">${r.pct}%</td><td style="color:var(--accent2)">${money(r.forecast)}</td></tr>`).join('')}
+  <tr style="border-top:2px solid var(--line2)"><td class="t-strong">Итого</td><td class="t-strong">${money(tB)}</td><td class="t-strong" style="color:var(--green)">${money(tC)}</td><td class="t-strong">${tPct}%</td><td class="t-strong" style="color:var(--accent2)">${money(tF)}</td></tr>
+  </tbody></table></div>
+  <div class="t-sub" style="margin-top:10px">«Выставлено» — начисления по приборам учёта (статусы «Выставлен/Просрочен/Оплачено»); «Собрано» — оплаченные; «Прогноз сбора» = собрано + недобор × историческая собираемость по этому виду услуги. <button class="btn ghost sm" onclick="exportUtilReport()">⤓ Экспорт CSV</button></div></div>`;
+}
+function exportUtilReport(){
+  const rows = utilReportRows();
+  let out=[['Услуга','Выставлено','Собрано','% сбора','Прогноз сбора']];
+  rows.forEach(r=>out.push([r.label.replace(/^[^ ]+ /,''),r.billed,r.collected,r.pct+'%',r.forecast]));
+  const tB=rows.reduce((s,r)=>s+r.billed,0),tC=rows.reduce((s,r)=>s+r.collected,0),tF=rows.reduce((s,r)=>s+r.forecast,0);
+  out.push(['Итого',tB,tC,(tB>0?Math.round(tC/tB*100):0)+'%',tF]);
+  const csv='﻿'+out.map(r=>r.map(csvCell).join(';')).join('\n');
+  const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));a.download='kommunalka_otchet_'+(utilPeriod||'all')+'.csv';a.click();
+}
 /* ---------- A4. Показания счётчиков → автосумма коммуналки ----------
    mode 'meter' — по счётчику: (тек.−пред.)×тариф; mode 'area' — по площади: площадь×тариф (₽/м²). */
 // [ключ, название, ед., режим('meter'|'area'), есть_коэффициент]
