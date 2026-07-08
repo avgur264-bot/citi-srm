@@ -1132,7 +1132,7 @@ function utilTable(list){
 }
 function expenseTable(list){
   return `<div style="overflow-x:auto"><table><thead><tr><th>Категория</th><th>Подрядчик</th><th>Сумма</th><th>Статус</th></tr></thead><tbody>
-    ${list.length?list.map(e=>{const clk=canEdit('utilities');return `<tr${clk?` style="cursor:pointer" onclick="expenseEdit('${esc(e.id)}')"`:''}><td class="t-strong">${esc(e.category)}</td><td class="t-sub">${esc(e.vendor)}</td><td class="t-strong">${money(e.amount)}</td><td>${utilPill(e.status)}</td></tr>`;}).join(''):'<tr><td colspan="4" class="empty">Нет расходов</td></tr>'}
+    ${list.length?list.map(e=>{const clk=canEdit('utilities');return `<tr${clk?` style="cursor:pointer" onclick="expenseEdit('${esc(e.id)}')"`:''}><td class="t-strong">${esc(e.category)}${e.note?`<div class="t-sub">${esc(e.note)}</div>`:''}</td><td class="t-sub">${esc(e.vendor)}</td><td class="t-strong">${money(e.amount)}</td><td>${utilPill(e.status)}</td></tr>`;}).join(''):'<tr><td colspan="4" class="empty">Нет расходов</td></tr>'}
     </tbody></table></div>`;
 }
 function utilPill(s){const m={paid:['green','Оплачено'],invoiced:['blue','Выставлен'],overdue:['red','Просрочен'],planned:['gray','План']};const x=m[s]||['gray',s];return `<span class="pill ${x[0]}">${x[1]}</span>`;}
@@ -1581,6 +1581,7 @@ function expenseEdit(id){ const e=DB.expenses.find(x=>x.id===id); if(!e||!canEdi
       <div class="field"><label>Сумма, ₽</label><input id="ee-amt" type="number" value="${e.amount||0}"></div></div>
     <div class="row2"><div class="field"><label>Подрядчик</label><input id="ee-vendor" value="${esc(e.vendor||'')}"></div>
       <div class="field"><label>Статус</label><select id="ee-status">${EX_STATUS.map(([k,l])=>`<option value="${k}"${e.status===k?' selected':''}>${l}</option>`).join('')}</select></div></div>
+    <div class="field"><label>Назначение <span class="t-sub">на что потрачено</span></label><input id="ee-note" value="${esc(e.note||'')}" placeholder="напр. ремонт кровли, замена насоса"></div>
     <div class="row2"><div class="field"><label>Дата оплаты <span class="t-sub">(если оплачено)</span></label><input id="ee-date" type="date" value="${e.paidDate||''}"></div>
       <div class="field"><label>Способ оплаты</label><select id="ee-method">${payMethodOpts(e.method||'bank')}</select></div></div>
     <div class="t-sub">«Оплачено» — расход проведён (попадёт в факт бюджета и сверку с банком). Статусы: План → Выставлен → Оплачено.</div>
@@ -1588,7 +1589,7 @@ function expenseEdit(id){ const e=DB.expenses.find(x=>x.id===id); if(!e||!canEdi
   <div class="modal-f"><button class="btn ghost sm" onclick="delExpense('${id}')">🗑 Удалить</button><div class="spacer"></div><button class="btn ghost" onclick="closeM()">Отмена</button><button class="btn" onclick="saveExpenseEdit('${id}')">Сохранить</button></div>`);
 }
 async function saveExpenseEdit(id){ const e=DB.expenses.find(x=>x.id===id); if(!e)return;
-  e.category=val('ee-cat').trim()||e.category; e.amount=+val('ee-amt')||0; e.vendor=val('ee-vendor').trim(); e.status=val('ee-status');
+  e.category=val('ee-cat').trim()||e.category; e.amount=+val('ee-amt')||0; e.vendor=val('ee-vendor').trim(); e.note=val('ee-note').trim(); e.status=val('ee-status');
   if(e.status==='paid'){ e.paidDate=val('ee-date')||TODAY.toISOString().slice(0,10); e.method=val('ee-method'); }
   else { e.paidDate=val('ee-date')||null; }
   closeM(); await afterStateChange(); }
@@ -2268,7 +2269,7 @@ function reports(){
       </tbody></table></div>
       <div class="sec-h">Расходы на содержание · итого ${money(exTot)}</div>
       <div style="overflow-x:auto"><table><thead><tr><th>Категория</th><th>Подрядчик</th><th>Сумма</th><th>Статус</th></tr></thead><tbody>
-      ${be.length?be.map(e=>{const clk=canEdit('utilities');return `<tr${clk?` style="cursor:pointer" onclick="expenseEdit('${esc(e.id)}')"`:''}><td class="t-strong">${esc(e.category)}</td><td class="t-sub">${esc(e.vendor)}</td><td class="t-strong">${money(e.amount)}</td><td>${utilPill(e.status)}</td></tr>`;}).join(''):'<tr><td colspan="4" class="empty">Нет расходов</td></tr>'}
+      ${be.length?be.map(e=>{const clk=canEdit('utilities');return `<tr${clk?` style="cursor:pointer" onclick="expenseEdit('${esc(e.id)}')"`:''}><td class="t-strong">${esc(e.category)}${e.note?`<div class="t-sub">${esc(e.note)}</div>`:''}</td><td class="t-sub">${esc(e.vendor)}</td><td class="t-strong">${money(e.amount)}</td><td>${utilPill(e.status)}</td></tr>`;}).join(''):'<tr><td colspan="4" class="empty">Нет расходов</td></tr>'}
       </tbody></table>${canEdit('utilities')?'<div class="t-sub" style="padding:6px 2px">Нажмите на строку расхода, чтобы изменить или удалить.</div>':''}</div>`;
     return collapseCard('rep-'+b.id, buildingHeader(b, `доход ${money(paid)} · расходы ${money(exTot)} · NOI ${money(paid-exTot)}`), body, false);
   }).join('') || '<div class="card"><div class="empty">Объекты не найдены</div></div>';
@@ -3035,9 +3036,10 @@ function expenseModal(){const def=SCOPE!=='all'?SCOPE:(buildingsList()[0]||{}).i
   openM(`<div class="modal-h"><h3>Новый расход</h3><span class="x" onclick="closeM()">×</span></div>
   <div class="modal-b"><div class="field"><label>Объект</label><select id="f-ebuilding">${buildingsList().map(b=>`<option value="${b.id}"${b.id===def?' selected':''}>${esc(b.name)}</option>`).join('')}</select></div>
   <div class="row2"><div class="field"><label>Категория</label><input id="f-cat" list="catList" placeholder="Клининг"><datalist id="catList">${(stg().expenseCats||[]).map(c=>`<option value="${esc(c)}">`).join('')}</datalist></div><div class="field"><label>Сумма</label><input id="f-amt" type="number"></div></div>
-  <div class="row2"><div class="field"><label>Подрядчик</label><input id="f-vendor"></div><div class="field"><label>Период</label><input id="f-eperiod" type="month" value="${utilPeriod||'2026-06'}"></div></div></div>
+  <div class="row2"><div class="field"><label>Подрядчик</label><input id="f-vendor"></div><div class="field"><label>Период</label><input id="f-eperiod" type="month" value="${utilPeriod||'2026-06'}"></div></div>
+  <div class="field"><label>Назначение <span class="t-sub">на что потрачено</span></label><input id="f-enote" placeholder="напр. ремонт кровли, замена насоса"></div></div>
   <div class="modal-f"><button class="btn ghost" onclick="closeM()">Отмена</button><button class="btn" onclick="saveExpense()">Добавить</button></div>`);}
-async function saveExpense(){DB.expenses.push({id:'e'+Date.now(),building:val('f-ebuilding'),category:val('f-cat'),vendor:val('f-vendor'),period:val('f-eperiod')||'2026-06',amount:+val('f-amt'),status:'planned'});closeM();await afterStateChange();}
+async function saveExpense(){DB.expenses.push({id:'e'+Date.now(),building:val('f-ebuilding'),category:val('f-cat'),vendor:val('f-vendor'),note:val('f-enote').trim(),period:val('f-eperiod')||'2026-06',amount:+val('f-amt'),status:'planned'});closeM();await afterStateChange();}
 
 /* задача */
 function taskModal(id){
