@@ -2115,7 +2115,7 @@ function settingsPage(){
     <div class="row2"><div class="field"><label>Токен бота (от @BotFather)</label><input id="s-tg-token" value="${esc(s.notify?.telegram?.token||'')}" placeholder="123456:ABC-..."></div>
       <div class="field"><label>Chat ID (куда слать)</label><input id="s-tg-chat" value="${esc(s.notify?.telegram?.chatId||'')}" placeholder="напр. 123456789 или -100..."></div></div>
     <div class="row2"><div class="field"><label>Время отправки</label><input id="s-tg-time" type="time" value="${esc(s.notify?.telegram?.time||'08:00')}"></div>
-      <div class="field" style="display:flex;align-items:flex-end"><button class="btn ghost" onclick="testNotify()">📨 Сохранить и отправить сводку сейчас</button></div></div>
+      <div class="field" style="display:flex;align-items:flex-end;gap:8px;flex-wrap:wrap"><button class="btn ghost" onclick="testNotify()">📨 Сохранить и проверить связь</button><button class="btn" onclick="sendDigestNow()">📊 Отправить сводку сейчас</button></div></div>
     <div class="t-sub" style="margin-top:8px">Как настроить: 1) в Telegram напишите <b>@BotFather</b> → /newbot → получите <b>токен</b>. 2) Напишите своему боту любое сообщение (или добавьте его в группу). 3) Узнайте <b>Chat ID</b> через бота <b>@userinfobot</b> (для себя) или @getidsbot (для группы). 4) Вставьте сюда и нажмите «Отправить тест».</div>
   </div>
   <div class="card" style="margin-top:16px">
@@ -2165,7 +2165,14 @@ async function testNotify(){ ensureState();
   DB.settings.notify={telegram:{enabled:document.getElementById('s-tg-on').checked,instant:!!document.getElementById('s-tg-instant')?.checked,token:val('s-tg-token').trim(),chatId:val('s-tg-chat').trim(),time:val('s-tg-time')||'08:00'}};
   if(!DB.settings.notify.telegram.token||!DB.settings.notify.telegram.chatId){ return alert('Сначала введите токен бота и Chat ID.'); }
   await saveState();
-  try{ const r=await api('/api/notify/test','POST'); alert(r.ok?'✅ Сводка отправлена в Telegram. Проверьте чат с ботом.':('❌ Не удалось отправить.\n\nПричина: '+(r.error||'неизвестна')+'\n\nПроверьте токен и Chat ID и что вы написали боту хотя бы раз.')); }
+  try{ const r=await api('/api/notify/test','POST'); alert(r.ok?'✅ Проверка связи прошла — сообщение отправлено в Telegram. Проверьте чат с ботом.':('❌ Не удалось отправить.\n\nПричина: '+(r.error||'неизвестна')+'\n\nПроверьте токен и Chat ID и что вы написали боту хотя бы раз.')); }
+  catch(e){ alert('Ошибка: '+(e.message||e)); }
+}
+async function sendDigestNow(){ ensureState();
+  DB.settings.notify={telegram:{enabled:document.getElementById('s-tg-on').checked,instant:!!document.getElementById('s-tg-instant')?.checked,token:val('s-tg-token').trim(),chatId:val('s-tg-chat').trim(),time:val('s-tg-time')||'08:00'}};
+  if(!DB.settings.notify.telegram.token||!DB.settings.notify.telegram.chatId){ return alert('Сначала введите токен бота и Chat ID.'); }
+  await saveState();
+  try{ const r=await api('/api/notify/digest','POST'); alert(r.ok?'✅ Сводка отправлена в Telegram. Проверьте чат с ботом.':('❌ Не удалось отправить.\n\nПричина: '+(r.error||'неизвестна')+'\n\nПроверьте токен и Chat ID и что вы написали боту хотя бы раз.')); }
   catch(e){ alert('Ошибка: '+(e.message||e)); }
 }
 function onLogoFile(input){ const f=input.files&&input.files[0]; if(!f)return;

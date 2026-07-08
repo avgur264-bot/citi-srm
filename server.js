@@ -692,8 +692,16 @@ async function api(req, res, url){
     return send(res,200,{ ok:true });
   }
 
-  // ---- тестовая отправка сводки в Telegram (админ) ----
+  // ---- проверка связи с Telegram (короткое сообщение, админ) ----
   if(path==='/api/notify/test' && method==='POST'){
+    if(!isFull(me.role)) return send(res,403,{error:'Только администратор'});
+    const tg=notifyCfg();
+    if(!tg||!tg.token||!tg.chatId) return send(res,400,{error:'Не заданы токен бота и chat_id. Сохраните настройки.'});
+    const r2=await sendTelegram(tg.token, tg.chatId, '✅ СИТИ SRM: проверка связи с Telegram прошла успешно. Уведомления настроены.');
+    return send(res,200,{ ok:r2.ok, error:r2.error||null });
+  }
+  // ---- отправка сводки СЕЙЧАС (админ) ----
+  if(path==='/api/notify/digest' && method==='POST'){
     if(!isFull(me.role)) return send(res,403,{error:'Только администратор'});
     const tg=notifyCfg();
     if(!tg||!tg.token||!tg.chatId) return send(res,400,{error:'Не заданы токен бота и chat_id. Сохраните настройки.'});
