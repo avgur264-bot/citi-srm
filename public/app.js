@@ -1110,24 +1110,35 @@ function expenseTable(list){
 function utilPill(s){const m={paid:['green','Оплачено'],invoiced:['blue','Выставлен'],overdue:['red','Просрочен'],planned:['gray','План']};const x=m[s]||['gray',s];return `<span class="pill ${x[0]}">${x[1]}</span>`;}
 /* Отчёт по коммунальным услугам: выставлено по счётчикам / собрано фактически / % / прогноз сбора, по типам */
 const UTIL_ISSUED = st => st==='invoiced'||st==='overdue'||st==='paid';   // «выставлено» — реально начислено (не «План»)
-function utilReportRowsFor(cur, hist){
+// Сумма «нагорело» по ОДПУ (что выставили НАМ снабжающие организации) за период(ы) объекта
+function odpuBilledFor(bid){
+  const meters = (DB.buildingMeters||[]).filter(m=>m.building===bid && (!utilPeriod || m.period===utilPeriod));
+  const t={electricity:0,water:0,heating:0}; let any=false;
+  meters.forEach(m=>{const a=odpuAccrued(m); if(a){any=true; t.electricity+=a.electricity; t.water+=a.water; t.heating+=a.heating;}});
+  return any?t:null;
+}
+function utilReportRowsFor(cur, hist, odpu){
   return [['electricity','⚡ Электроэнергия'],['water','💧 Вода'],['heating','🔥 Отопление']].map(([k,label])=>{
-    const billed    = cur.filter(u=>UTIL_ISSUED(u.status)).reduce((s,u)=>s+(+u[k]||0),0);
-    const collected = cur.filter(u=>u.status==='paid').reduce((s,u)=>s+(+u[k]||0),0);
+    const supplier  = odpu ? (+odpu[k]||0) : null;   // выставлено НАМ снабжающей организацией (ОДПУ)
+    const billed    = cur.filter(u=>UTIL_ISSUED(u.status)).reduce((s,u)=>s+(+u[k]||0),0);   // начислено арендаторам
+    const collected = cur.filter(u=>u.status==='paid').reduce((s,u)=>s+(+u[k]||0),0);        // собрано с арендаторов
     const hb = hist.filter(u=>UTIL_ISSUED(u.status)).reduce((s,u)=>s+(+u[k]||0),0);
     const hc = hist.filter(u=>u.status==='paid').reduce((s,u)=>s+(+u[k]||0),0);
     const rate = hb>0 ? hc/hb : (billed>0?collected/billed:0);
     const forecast = Math.min(billed, Math.round(collected + (billed-collected)*rate));
     const pct = billed>0 ? Math.round(collected/billed*100) : 0;
-    return {k,label,billed,collected,forecast,pct};
+    const loss = supplier==null ? null : (supplier - billed);   // ОДН / потери = ОДПУ − начислено арендаторам
+    return {k,label,supplier,billed,collected,forecast,pct,loss};
   });
 }
 function utilReportTable(rows){
-  const tB=rows.reduce((s,r)=>s+r.billed,0), tC=rows.reduce((s,r)=>s+r.collected,0), tF=rows.reduce((s,r)=>s+r.forecast,0);
-  const tPct = tB>0?Math.round(tC/tB*100):0;
-  return `<div style="overflow-x:auto"><table><thead><tr><th>Услуга</th><th>Выставлено (по счётчикам)</th><th>Собрано фактически</th><th>% сбора</th><th>Прогноз сбора</th></tr></thead><tbody>
-  ${rows.map(r=>`<tr><td class="t-strong">${r.label}</td><td>${money(r.billed)}</td><td class="t-strong" style="color:var(--green)">${money(r.collected)}</td><td class="t-strong">${r.pct}%</td><td style="color:var(--accent2)">${money(r.forecast)}</td></tr>`).join('')}
-  <tr style="border-top:2px solid var(--line2)"><td class="t-strong">Итого по объекту</td><td class="t-strong">${money(tB)}</td><td class="t-strong" style="color:var(--green)">${money(tC)}</td><td class="t-strong">${tPct}%</td><td class="t-strong" style="color:var(--accent2)">${money(tF)}</td></tr>
+  const sum=k=>rows.reduce((s,r)=>s+(r[k]||0),0);
+  const anyO=rows.some(r=>r.supplier!=null);
+  const tS=sum('supplier'),tB=sum('billed'),tC=sum('collected'),tF=sum('forecast');
+  const m=v=>v==null?'—':money(v);
+  return `<div style="overflow-x:auto"><table><thead><tr><th>Услуга</th><th>Выставлено нам (ОДПУ)</th><th>Начислено арендаторам</th><th>Собрано с них</th><th>Прогноз сбора</th><th>Разница (ОДН/потери)</th></tr></thead><tbody>
+  ${rows.map(r=>`<tr><td class="t-strong">${r.label}</td><td>${m(r.supplier)}</td><td>${money(r.billed)}</td><td class="t-strong" style="color:var(--green)">${money(r.collected)}</td><td style="color:var(--accent2)">${money(r.forecast)}</td><td${r.loss?` style="color:var(--amber)"`:''}>${m(r.loss)}</td></tr>`).join('')}
+  <tr style="border-top:2px solid var(--line2)"><td class="t-strong">Итого по объекту</td><td class="t-strong">${anyO?money(tS):'—'}</td><td class="t-strong">${money(tB)}</td><td class="t-strong" style="color:var(--green)">${money(tC)}</td><td class="t-strong" style="color:var(--accent2)">${money(tF)}</td><td class="t-strong"${anyO&&(tS-tB)?` style="color:var(--amber)"`:''}>${anyO?money(tS-tB):'—'}</td></tr>
   </tbody></table></div>`;
 }
 function utilReportBuildings(){
@@ -1135,22 +1146,23 @@ function utilReportBuildings(){
   const bs = SCOPE==='all'? buildingsList() : [buildingOf(SCOPE)].filter(Boolean);
   return bs.map(b=>({b,
     cur: sUtilities().filter(u=>unitOf(u.unit)?.building===b.id && inPer(u)),
-    hist: sUtilities().filter(u=>unitOf(u.unit)?.building===b.id)}));
+    hist: sUtilities().filter(u=>unitOf(u.unit)?.building===b.id),
+    odpu: odpuBilledFor(b.id)}));
 }
 function utilReportCard(){
   const secs = utilReportBuildings();
-  const body = secs.map(({b,cur,hist})=>`<div class="sec-h" style="margin-top:14px">🏢 ${esc(b.name)}</div>${utilReportTable(utilReportRowsFor(cur,hist))}`).join('') || '<div class="empty" style="padding:16px">Объекты не найдены</div>';
+  const body = secs.map(({b,cur,hist,odpu})=>`<div class="sec-h" style="margin-top:14px">🏢 ${esc(b.name)}${odpu?'':' <span class="t-sub">— показания ОДПУ за период не внесены</span>'}</div>${utilReportTable(utilReportRowsFor(cur,hist,odpu))}`).join('') || '<div class="empty" style="padding:16px">Объекты не найдены</div>';
   return `<div class="card" style="margin-bottom:18px"><div class="panel-title"><h3>📊 Отчёт по коммунальным услугам</h3><span class="muted">${utilPeriod?fmtPeriod(utilPeriod):'все периоды'} · по объектам</span></div>
   ${body}
-  <div class="t-sub" style="margin-top:10px">«Выставлено» — начисления по приборам учёта (статусы «Выставлен/Просрочен/Оплачено»); «Собрано» — оплаченные; «Прогноз сбора» = собрано + недобор × историческая собираемость по этому виду услуги. <button class="btn ghost sm" onclick="exportUtilReport()">⤓ Экспорт CSV</button></div></div>`;
+  <div class="t-sub" style="margin-top:10px">«Выставлено нам (ОДПУ)» — начислено снабжающими организациями по общедомовым счётчикам (нужны внесённые показания ОДПУ за период — кнопка «🏢 Показания ОДПУ»). «Начислено арендаторам» — по их счётчикам. «Собрано с них» — оплачено арендаторами. «Прогноз сбора» = собрано + недобор × историческая собираемость. «Разница (ОДН/потери)» = ОДПУ − начислено арендаторам (общедомовые нужды / потери). <button class="btn ghost sm" onclick="exportUtilReport()">⤓ Экспорт CSV</button></div></div>`;
 }
 function exportUtilReport(){
-  let out=[['Объект','Услуга','Выставлено','Собрано','% сбора','Прогноз сбора']];
-  utilReportBuildings().forEach(({b,cur,hist})=>{
-    const rows=utilReportRowsFor(cur,hist);
-    rows.forEach(r=>out.push([b.name,r.label.replace(/^[^ ]+ /,''),r.billed,r.collected,r.pct+'%',r.forecast]));
-    const tB=rows.reduce((s,r)=>s+r.billed,0),tC=rows.reduce((s,r)=>s+r.collected,0),tF=rows.reduce((s,r)=>s+r.forecast,0);
-    out.push([b.name,'Итого',tB,tC,(tB>0?Math.round(tC/tB*100):0)+'%',tF]);
+  let out=[['Объект','Услуга','Выставлено нам (ОДПУ)','Начислено арендаторам','Собрано','Прогноз сбора','Разница (ОДН/потери)']];
+  utilReportBuildings().forEach(({b,cur,hist,odpu})=>{
+    const rows=utilReportRowsFor(cur,hist,odpu);
+    rows.forEach(r=>out.push([b.name,r.label.replace(/^[^ ]+ /,''),r.supplier==null?'—':r.supplier,r.billed,r.collected,r.forecast,r.loss==null?'—':r.loss]));
+    const s=k=>rows.reduce((a,r)=>a+(r[k]||0),0); const anyO=rows.some(r=>r.supplier!=null);
+    out.push([b.name,'Итого',anyO?s('supplier'):'—',s('billed'),s('collected'),s('forecast'),anyO?(s('supplier')-s('billed')):'—']);
   });
   const csv='﻿'+out.map(r=>r.map(csvCell).join(';')).join('\n');
   const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));a.download='kommunalka_otchet_'+(utilPeriod||'all')+'.csv';a.click();
