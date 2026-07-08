@@ -649,12 +649,17 @@ const DASH_CATALOG={
   collected:{label:'KPI · Собрано',span:1,build:()=>kpi('Собрано (всего)','#37d39b','💰',fmt(_dashM.collected/1000)+' тыс',pct(_dashM.collected,_dashM.billed)+'% собираемость','up')},
   debt:{label:'KPI · Задолженность',span:1,build:()=>kpi('Задолженность','#ff5d6c','⚠️',fmt(_dashM.debt/1000)+' тыс',DB.payments.filter(p=>p.amount-p.paid>0).length+' счёта','down')},
   planMonth:{label:'KPI · План сбора (до конца месяца)',span:1,build:()=>{
+    const ym=TODAY.toISOString().slice(0,7);
     const eom=new Date(TODAY.getFullYear(),TODAY.getMonth()+1,0);
     const daysLeftM=Math.max(0,Math.ceil((eom-TODAY)/864e5));
-    // план = сумма месячной аренды по всем действующим договорам (в текущем scope)
+    // план = уже начисленные за период платежи + ещё не начисленные по действующим договорам (без двойного счёта)
+    const paysThis=sPayments().filter(p=>(p.period||'')===ym);
+    const accrued=paysThis.reduce((s,p)=>s+(+p.amount||0),0);
+    const have=new Set(paysThis.map(p=>p.contract));
     const cs=DB.contracts.filter(c=>c.status!=='ended' && (SCOPE==='all'||unitOf(c.unit)?.building===SCOPE));
-    const plan=cs.reduce((s,c)=>s+monthlyRent(c),0);
-    return kpi('План сбора (мес.)','#f5a623','🎯',fmt(plan/1000)+' тыс',`аренда по договорам · ${daysLeftM} дн. до конца`,'');}},
+    const toAccrue=cs.filter(c=>!have.has(c.id)).reduce((s,c)=>s+monthlyRent(c),0);
+    const plan=accrued+toAccrue;
+    return kpi('План сбора (мес.)','#f5a623','🎯',fmt(plan/1000)+' тыс',`начислено + к начислению · ${daysLeftM} дн. до конца`,'');}},
   net:{label:'KPI · Чистый доход',span:1,build:()=>kpi('Чистый доход','#39d0d8','📈',fmt(_dashM.net/1000)+' тыс','собрано − расходы','')},
   fot:{label:'KPI · Зарплата (ФОТ)',span:1,build:()=>{const s=(DB.salaries||[]).reduce((a,x)=>a+(x.amount||0),0);return kpi('ФОТ (всего)','#f59e42','💼',fmt(s/1000)+' тыс','фонд оплаты труда','');}},
   adsKpi:{label:'KPI · Реклама',span:1,build:()=>{const ls=(DB.listings||[]).filter(a=>SCOPE==='all'||a.building===SCOPE);const act=ls.filter(a=>a.status==='active').length;const v=ls.reduce((s,a)=>s+(a.views||0),0);return kpi('Объявления','#22a7f0','📣',act+' активн.','👁 '+fmt(v)+' просмотров','');}},
