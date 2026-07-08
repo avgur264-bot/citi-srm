@@ -639,7 +639,7 @@ async function silentRefresh(){
 /* ---------- настраиваемый дашборд (персональный, перетаскиваемый) ---------- */
 let _dashM=null;
 const dashStoreKey=()=>'citi_srm_dash2_'+(ME?ME.id:'x');
-const DASH_DEFAULT_ORDER=['occ','billed','collected','debt','net','chIncome','chOcc','overdue','tasks'];
+const DASH_DEFAULT_ORDER=['occ','billed','collected','planMonth','debt','net','chIncome','chOcc','overdue','tasks'];
 function dashCard(title,badge,inner){ return `<div class="card"><div class="panel-title"><h3>${title}</h3>${badge!=null?`<span class="muted">${badge}</span>`:''}</div>${inner}</div>`; }
 function dashRows(rows,emptyTxt){ return `<table><tbody>${rows.length?rows.join(''):`<tr><td class="empty">${emptyTxt}</td></tr>`}</tbody></table>`; }
 /* каталог виджетов: id → {label, span (1=малый,2=широкий), build:()=>html, draw?:()=>void} */
@@ -648,6 +648,13 @@ const DASH_CATALOG={
   billed:{label:'KPI · Начислено',span:1,build:()=>kpi('Начислено (всего)','#a78bfa','🧾',fmt(_dashM.billed/1000)+' тыс','по всем периодам','')},
   collected:{label:'KPI · Собрано',span:1,build:()=>kpi('Собрано (всего)','#37d39b','💰',fmt(_dashM.collected/1000)+' тыс',pct(_dashM.collected,_dashM.billed)+'% собираемость','up')},
   debt:{label:'KPI · Задолженность',span:1,build:()=>kpi('Задолженность','#ff5d6c','⚠️',fmt(_dashM.debt/1000)+' тыс',DB.payments.filter(p=>p.amount-p.paid>0).length+' счёта','down')},
+  planMonth:{label:'KPI · План сбора (до конца месяца)',span:1,build:()=>{
+    const ym=TODAY.toISOString().slice(0,7);
+    const eom=new Date(TODAY.getFullYear(),TODAY.getMonth()+1,0);
+    const daysLeftM=Math.max(0,Math.ceil((eom-TODAY)/864e5));
+    // непогашенный остаток по начислениям со сроком оплаты в текущем месяце
+    const remain=sPayments().reduce((s,p)=>{const rem=(+p.amount||0)-(+p.paid||0);return s+(rem>0 && (p.due||'').slice(0,7)===ym?rem:0);},0);
+    return kpi('План сбора (мес.)','#f5a623','🎯',fmt(remain/1000)+' тыс',`осталось собрать · ${daysLeftM} дн. до конца`,'');}},
   net:{label:'KPI · Чистый доход',span:1,build:()=>kpi('Чистый доход','#39d0d8','📈',fmt(_dashM.net/1000)+' тыс','собрано − расходы','')},
   fot:{label:'KPI · Зарплата (ФОТ)',span:1,build:()=>{const s=(DB.salaries||[]).reduce((a,x)=>a+(x.amount||0),0);return kpi('ФОТ (всего)','#f59e42','💼',fmt(s/1000)+' тыс','фонд оплаты труда','');}},
   adsKpi:{label:'KPI · Реклама',span:1,build:()=>{const ls=(DB.listings||[]).filter(a=>SCOPE==='all'||a.building===SCOPE);const act=ls.filter(a=>a.status==='active').length;const v=ls.reduce((s,a)=>s+(a.views||0),0);return kpi('Объявления','#22a7f0','📣',act+' активн.','👁 '+fmt(v)+' просмотров','');}},
