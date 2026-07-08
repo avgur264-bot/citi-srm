@@ -1202,6 +1202,8 @@ function readingsModal(){
       return `<div class="card" style="background:var(--bg2);margin-bottom:8px"><div class="t-strong" style="margin-bottom:6px">${label} <span class="t-sub">(${unit})</span></div>
       <div class="grid" style="grid-template-columns:repeat(${cols},1fr);gap:8px">${fields}</div>
       <div class="t-sub" style="margin-top:6px">К начислению: <b id="rd-${k}-sum">0 ₽</b></div></div>`; }).join('')}
+    <div class="sec-h" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px"><span>Дополнительные счётчики</span><span><button class="btn ghost sm" onclick="rdAddExtra('electricity')">+ Электросчётчик</button> <button class="btn ghost sm" onclick="rdAddExtra('water')">+ Водосчётчик</button></span></div>
+    <div id="rd-extra-box"></div>
     <div class="sec-h" style="display:flex;justify-content:space-between"><span>Итого за период</span><b id="rd-total">0 ₽</b></div>
   </div>
   <div class="modal-f"><button class="btn ghost" onclick="closeM()">Отмена</button><button class="btn" onclick="saveReadings()">Создать начисление</button></div>`);
@@ -1214,19 +1216,48 @@ function rdPrefill(){ const unit=val('rd-unit'); const period=val('rd-period'); 
     if(coef){ const ce=document.getElementById('rd-'+k+'-coef'); if(ce) ce.value=buildingElecCoef(bid); }
     if(mode==='area'){ const ae=document.getElementById('rd-'+k+'-area'); if(ae) ae.value=Math.round(((u&&u.area)||0)*100)/100; }
     else { const pe=document.getElementById('rd-'+k+'-prev'); if(pe) pe.value=lastReading(unit,k,period); } });
+  const box=document.getElementById('rd-extra-box'); if(box){ box.innerHTML='';
+    const rec=DB.utilities.find(x=>x.unit===unit && x.period===period);
+    if(rec&&rec.readings){ (rec.readings.electricityExtra||[]).forEach(m=>rdAddExtra('electricity',m)); (rec.readings.waterExtra||[]).forEach(m=>rdAddExtra('water',m)); } }
   rdRecalc(); }
 function rdSum(k){ const tar=+val('rd-'+k+'-tar')||0;
   if(utilKindMode(k)==='area'){ const area=+val('rd-'+k+'-area')||0; return Math.max(0,Math.round(area*tar)); }
   const prev=+val('rd-'+k+'-prev')||0, cur=+val('rd-'+k+'-cur')||0;
   const ce=document.getElementById('rd-'+k+'-coef'); const coef=ce?(+ce.value||1):1;
   return Math.max(0,Math.round((cur-prev)*coef*tar)); }
+let _rdSeq=0;
+function rdAddExtra(kind,data){ data=data||{}; const box=document.getElementById('rd-extra-box'); if(!box)return; const isE=kind==='electricity'; const i=_rdSeq++;
+  const wrap=document.createElement('div'); wrap.className='rd-extra card'; wrap.style.cssText='background:var(--bg2);margin-bottom:8px'; wrap.dataset.kind=kind; wrap.dataset.i=i;
+  wrap.innerHTML=`<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:6px"><input class="rd-x-name" placeholder="${isE?'Доп. электросчётчик':'Доп. водосчётчик'}" value="${esc(data.name||'')}" style="border:none;background:transparent;font-weight:650;color:var(--txt);flex:1;min-width:0"><span class="trash" title="Удалить" onclick="this.closest('.rd-extra').remove();rdRecalc()">🗑</span></div>
+  <div class="grid" style="grid-template-columns:repeat(${isE?4:3},1fr);gap:8px">
+    <div class="field" style="margin:0"><label>Предыдущее</label><input class="rd-x-prev" type="number" step="any" value="${+data.prev||0}" oninput="rdRecalc()"></div>
+    <div class="field" style="margin:0"><label>Текущее</label><input class="rd-x-cur" type="number" step="any" value="${data.current!=null?+data.current:''}" placeholder="0" oninput="rdRecalc()"></div>
+    ${isE?`<div class="field" style="margin:0"><label>Коэффициент</label><input class="rd-x-coef" type="number" step="any" value="${data.coef!=null?+data.coef:1}" oninput="rdRecalc()"></div>`:''}
+    <div class="field" style="margin:0"><label>Тариф ₽</label><input class="rd-x-tar" type="number" step="any" value="${+data.tariff||0}" oninput="rdRecalc()"></div>
+  </div>
+  <div class="t-sub" style="margin-top:6px">К начислению: <b class="rd-x-sum">0 ₽</b></div>`;
+  box.appendChild(wrap); rdRecalc();
+}
+function rdExtraSumFor(kind){ let s=0; document.querySelectorAll('.rd-extra').forEach(el=>{ if(el.dataset.kind!==kind)return;
+  const g=c=>{const e=el.querySelector('.'+c);return e?(+e.value||0):0;}; const coefEl=el.querySelector('.rd-x-coef'); const coef=coefEl?(+coefEl.value||1):1;
+  const sum=Math.max(0,Math.round((g('rd-x-cur')-g('rd-x-prev'))*coef*g('rd-x-tar'))); const se=el.querySelector('.rd-x-sum'); if(se)se.textContent=money(sum); s+=sum; }); return s; }
 function rdRecalc(){ let total=0;
   UTIL_KINDS.forEach(([k])=>{ const sum=rdSum(k); total+=sum; const se=document.getElementById('rd-'+k+'-sum'); if(se)se.textContent=money(sum); });
+  total += rdExtraSumFor('electricity') + rdExtraSumFor('water');
   const te=document.getElementById('rd-total'); if(te)te.textContent=money(total); }
 async function saveReadings(){ const unit=val('rd-unit'); const period=val('rd-period'); if(!unit||!period) return alert('Выберите помещение и период');
   const readings={}, amt={};
   UTIL_KINDS.forEach(([k,,,mode,coef])=>{ const tar=+val('rd-'+k+'-tar')||0; amt[k]=rdSum(k);
     readings[k]= mode==='area' ? {area:+val('rd-'+k+'-area')||0,tariff:tar} : {prev:+val('rd-'+k+'-prev')||0,current:+val('rd-'+k+'-cur')||0,tariff:tar,...(coef?{coef:+val('rd-'+k+'-coef')||1}:{})}; });
+  const extra={electricity:[],water:[]};
+  document.querySelectorAll('.rd-extra').forEach(el=>{ const kind=el.dataset.kind; if(kind!=='electricity'&&kind!=='water')return;
+    const g=c=>{const e=el.querySelector('.'+c);return e?(+e.value||0):0;}; const nm=(el.querySelector('.rd-x-name')?.value||'').trim();
+    const coefEl=el.querySelector('.rd-x-coef'); const coef=coefEl?(+coefEl.value||1):1;
+    const row={name:nm,prev:g('rd-x-prev'),current:g('rd-x-cur'),tariff:g('rd-x-tar')}; if(kind==='electricity')row.coef=coef; extra[kind].push(row); });
+  const exE=extra.electricity.reduce((s,m)=>s+Math.max(0,Math.round((m.current-m.prev)*(m.coef||1)*m.tariff)),0);
+  const exW=extra.water.reduce((s,m)=>s+Math.max(0,Math.round((m.current-m.prev)*m.tariff)),0);
+  amt.electricity+=exE; amt.water+=exW;
+  if(extra.electricity.length) readings.electricityExtra=extra.electricity; if(extra.water.length) readings.waterExtra=extra.water;
   let u=DB.utilities.find(x=>x.unit===unit && x.period===period);
   if(u){ u.electricity=amt.electricity; u.water=amt.water; u.heating=amt.heating; u.readings=readings; }
   else DB.utilities.push({id:'u'+Date.now(),unit,period,electricity:amt.electricity,water:amt.water,heating:amt.heating,status:'invoiced',readings});
