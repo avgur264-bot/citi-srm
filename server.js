@@ -697,7 +697,7 @@ async function api(req, res, url){
     if(!isFull(me.role)) return send(res,403,{error:'Только администратор'});
     const tg=notifyCfg();
     if(!tg||!tg.token||!tg.chatId) return send(res,400,{error:'Не заданы токен бота и chat_id. Сохраните настройки.'});
-    const r2=await sendTelegram(tg.token, tg.chatId, '✅ СИТИ SRM: проверка связи с Telegram прошла успешно. Уведомления настроены.');
+    const r2=await sendTelegram(tg.token, tg.chatId, buildDigest());
     return send(res,200,{ ok:r2.ok, error:r2.error||null });
   }
 
