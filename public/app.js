@@ -1024,7 +1024,13 @@ function payModal(id){const p=DB.payments.find(x=>x.id===id);if(!p)return;const 
     <div class="field"><label>Способ оплаты</label><select id="pay-method">${payMethodOpts('bank')}</select></div>
     <div class="t-sub">Можно внести частично — статус обновится автоматически (Частично / Оплачен).</div>`:''}
   </div>
-  <div class="modal-f">${editable?`<button class="btn ghost" onclick="closeM()">Отмена</button><button class="btn" onclick="savePay('${id}')">Зачесть оплату</button>`:'<button class="btn" onclick="closeM()">Закрыть</button>'}</div>`);}
+  <div class="modal-f">${canEdit('payments')?`<button class="btn danger" onclick="delPayment('${id}')">🗑 Удалить начисление</button>`:''}<div class="spacer"></div>${editable?`<button class="btn ghost" onclick="closeM()">Отмена</button><button class="btn" onclick="savePay('${id}')">Зачесть оплату</button>`:'<button class="btn" onclick="closeM()">Закрыть</button>'}</div>`);}
+// удалить начисление (платёж) целиком — вместе с внесёнными по нему оплатами
+async function delPayment(id){ if(!canEdit('payments'))return; const p=DB.payments.find(x=>x.id===id); if(!p)return;
+  const c=contractOf(p.contract); const t=c&&tenantOf(c.tenant);
+  const warn = (+p.paid>0) ? `\n\n⚠️ По начислению уже внесена оплата ${money(p.paid)} — она тоже удалится.` : '';
+  if(!confirm(`Удалить начисление за ${p.period}${t?` — ${t.name}`:''} на сумму ${money(p.amount)}?${warn}\n\nДействие необратимо.`)) return;
+  DB.payments=DB.payments.filter(x=>x.id!==id); closeM(); await afterStateChange(); }
 async function savePay(id){const p=DB.payments.find(x=>x.id===id);if(!p)return;
   const add=+val('pay-amt')||0; if(add<=0)return alert('Укажите сумму оплаты');
   if(!p.transactions||!p.transactions.length){ p.transactions = p.paid>0?[{amount:p.paid,date:p.paidDate||p.due,method:'bank'}]:[]; }
