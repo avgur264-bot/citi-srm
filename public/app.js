@@ -1291,10 +1291,14 @@ function prevFuelClosing(bid,period){
   const recs=(DB.fuelLog||[]).filter(f=>f.building===bid && String(f.period)<String(period)).sort((a,b)=>String(b.period).localeCompare(String(a.period)));
   return recs.length? (+recs[0].closing||0) : 0;
 }
+// приход за период = сумма поставок (журнал); поддержка старого одиночного поля purchased
+function fuelPurchasedQty(f){ if(!f) return 0; if(Array.isArray(f.purchases)) return f.purchases.reduce((s,x)=>s+(+x.qty||0),0); return +f.purchased||0; }
+// средневзвешенная цена закупки по поставкам месяца (для себестоимости)
+function fuelAvgPrice(f){ if(!f) return 0; if(Array.isArray(f.purchases)&&f.purchases.length){ const q=fuelPurchasedQty(f); const cost=f.purchases.reduce((s,x)=>s+(+x.qty||0)*(+x.price||0),0); return q>0?cost/q:0; } return +f.fuelPrice||0; }
 // израсходовано за период = остаток на начало + приход − остаток на конец (не меньше 0)
 function fuelConsumed(bid,period){ const f=fuelRec(bid,period); if(!f) return null;
   const open=(f.opening!=null?+f.opening:prevFuelClosing(bid,period))||0;
-  return Math.max(0, open + (+f.purchased||0) - (+f.closing||0)); }
+  return Math.max(0, open + fuelPurchasedQty(f) - (+f.closing||0)); }
 // зарплата кочегаров объекта за период (сотрудник с должностью «кочегар» и building===bid)
 function stokerSalaryFor(bid,period){
   const stokerIds=new Set((USERS||[]).filter(u=>/кочегар/i.test(u.position||'') && u.building===bid).map(u=>u.id));
@@ -1305,10 +1309,12 @@ function stokerSalaryFor(bid,period){
 function heatingCostFor(bid,period){
   let fuel=0,boiler=0;
   (DB.heatCost||[]).filter(h=>h.building===bid && (!period||h.period===period)).forEach(h=>{
-    // если по объекту/периоду ведётся ГСМ — количество берём из него (израсходовано), иначе — вручную из карточки котельной
+    // если по объекту/периоду ведётся ГСМ — количество (израсходовано) и цену (средняя по поставкам) берём из него
+    const f = fuelRec(h.building, h.period);
     const cons = fuelConsumed(h.building, h.period);
     const qty = cons!=null ? cons : (+h.fuelQty||0);
-    fuel += Math.round(qty*(+h.fuelPrice||0)); boiler += (+h.boilerMaint||0);
+    const price = (f && Array.isArray(f.purchases) && f.purchases.length) ? fuelAvgPrice(f) : (+h.fuelPrice||0);
+    fuel += Math.round(qty*price); boiler += (+h.boilerMaint||0);
   });
   const stoker=stokerSalaryFor(bid,period);
   const total=fuel+stoker+boiler;
@@ -1333,7 +1339,9 @@ function boilerModal(bid,period){
           ? `<div class="field" style="margin:0"><label>Кол-во (израсходовано)</label><input id="hb-qty" type="number" step="any" value="${cons}" readonly style="opacity:.7" title="Из ГСМ: остаток на начало + приход − остаток на конец"><div class="t-sub" style="margin-top:3px">⛽ авто из ГСМ</div></div>`
           : `<div class="field" style="margin:0"><label>Количество</label><input id="hb-qty" type="number" step="any" value="${+h.fuelQty||0}" oninput="hbRecalc()"></div>`;})()}
         <div class="field" style="margin:0"><label>Единица</label><input id="hb-unit" value="${esc(h.fuelUnit||'л')}" placeholder="л / т / м³"></div>
-        <div class="field" style="margin:0"><label>Цена за единицу, ₽</label><input id="hb-price" type="number" step="any" value="${+h.fuelPrice||0}" oninput="hbRecalc()"></div>
+        ${(()=>{const fr=fuelRec(bid,period);const hasDl=fr&&Array.isArray(fr.purchases)&&fr.purchases.length;const avg=hasDl?Math.round(fuelAvgPrice(fr)*100)/100:(+h.fuelPrice||0);return hasDl
+          ? `<div class="field" style="margin:0"><label>Цена (средняя, ₽)</label><input id="hb-price" type="number" step="any" value="${avg}" readonly style="opacity:.7" title="Средневзвешенная цена по журналу поставок ГСМ"><div class="t-sub" style="margin-top:3px">⛽ из ГСМ</div></div>`
+          : `<div class="field" style="margin:0"><label>Цена за единицу, ₽</label><input id="hb-price" type="number" step="any" value="${avg}" oninput="hbRecalc()"></div>`;})()}
       </div><div class="t-sub" style="margin-top:6px">Стоимость топлива: <b id="hb-fuel">0 ₽</b></div></div>
     <div class="field"><label>Обслуживание котла за период, ₽</label><input id="hb-boiler" type="number" step="any" value="${+h.boilerMaint||0}" oninput="hbRecalc()"></div>
     <div class="doc" style="background:var(--bg2)"><div class="di">💼</div><div style="flex:1;min-width:0"><div class="t-strong">Зарплата кочегаров объекта за период</div><div class="t-sub">из ФОТ (должность «кочегар» + этот объект)</div></div><b id="hb-stoker">${money(stokerSalaryFor(bid,period))}</b></div>
@@ -1358,37 +1366,58 @@ async function saveBoiler(bid){ if(!Array.isArray(DB.heatCost)) DB.heatCost=[];
 async function delBoiler(bid,period){ if(!confirm('Удалить данные котельной за этот период?'))return; DB.heatCost=(DB.heatCost||[]).filter(h=>!(h.building===bid && h.period===period)); closeM(); await afterStateChange(); }
 /* ⛽ ГСМ: приход + остаток → израсходовано; результат автоматически идёт в «Количество» котельной */
 function gsmEntry(bid){ if(!canEdit('utilities')) return; const id=bid||(SCOPE!=='all'?SCOPE:(buildingsList()[0]||{}).id); if(!id) return alert('Сначала добавьте объект'); gsmModal(id, utilPeriod); }
+let _gsmRows=[]; // журнал поставок в текущем окне [{date,qty,price}]
 function gsmModal(bid,period){
   if(!canEdit('utilities')) return; const b=buildingOf(bid); if(!b) return;
   period=period||utilPeriod||TODAY.toISOString().slice(0,7);
   const f=fuelRec(bid,period)||{};
   const openDef = f.opening!=null ? +f.opening : prevFuelClosing(bid,period);
+  // журнал поставок из записи (или миграция старого одиночного «приход» в одну строку)
+  _gsmRows = Array.isArray(f.purchases) ? f.purchases.map(x=>({date:x.date||'',qty:+x.qty||0,price:+x.price||0}))
+    : ((+f.purchased>0)?[{date:'',qty:+f.purchased||0,price:+f.fuelPrice||0}]:[]);
   openM(`<div class="modal-h"><h3>⛽ ГСМ — учёт топлива</h3><span class="x" onclick="closeM()">×</span></div>
   <div class="modal-b">
     <div class="row2">
       <div class="field"><label>Объект</label><select id="gs-building" onchange="gsmModal(this.value, document.getElementById('gs-period').value)">${buildingsList().map(x=>`<option value="${x.id}"${x.id===bid?' selected':''}>${esc(x.name)}</option>`).join('')}</select></div>
       <div class="field"><label>Период</label><input id="gs-period" type="month" value="${period}"></div>
     </div>
-    <div class="t-sub" style="margin-bottom:8px">Израсходовано за месяц = остаток на начало + приход − остаток на конец. Это количество автоматически попадает в «Топливо» котельной для расчёта себестоимости.</div>
+    <div class="t-sub" style="margin-bottom:8px">Израсходовано = остаток на начало + приход (по журналу поставок) − остаток на конец. Это количество и средняя цена поставок автоматически идут в котельную для расчёта себестоимости.</div>
+    <div class="sec-h" style="display:flex;justify-content:space-between;align-items:center;margin-top:0"><span>📒 Журнал поставок топлива</span><button class="btn ghost sm" onclick="gsmAddRow()">+ Поставка</button></div>
+    <div id="gs-rows"></div>
+    <div class="t-sub" style="margin:4px 0 10px">Приход всего: <b id="gs-purchtot">0 л</b> · средняя цена: <b id="gs-avg">0 ₽/л</b></div>
     <div class="row2">
-      <div class="field"><label>Остаток на начало (л) <span class="t-sub">авто из прошлого месяца</span></label><input id="gs-open" type="number" step="any" value="${openDef}" oninput="gsRecalc()"></div>
-      <div class="field"><label>Приход за месяц (л)</label><input id="gs-purch" type="number" step="any" value="${+f.purchased||0}" oninput="gsRecalc()"></div>
+      <div class="field"><label>Остаток на начало (л) <span class="t-sub">авто из прошлого месяца, можно исправить</span></label><input id="gs-open" type="number" step="any" value="${openDef}" oninput="gsRecalc()"></div>
+      <div class="field"><label>Остаток на конец месяца (л)</label><input id="gs-close" type="number" step="any" value="${+f.closing||0}" oninput="gsRecalc()"></div>
     </div>
-    <div class="field"><label>Остаток на конец месяца (л)</label><input id="gs-close" type="number" step="any" value="${+f.closing||0}" oninput="gsRecalc()"></div>
     <div class="sec-h" style="display:flex;justify-content:space-between"><span>Израсходовано за месяц</span><b id="gs-cons">0 л</b></div>
-    <div class="t-sub" id="gs-formula">начало + приход − конец. Уходит в котельную как «Количество топлива».</div>
+    <div class="t-sub" id="gs-formula"></div>
   </div>
   <div class="modal-f">${fuelRec(bid,period)?`<button class="btn ghost sm" onclick="delGsm('${bid}','${period}')">🗑 Удалить</button>`:''}<div class="spacer"></div><button class="btn ghost" onclick="closeM()">Отмена</button><button class="btn" onclick="saveGsm('${bid}')">Сохранить</button></div>`);
-  gsRecalc();
+  renderGsmRows(); gsRecalc();
 }
-function gsRecalc(){ const o=+val('gs-open')||0, p=+val('gs-purch')||0, c=+val('gs-close')||0; const cons=Math.max(0,o+p-c);
-  const el=document.getElementById('gs-cons'); if(el) el.textContent=fmt(cons)+' л';
-  const f=document.getElementById('gs-formula'); if(f) f.innerHTML=`${fmt(o)} (начало) + ${fmt(p)} (приход) − ${fmt(c)} (конец) = <b>${fmt(cons)} л</b> → в котельную как «Количество топлива»`; }
+function renderGsmRows(){ const box=document.getElementById('gs-rows'); if(!box) return;
+  box.innerHTML = _gsmRows.length ? _gsmRows.map((r,i)=>`<div style="display:grid;grid-template-columns:1.1fr 1fr 1fr auto;gap:6px;align-items:end;margin-bottom:6px">
+    <div class="field" style="margin:0"><label class="t-sub">Дата</label><input type="date" value="${esc(r.date||'')}" onchange="_gsmRows[${i}].date=this.value"></div>
+    <div class="field" style="margin:0"><label class="t-sub">Кол-во, л</label><input type="number" step="any" value="${r.qty||0}" oninput="_gsmRows[${i}].qty=+this.value||0;gsRecalc()"></div>
+    <div class="field" style="margin:0"><label class="t-sub">Цена, ₽/л</label><input type="number" step="any" value="${r.price||0}" oninput="_gsmRows[${i}].price=+this.value||0;gsRecalc()"></div>
+    <button class="btn ghost sm" style="height:38px" onclick="gsmDelRow(${i})" title="Удалить поставку">🗑</button></div>`).join('')
+    : '<div class="empty" style="padding:10px">Поставок пока нет — нажмите «+ Поставка».</div>';
+}
+function gsmAddRow(){ _gsmRows.push({date:TODAY.toISOString().slice(0,10),qty:0,price:0}); renderGsmRows(); gsRecalc(); }
+function gsmDelRow(i){ _gsmRows.splice(i,1); renderGsmRows(); gsRecalc(); }
+function gsRecalc(){ const o=+val('gs-open')||0, c=+val('gs-close')||0;
+  const p=_gsmRows.reduce((s,r)=>s+(+r.qty||0),0);
+  const cost=_gsmRows.reduce((s,r)=>s+(+r.qty||0)*(+r.price||0),0);
+  const avg=p>0?Math.round(cost/p*100)/100:0; const cons=Math.max(0,o+p-c);
+  const set=(id,v)=>{const e=document.getElementById(id);if(e)e.textContent=v;};
+  set('gs-purchtot',fmt(p)+' л'); set('gs-avg',fmt(avg)+' ₽/л'); set('gs-cons',fmt(cons)+' л');
+  const fm=document.getElementById('gs-formula'); if(fm) fm.innerHTML=`${fmt(o)} (начало) + ${fmt(p)} (приход) − ${fmt(c)} (конец) = <b>${fmt(cons)} л</b> · средняя цена <b>${fmt(avg)} ₽/л</b> → в котельную (кол-во × цена)`; }
 async function saveGsm(bid){ if(!Array.isArray(DB.fuelLog)) DB.fuelLog=[];
   bid=val('gs-building')||bid; const period=val('gs-period'); if(!period) return alert('Укажите период');
-  const data={ building:bid, period, opening:+val('gs-open')||0, purchased:+val('gs-purch')||0, closing:+val('gs-close')||0 };
+  const purchases=_gsmRows.filter(r=>(+r.qty||0)>0).map(r=>({date:r.date||'',qty:+r.qty||0,price:+r.price||0}));
   const ex=DB.fuelLog.find(f=>f.building===bid && f.period===period);
-  if(ex) Object.assign(ex,data); else DB.fuelLog.push({id:'fl'+Date.now(),...data});
+  if(ex){ ex.opening=+val('gs-open')||0; ex.closing=+val('gs-close')||0; ex.purchases=purchases; delete ex.purchased; delete ex.fuelPrice; }
+  else DB.fuelLog.push({id:'fl'+Date.now(),building:bid,period,opening:+val('gs-open')||0,closing:+val('gs-close')||0,purchases});
   closeM(); await afterStateChange(); }
 async function delGsm(bid,period){ if(!confirm('Удалить запись ГСМ за этот период?'))return; DB.fuelLog=(DB.fuelLog||[]).filter(f=>!(f.building===bid && f.period===period)); closeM(); await afterStateChange(); }
 function odpuSummary(bid,period){
