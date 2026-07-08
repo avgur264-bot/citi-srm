@@ -1376,13 +1376,14 @@ function gsmModal(bid,period){
     </div>
     <div class="field"><label>Остаток на конец месяца (л)</label><input id="gs-close" type="number" step="any" value="${+f.closing||0}" oninput="gsRecalc()"></div>
     <div class="sec-h" style="display:flex;justify-content:space-between"><span>Израсходовано за месяц</span><b id="gs-cons">0 л</b></div>
-    <div class="t-sub">Начало + приход − конец. Уходит в котельную как «Количество топлива».</div>
+    <div class="t-sub" id="gs-formula">начало + приход − конец. Уходит в котельную как «Количество топлива».</div>
   </div>
   <div class="modal-f">${fuelRec(bid,period)?`<button class="btn ghost sm" onclick="delGsm('${bid}','${period}')">🗑 Удалить</button>`:''}<div class="spacer"></div><button class="btn ghost" onclick="closeM()">Отмена</button><button class="btn" onclick="saveGsm('${bid}')">Сохранить</button></div>`);
   gsRecalc();
 }
-function gsRecalc(){ const cons=Math.max(0,(+val('gs-open')||0)+(+val('gs-purch')||0)-(+val('gs-close')||0));
-  const el=document.getElementById('gs-cons'); if(el) el.textContent=fmt(cons)+' л'; }
+function gsRecalc(){ const o=+val('gs-open')||0, p=+val('gs-purch')||0, c=+val('gs-close')||0; const cons=Math.max(0,o+p-c);
+  const el=document.getElementById('gs-cons'); if(el) el.textContent=fmt(cons)+' л';
+  const f=document.getElementById('gs-formula'); if(f) f.innerHTML=`${fmt(o)} (начало) + ${fmt(p)} (приход) − ${fmt(c)} (конец) = <b>${fmt(cons)} л</b> → в котельную как «Количество топлива»`; }
 async function saveGsm(bid){ if(!Array.isArray(DB.fuelLog)) DB.fuelLog=[];
   bid=val('gs-building')||bid; const period=val('gs-period'); if(!period) return alert('Укажите период');
   const data={ building:bid, period, opening:+val('gs-open')||0, purchased:+val('gs-purch')||0, closing:+val('gs-close')||0 };
