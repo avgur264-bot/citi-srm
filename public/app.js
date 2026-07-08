@@ -2268,8 +2268,8 @@ function reports(){
       </tbody></table></div>
       <div class="sec-h">Расходы на содержание · итого ${money(exTot)}</div>
       <div style="overflow-x:auto"><table><thead><tr><th>Категория</th><th>Подрядчик</th><th>Сумма</th><th>Статус</th></tr></thead><tbody>
-      ${be.length?be.map(e=>`<tr><td class="t-strong">${esc(e.category)}</td><td class="t-sub">${esc(e.vendor)}</td><td class="t-strong">${money(e.amount)}</td><td>${utilPill(e.status)}</td></tr>`).join(''):'<tr><td colspan="4" class="empty">Нет расходов</td></tr>'}
-      </tbody></table></div>`;
+      ${be.length?be.map(e=>{const clk=canEdit('utilities');return `<tr${clk?` style="cursor:pointer" onclick="expenseEdit('${esc(e.id)}')"`:''}><td class="t-strong">${esc(e.category)}</td><td class="t-sub">${esc(e.vendor)}</td><td class="t-strong">${money(e.amount)}</td><td>${utilPill(e.status)}</td></tr>`;}).join(''):'<tr><td colspan="4" class="empty">Нет расходов</td></tr>'}
+      </tbody></table>${canEdit('utilities')?'<div class="t-sub" style="padding:6px 2px">Нажмите на строку расхода, чтобы изменить или удалить.</div>':''}</div>`;
     return collapseCard('rep-'+b.id, buildingHeader(b, `доход ${money(paid)} · расходы ${money(exTot)} · NOI ${money(paid-exTot)}`), body, false);
   }).join('') || '<div class="card"><div class="empty">Объекты не найдены</div></div>';
   new Chart(document.getElementById('chNOI'),{type:'line',data:{labels:DB.history.map(h=>h.m),datasets:[{label:'NOI',data:DB.history.map(h=>h.income-h.expense),borderColor:cssVar('--green'),backgroundColor:cssVar('--green')+'22',fill:true,tension:.35,pointRadius:3}]},options:chOpts(false)});
