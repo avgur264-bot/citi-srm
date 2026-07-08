@@ -3173,7 +3173,16 @@ function unitInfo(id){const u=unitOf(id);const c=DB.contracts.find(c=>c.unit===i
   <div class="modal-f">
     ${(!t && canEdit('contracts'))?`<button class="btn" onclick="assignTenantModal('${u.id}')">🏠 Заселить арендатора</button>`:''}
     ${(t && canEdit('contracts'))?`<button class="btn ghost" onclick="editContractModal('${c.id}')">✎ Изменить аренду</button>`:''}
+    ${(t && canEdit('contracts'))?`<button class="btn ghost" onclick="evictTenant('${u.id}')">🚪 Выселить арендатора</button>`:''}
     ${canEdit('objects')?`<button class="btn ghost" onclick="editUnitModal('${u.id}')">✎ Редактировать</button><button class="btn danger" onclick="delUnit('${u.id}')">Удалить</button>`:''}<button class="btn" onclick="closeM()">Закрыть</button></div>`);}
+// выселить арендатора: завершить договор, освободить помещение (история платежей сохраняется)
+async function evictTenant(uid){ if(!canEdit('contracts'))return; const u=unitOf(uid); if(!u||!u.tenant) return;
+  const t=tenantOf(u.tenant);
+  if(!confirm(`Выселить арендатора${t?` «${t.name}»`:''} из помещения ${u.id}?\n\nДоговор будет завершён, помещение станет свободным.\nАрендатор и история платежей сохранятся.`)) return;
+  const c=DB.contracts.find(c=>c.unit===uid && c.status!=='ended');
+  if(c){ c.status='ended'; c.end=TODAY.toISOString().slice(0,10); }
+  u.tenant=null; u.status='vacant';
+  closeM(); await afterStateChange(); }
 // заселить арендатора в свободное помещение (выбрать существующего или создать нового) + договор
 function assignTenantModal(uid){ const u=unitOf(uid); if(!u) return; if(u.tenant) return alert('Помещение уже занято.');
   const today=TODAY.toISOString().slice(0,10);
