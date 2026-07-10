@@ -890,7 +890,7 @@ function loadImage(src){ return new Promise((res,rej)=>{ const im=new Image(); i
 // первую страницу PDF → PNG (с ограничением размера)
 async function pdfToImageDataUrl(pdfDataUrl){
   const pdfjs=await ensurePdfJs(); const pdf=await pdfjs.getDocument({data:dataUrlToBytes(pdfDataUrl)}).promise; const page=await pdf.getPage(1);
-  const v1=page.getViewport({scale:1}); const maxD=2400; const scale=Math.min(3.0, maxD/Math.max(v1.width,v1.height));   // выше разрешение — читаемее мелкие площади
+  const v1=page.getViewport({scale:1}); const maxD=2000; const scale=Math.min(2.5, maxD/Math.max(v1.width,v1.height));   // сбалансировано: читаемо, но не слишком крупно для vision
   const vp=page.getViewport({scale}); const c=document.createElement('canvas'); c.width=Math.round(vp.width); c.height=Math.round(vp.height);
   const ctx=c.getContext('2d'); ctx.fillStyle='#fff'; ctx.fillRect(0,0,c.width,c.height);   // белый фон
   await page.render({canvasContext:ctx,viewport:vp}).promise;
@@ -899,7 +899,7 @@ async function pdfToImageDataUrl(pdfDataUrl){
 // картинку → нормализованный dataURL (ограничение по стороне 2000px)
 async function imageToDataUrl(srcDataUrl){
   const im=await loadImage(srcDataUrl); let w=im.naturalWidth||im.width, h=im.naturalHeight||im.height; if(!w||!h)throw new Error('Пустая картинка');
-  const k=Math.min(1,2400/Math.max(w,h)); w=Math.round(w*k); h=Math.round(h*k);   // не уменьшаем ниже 2400px по большей стороне
+  const k=Math.min(1,2000/Math.max(w,h)); w=Math.round(w*k); h=Math.round(h*k);   // сбалансированный размер по большей стороне
   const c=document.createElement('canvas'); c.width=w; c.height=h; const ctx=c.getContext('2d'); ctx.fillStyle='#fff'; ctx.fillRect(0,0,w,h); ctx.drawImage(im,0,0,w,h);
   let out=c.toDataURL('image/png'); if(out.length>9*1024*1024) out=c.toDataURL('image/jpeg',0.92); return out;
 }

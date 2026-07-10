@@ -95,7 +95,7 @@ export async function askVision(prompt, image, opts={}){
     headers:{ 'Authorization':'Bearer '+token, 'Content-Type':'application/json', 'Accept':'application/json' },
     body: JSON.stringify({ model: VISION_MODEL,
       messages: [{ role:'user', content: prompt, attachments: [fileId] }],
-      temperature: opts.temperature ?? 0.1, max_tokens: opts.maxTokens ?? 1500 }),
+      temperature: opts.temperature ?? 0.1, max_tokens: opts.maxTokens ?? 2000 }),
     signal: opts.signal,
   });
   if(r.status === 401){ _gcToken = null; throw new Error('GigaChat 401 (токен/ключ)'); }

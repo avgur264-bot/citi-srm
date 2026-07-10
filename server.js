@@ -892,12 +892,14 @@ async function api(req, res, url){
     const fl = String(b.floor ?? '').replace(/[^0-9-]/g,'').slice(0,4);
     const prompt = PLAN_RECOGNIZE_PROMPT + (fl!=='' ? `\nВсе помещения на этом изображении относятся к этажу ${fl}.` : '');
     const imgName = /png/i.test(mime) ? 'plan.png' : 'plan.jpg';
-    let raw=null, lastErr=null;
+    let units=[], lastErr=null;
     for(let attempt=1; attempt<=2; attempt++){
       const ctrl = new AbortController(); const timer = setTimeout(()=>ctrl.abort(), 85_000);
       try{
-        raw = await askVision(prompt, { buffer:buf, mime, name:imgName }, { signal: ctrl.signal });
-        lastErr=null; break;
+        const raw = await askVision(prompt, { buffer:buf, mime, name:imgName }, { signal: ctrl.signal });
+        units = parsePlanUnits(raw); lastErr=null;
+        if(units.length) break;                                   // помещения получены — готово
+        if(attempt<2) await new Promise(r=>setTimeout(r,1200));    // пусто (vision нестабилен) — ещё попытка
       }catch(e){
         lastErr=e;
         if(e.name==='AbortError') break;                          // таймаут — повтор не поможет
@@ -913,7 +915,6 @@ async function api(req, res, url){
       else msg = lastErr.message;
       return send(res,200,{ enabled:true, error:'Не удалось распознать план: '+msg });
     }
-    const units = parsePlanUnits(raw);
     console.log(`[plan] uid=${me.id} распознано=${units.length} модель=${visionModelName()}`);
     return send(res,200,{ enabled:true, units, model: visionModelName() });
   }
