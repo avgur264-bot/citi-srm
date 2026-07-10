@@ -897,6 +897,7 @@ async function api(req, res, url){
       const ctrl = new AbortController(); const timer = setTimeout(()=>ctrl.abort(), 85_000);
       try{
         const raw = await askVision(prompt, { buffer:buf, mime, name:imgName }, { signal: ctrl.signal });
+        console.log('[plan] raw attempt='+attempt, 'len='+(raw||'').length, 'preview='+JSON.stringify(String(raw||'').slice(0,300)));
         units = parsePlanUnits(raw); lastErr=null;
         if(units.length) break;                                   // помещения получены — готово
         if(attempt<2) await new Promise(r=>setTimeout(r,1200));    // пусто (vision нестабилен) — ещё попытка
