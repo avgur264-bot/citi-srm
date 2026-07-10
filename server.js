@@ -906,9 +906,11 @@ async function api(req, res, url){
     }
     if(lastErr){
       console.error('[plan] error', lastErr.message);
-      const msg = lastErr.name==='AbortError'
-        ? 'превышено время ожидания — распознайте план по одному этажу или загрузите файл почётче/поменьше'
-        : lastErr.message;
+      let msg;
+      if(lastErr.name==='AbortError') msg = 'превышено время ожидания — распознайте план по одному этажу или загрузите файл почётче/поменьше';
+      else if(/\b402\b|Payment Required/i.test(lastErr.message)) msg = 'у GigaChat закончились токены или нужен платный тариф для распознавания. Пополните баланс в личном кабинете (developers.sber.ru/studio). Пока можно завести помещения через «Импорт» из Excel.';
+      else if(/\b429\b/.test(lastErr.message)) msg = 'слишком много запросов к GigaChat, подождите минуту и повторите';
+      else msg = lastErr.message;
       return send(res,200,{ enabled:true, error:'Не удалось распознать план: '+msg });
     }
     const units = parsePlanUnits(raw);

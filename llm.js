@@ -63,7 +63,7 @@ async function gigachatAsk(messages, opts){
 // multipart), получаем id; 2) шлём обычный chat/completions, но в сообщении
 // добавляем attachments:[id]. Vision поддерживают модели GigaChat-Pro / GigaChat-2-Max.
 const GC_FILES = process.env.GIGACHAT_FILES_URL || 'https://gigachat.devices.sberbank.ru/api/v1/files';
-const VISION_MODEL = process.env.GIGACHAT_VISION_MODEL || process.env.LLM_VISION_MODEL || 'GigaChat-2-Max';
+const VISION_MODEL = process.env.GIGACHAT_VISION_MODEL || process.env.LLM_VISION_MODEL || 'GigaChat-2-Pro';
 
 // доступно ли распознавание картинок (сейчас — только GigaChat с ключом)
 export function hasVisionModel(){ return PROVIDER === 'gigachat' && !!process.env.GIGACHAT_AUTH_KEY; }
