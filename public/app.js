@@ -888,8 +888,9 @@ async function ensurePdfJs(){
 function dataUrlToBytes(u){ const b64=String(u).split(',')[1]||''; const bin=atob(b64); const arr=new Uint8Array(bin.length); for(let i=0;i<bin.length;i++)arr[i]=bin.charCodeAt(i); return arr; }
 function loadImage(src){ return new Promise((res,rej)=>{ const im=new Image(); im.onload=()=>res(im); im.onerror=()=>rej(new Error('Не удалось прочитать картинку')); im.src=src; }); }
 // первую страницу PDF → PNG (с ограничением размера)
-async function pdfToImageDataUrl(pdfDataUrl){
-  const pdfjs=await ensurePdfJs(); const pdf=await pdfjs.getDocument({data:dataUrlToBytes(pdfDataUrl)}).promise; const page=await pdf.getPage(1);
+async function pdfToImageDataUrl(pdfDataUrl,pageNum){
+  const pdfjs=await ensurePdfJs(); const pdf=await pdfjs.getDocument({data:dataUrlToBytes(pdfDataUrl)}).promise;
+  const pn=Math.min(Math.max(1, parseInt(pageNum,10)||1), pdf.numPages); const page=await pdf.getPage(pn);   // выбранная страница (этаж) многостраничного PDF
   const v1=page.getViewport({scale:1}); const maxD=1800; const scale=Math.min(2.2, maxD/Math.max(v1.width,v1.height));   // проверенный размер (на нём находило кабинеты)
   const vp=page.getViewport({scale}); const c=document.createElement('canvas'); c.width=Math.round(vp.width); c.height=Math.round(vp.height);
   const ctx=c.getContext('2d'); ctx.fillStyle='#fff'; ctx.fillRect(0,0,c.width,c.height);   // белый фон
@@ -927,8 +928,9 @@ function recognizePlanModal(bid){
     ${pd.length?`<div class="sec-h" style="margin-top:0">Выберите загруженный план</div>${choices}`:'<div class="t-sub">У объекта пока нет загруженных планов — загрузите файл ниже.</div>'}
     <div class="field" style="margin-top:8px"><label>${pd.length?'…или загрузите новый файл':'Загрузите файл плана'} <span class="t-sub">(PNG, JPG или PDF)</span></label>
       <input type="file" id="prFile" accept="image/png,image/jpeg,image/webp,application/pdf" style="font-size:13px;padding:8px;border:1px dashed var(--line2);border-radius:9px;background:var(--bg2);width:100%"></div>
-    <div class="row2" style="margin-top:4px"><div class="field"><label>Этаж <span class="t-sub">(если план одного этажа)</span></label><input id="prFloor" type="number" placeholder="напр. 1"></div>
-      <div class="field" style="display:flex;align-items:flex-end"><button class="btn" style="width:100%" onclick="runPlanRecognize('${bid}')">🔍 Распознать</button></div></div>
+    <div class="row2" style="margin-top:4px"><div class="field"><label>Этаж <span class="t-sub">(проставится найденным помещениям)</span></label><input id="prFloor" type="number" placeholder="напр. 1"></div>
+      <div class="field"><label>Страница PDF <span class="t-sub">(многостранич. план — этаж = страница)</span></label><input id="prPage" type="number" min="1" value="1"></div></div>
+    <div class="field"><button class="btn" style="width:100%" onclick="runPlanRecognize('${bid}')">🔍 Распознать</button></div>
     <div id="planRecOut" style="margin-top:10px"></div>
   </div>
   <div class="modal-f"><button class="btn ghost" onclick="closeM()">Закрыть</button></div>`);
@@ -951,7 +953,8 @@ async function runPlanRecognize(bid){
       const d=pd[+sel.value]; if(!d) throw new Error('План не найден'); srcDataUrl=await urlToDataUrl(d.url); isPdf=isPdfDoc(d);
     }
     say('<div class="t-sub">⏳ Обрабатываю изображение…</div>');
-    const imgDataUrl=isPdf?await pdfToImageDataUrl(srcDataUrl):await imageToDataUrl(srcDataUrl);
+    const pageNum=isPdf?(parseInt((document.getElementById('prPage')||{}).value,10)||1):1;
+    const imgDataUrl=isPdf?await pdfToImageDataUrl(srcDataUrl,pageNum):await imageToDataUrl(srcDataUrl);
     say('<div class="t-sub">🤖 GigaChat распознаёт план… это может занять до минуты.</div>');
     const floor=(document.getElementById('prFloor').value||'').trim();
     const r=await api('/api/plan/recognize','POST',{dataUrl:imgDataUrl,building:bid,floor});
