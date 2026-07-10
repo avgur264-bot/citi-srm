@@ -2696,12 +2696,12 @@ function importModal(type){
   type=type||'buildings'; const ed=canEdit(IMPORT_DEFS[type].need); if(!ed && !isAdmin()){ return alert('Недостаточно прав для импорта.'); }
   _importPrep=null;
   const opts=Object.entries(IMPORT_DEFS).filter(([k,d])=>canEdit(d.need)||isAdmin()).map(([k,d])=>`<option value="${k}"${k===type?' selected':''}>${d.title}</option>`).join('');
-  openM(`<div class="modal-h"><h3>⤓ Импорт из таблицы (CSV)</h3><span class="x" onclick="closeM()">×</span></div>
+  openM(`<div class="modal-h"><h3>⤓ Импорт из таблицы (Excel / CSV)</h3><span class="x" onclick="closeM()">×</span></div>
   <div class="modal-b">
     <div class="field"><label>Что импортируем</label><select id="imp-type" onchange="importModal(this.value)">${opts}</select></div>
-    <div class="t-sub" style="margin-bottom:8px">Скачайте шаблон, заполните в Excel/Google Таблицах, сохраните как <b>CSV</b> и загрузите сюда (или вставьте текстом). Импорт только добавляет новые строки; дубли по ключу пропускаются.</div>
+    <div class="t-sub" style="margin-bottom:8px">Скачайте шаблон, заполните в Excel/Google Таблицах и загрузите файл <b>.xlsx</b> или <b>.csv</b> (либо вставьте текстом). Берётся первый лист. Импорт только добавляет новые строки; дубли по ключу пропускаются.</div>
     <button class="btn ghost sm" onclick="downloadTemplate('${type}')">⤓ Скачать шаблон ${IMPORT_DEFS[type].title}</button>
-    <div class="field" style="margin-top:10px"><label>Файл CSV</label><input type="file" accept=".csv,text/csv" onchange="importFile(this)"></div>
+    <div class="field" style="margin-top:10px"><label>Файл Excel (.xlsx) или CSV</label><input type="file" accept=".xlsx,.xls,.csv,text/csv" onchange="importFile(this)"></div>
     <div class="field"><label>…или вставьте содержимое таблицы</label><textarea id="imp-text" rows="6" class="search" style="width:100%;resize:vertical;font-family:monospace;font-size:12px" placeholder="${IMPORT_DEFS[type].cols.map(c=>c.label).join(',')}"></textarea></div>
     <button class="btn ghost" onclick="importPreview('${type}')">Проверить</button>
     <div id="imp-preview" style="margin-top:12px"></div>
@@ -2713,8 +2713,25 @@ function downloadTemplate(type){ const d=IMPORT_DEFS[type]; const header=d.cols.
   const blob=new Blob(['﻿'+header+'\n'+sample+'\n'],{type:'text/csv;charset=utf-8'});
   const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='shablon_'+type+'.csv'; a.click(); setTimeout(()=>URL.revokeObjectURL(a.href),2000);
 }
-function importFile(input){ const f=input.files&&input.files[0]; if(!f)return; if(f.size>2*1024*1024){alert('Файл больше 2 МБ');return;}
-  const r=new FileReader(); r.onload=()=>{ const ta=document.getElementById('imp-text'); if(ta)ta.value=String(r.result||''); }; r.readAsText(f,'utf-8'); }
+let _xlsxPromise=null;
+async function ensureXLSX(){ if(window.XLSX) return window.XLSX;
+  if(!_xlsxPromise) _xlsxPromise=loadScriptOnce('https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js');
+  await _xlsxPromise; if(!window.XLSX) throw new Error('Библиотека Excel не загрузилась'); return window.XLSX; }
+async function importFile(input){ const f=input.files&&input.files[0]; if(!f)return; if(f.size>4*1024*1024){alert('Файл больше 4 МБ');return;}
+  const ta=document.getElementById('imp-text'); const sel=document.getElementById('imp-type');
+  const isXlsx=/\.(xlsx|xlsm|xls)$/i.test(f.name)||/spreadsheet|excel/i.test(f.type||'');
+  try{
+    if(isXlsx){
+      const XLSX=await ensureXLSX(); const buf=await f.arrayBuffer();
+      const wb=XLSX.read(buf,{type:'array'}); const ws=wb.Sheets[wb.SheetNames[0]];
+      if(!ws) throw new Error('в файле нет листа с данными');
+      if(ta) ta.value=XLSX.utils.sheet_to_csv(ws);   // первый лист → CSV, дальше обычный путь импорта
+    } else {
+      const txt=await f.text().catch(()=> ''); if(ta) ta.value=txt;
+    }
+  }catch(e){ alert('Не удалось прочитать файл: '+(e.message||e)); return; }
+  if(sel) importPreview(sel.value);   // сразу показать предпросмотр
+}
 function importPreview(type){
   const d=IMPORT_DEFS[type]; const rows=parseCSV(val('imp-text')); const box=document.getElementById('imp-preview'); const applyBtn=document.getElementById('imp-apply');
   if(rows.length<2){ box.innerHTML='<div class="t-sub" style="color:var(--red)">Нет данных. Нужна строка заголовков и хотя бы одна строка.</div>'; applyBtn.disabled=true; return; }
@@ -2736,7 +2753,7 @@ function buildImportRec(type,get,errors,line){
     if(DB.units.some(u=>u.id===id)){errors.push(`Строка ${line}: помещение «${id}» уже есть`);return null;}
     const bn=get('building'); const b=buildingsList().find(x=>x.name.toLowerCase()===bn.toLowerCase()||x.id===bn);
     if(!b){errors.push(`Строка ${line}: объект «${bn}» не найден`);return null;}
-    return {id,num:id,building:b.id,floor:+get('floor')||1,area:+get('area')||0,type:get('type')||'Офис',tenant:null,status:'free',ownership:'own',owner:null,responsible:null,documents:[]}; }
+    return {id,num:id,building:b.id,floor:+get('floor')||1,area:+String(get('area')).replace(',','.')||0,type:get('type')||'Офис',tenant:null,status:'free',ownership:'own',owner:null,responsible:null,documents:[]}; }
   if(type==='tenants'){ const name=get('name'); if(!name){errors.push(`Строка ${line}: пустое название`);return null;}
     if(DB.tenants.some(t=>t.name.toLowerCase()===name.toLowerCase()||(get('inn')&&t.inn===get('inn')))){errors.push(`Строка ${line}: арендатор «${name}» уже есть`);return null;}
     return {id:'t'+Date.now()+'_'+line,name,inn:get('inn'),contact:get('contact'),phone:get('phone'),email:get('email'),industry:get('industry')}; }
@@ -2744,7 +2761,7 @@ function buildImportRec(type,get,errors,line){
     const t=DB.tenants.find(x=>x.name.toLowerCase()===tn.toLowerCase()||x.inn===tn); if(!t){errors.push(`Строка ${line}: арендатор «${tn}» не найден`);return null;}
     const u=DB.units.find(x=>x.id===un); if(!u){errors.push(`Строка ${line}: помещение «${un}» не найдено`);return null;}
     if(DB.contracts.some(c=>c.unit===un&&c.status!=='ended')){errors.push(`Строка ${line}: по помещению «${un}» уже есть договор`);return null;}
-    const rate=+get('rate')||0; const start=get('start'),end=get('end');
+    const rate=+String(get('rate')).replace(',','.')||0; const start=get('start'),end=get('end');
     return {id:'c'+Date.now()+'_'+line,tenant:t.id,unit:un,rate,start,end,deposit:Math.round(rate*(u.area||0)),indexation:+get('indexation')||0,status:'active',_setTenant:t.id}; }
   return null;
 }
