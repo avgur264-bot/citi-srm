@@ -890,22 +890,32 @@ function loadImage(src){ return new Promise((res,rej)=>{ const im=new Image(); i
 // первую страницу PDF → PNG (с ограничением размера)
 async function pdfToImageDataUrl(pdfDataUrl){
   const pdfjs=await ensurePdfJs(); const pdf=await pdfjs.getDocument({data:dataUrlToBytes(pdfDataUrl)}).promise; const page=await pdf.getPage(1);
-  const v1=page.getViewport({scale:1}); const maxD=2000; const scale=Math.min(2.5, maxD/Math.max(v1.width,v1.height));
+  const v1=page.getViewport({scale:1}); const maxD=1800; const scale=Math.min(2.2, maxD/Math.max(v1.width,v1.height));
   const vp=page.getViewport({scale}); const c=document.createElement('canvas'); c.width=Math.round(vp.width); c.height=Math.round(vp.height);
-  await page.render({canvasContext:c.getContext('2d'),viewport:vp}).promise;
-  let out=c.toDataURL('image/png'); if(out.length>12*1024*1024) out=c.toDataURL('image/jpeg',0.9); return out;
+  const ctx=c.getContext('2d'); ctx.fillStyle='#fff'; ctx.fillRect(0,0,c.width,c.height);   // белый фон (иначе JPEG даст чёрный)
+  await page.render({canvasContext:ctx,viewport:vp}).promise;
+  return c.toDataURL('image/jpeg',0.85);   // JPEG — меньше объём, быстрее и стабильнее распознавание
 }
 // картинку → нормализованный dataURL (ограничение по стороне 2000px)
 async function imageToDataUrl(srcDataUrl){
   const im=await loadImage(srcDataUrl); let w=im.naturalWidth||im.width, h=im.naturalHeight||im.height; if(!w||!h)throw new Error('Пустая картинка');
-  const k=Math.min(1,2000/Math.max(w,h)); w=Math.round(w*k); h=Math.round(h*k);
-  const c=document.createElement('canvas'); c.width=w; c.height=h; c.getContext('2d').drawImage(im,0,0,w,h);
-  let out=c.toDataURL('image/png'); if(out.length>12*1024*1024) out=c.toDataURL('image/jpeg',0.9); return out;
+  const k=Math.min(1,1800/Math.max(w,h)); w=Math.round(w*k); h=Math.round(h*k);
+  const c=document.createElement('canvas'); c.width=w; c.height=h; const ctx=c.getContext('2d'); ctx.fillStyle='#fff'; ctx.fillRect(0,0,w,h); ctx.drawImage(im,0,0,w,h);
+  return c.toDataURL('image/jpeg',0.85);
 }
 async function urlToDataUrl(url){ if(!url)throw new Error('Нет файла'); if(url.startsWith('data:'))return url;
   const s=safeUrl(url); if(!s)throw new Error('Файл недоступен'); const r=await fetch(s); if(!r.ok)throw new Error('Не удалось загрузить файл плана');
   const bl=await r.blob(); return await new Promise((res,rej)=>{ const fr=new FileReader(); fr.onload=()=>res(String(fr.result)); fr.onerror=()=>rej(new Error('Ошибка чтения файла')); fr.readAsDataURL(bl); }); }
 const isPdfDoc = d => !d.img && /\.pdf($|\?)/i.test((d.name||'')+' '+(d.url||''));
+// сохранить загруженный в окне распознавания файл как план объекта (чтобы картинка осталась в разделе «План»)
+async function savePlanDocFromFile(bid,f,dataUrl){
+  const b=buildingOf(bid); if(!b)return; if(!Array.isArray(b.planDocs)) b.planDocs=[];
+  if(b.planDocs.some(d=>d.name===f.name)) return;                 // такой файл уже добавлен — не дублируем
+  const img=/^image\//i.test(f.type); let url=dataUrl, stored='embed';
+  try{ const rr=await api('/api/files','POST',{folder:bid+'/plan',name:f.name,dataUrl}); url=rr.url; stored=rr.stored||'file'; }catch{}
+  b.planDocs.push({name:f.name,url,stored,img});
+  await afterStateChange();
+}
 
 function recognizePlanModal(bid){
   const b=buildingOf(bid); if(!b)return; const pd=Array.isArray(b.planDocs)?b.planDocs:[];
@@ -949,6 +959,7 @@ async function runPlanRecognize(bid){
     if(r.error){ say('<div class="empty">⚠️ '+esc(r.error)+'</div>'); return; }
     const units=Array.isArray(r.units)?r.units:[];
     if(!units.length){ say('<div class="empty">Не удалось распознать помещения. Попробуйте более чёткий файл, увеличьте масштаб плана или укажите этаж.</div>'); return; }
+    if(f){ try{ await savePlanDocFromFile(bid,f,srcDataUrl); }catch{} }   // сохраняем загруженный файл как план объекта
     renderPlanRecTable(bid,units);
   }catch(e){ say('<div class="empty">⚠️ '+esc(e.message||String(e))+'</div>'); }
 }

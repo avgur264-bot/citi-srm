@@ -887,17 +887,29 @@ async function api(req, res, url){
     if(buf.length > 10*1024*1024) return send(res,413,{ error:'Картинка больше 10 МБ — уменьшите масштаб' });
     const fl = String(b.floor ?? '').replace(/[^0-9-]/g,'').slice(0,4);
     const prompt = PLAN_RECOGNIZE_PROMPT + (fl!=='' ? `\nВсе помещения на этом изображении относятся к этажу ${fl}.` : '');
-    const ctrl = new AbortController(); const timer = setTimeout(()=>ctrl.abort(), 55_000);
-    try{
-      const raw = await askVision(prompt, { buffer:buf, mime, name: /png/i.test(mime)?'plan.png':'plan.jpg' }, { signal: ctrl.signal });
-      const units = parsePlanUnits(raw);
-      console.log(`[plan] uid=${me.id} распознано=${units.length} модель=${visionModelName()}`);
-      return send(res,200,{ enabled:true, units, model: visionModelName() });
-    }catch(e){
-      console.error('[plan] error', e.message);
-      const msg = e.name==='AbortError' ? 'превышено время ожидания (план слишком сложный)' : e.message;
+    const imgName = /png/i.test(mime) ? 'plan.png' : 'plan.jpg';
+    let raw=null, lastErr=null;
+    for(let attempt=1; attempt<=2; attempt++){
+      const ctrl = new AbortController(); const timer = setTimeout(()=>ctrl.abort(), 85_000);
+      try{
+        raw = await askVision(prompt, { buffer:buf, mime, name:imgName }, { signal: ctrl.signal });
+        lastErr=null; break;
+      }catch(e){
+        lastErr=e;
+        if(e.name==='AbortError') break;                          // таймаут — повтор не поможет
+        if(attempt<2) await new Promise(r=>setTimeout(r,1500));    // разовая/транзиентная ошибка — один повтор
+      }finally{ clearTimeout(timer); }
+    }
+    if(lastErr){
+      console.error('[plan] error', lastErr.message);
+      const msg = lastErr.name==='AbortError'
+        ? 'превышено время ожидания — распознайте план по одному этажу или загрузите файл почётче/поменьше'
+        : lastErr.message;
       return send(res,200,{ enabled:true, error:'Не удалось распознать план: '+msg });
-    }finally{ clearTimeout(timer); }
+    }
+    const units = parsePlanUnits(raw);
+    console.log(`[plan] uid=${me.id} распознано=${units.length} модель=${visionModelName()}`);
+    return send(res,200,{ enabled:true, units, model: visionModelName() });
   }
 
   // ---- загрузка документа в локальное файловое хранилище ----
