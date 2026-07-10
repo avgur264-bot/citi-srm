@@ -890,18 +890,18 @@ function loadImage(src){ return new Promise((res,rej)=>{ const im=new Image(); i
 // первую страницу PDF → PNG (с ограничением размера)
 async function pdfToImageDataUrl(pdfDataUrl){
   const pdfjs=await ensurePdfJs(); const pdf=await pdfjs.getDocument({data:dataUrlToBytes(pdfDataUrl)}).promise; const page=await pdf.getPage(1);
-  const v1=page.getViewport({scale:1}); const maxD=1800; const scale=Math.min(2.2, maxD/Math.max(v1.width,v1.height));
+  const v1=page.getViewport({scale:1}); const maxD=2400; const scale=Math.min(3.0, maxD/Math.max(v1.width,v1.height));   // выше разрешение — читаемее мелкие площади
   const vp=page.getViewport({scale}); const c=document.createElement('canvas'); c.width=Math.round(vp.width); c.height=Math.round(vp.height);
-  const ctx=c.getContext('2d'); ctx.fillStyle='#fff'; ctx.fillRect(0,0,c.width,c.height);   // белый фон (иначе JPEG даст чёрный)
+  const ctx=c.getContext('2d'); ctx.fillStyle='#fff'; ctx.fillRect(0,0,c.width,c.height);   // белый фон
   await page.render({canvasContext:ctx,viewport:vp}).promise;
-  return c.toDataURL('image/jpeg',0.85);   // JPEG — меньше объём, быстрее и стабильнее распознавание
+  let out=c.toDataURL('image/png'); if(out.length>9*1024*1024) out=c.toDataURL('image/jpeg',0.92); return out;   // PNG — чёткие цифры; JPEG-запас, если очень большой
 }
 // картинку → нормализованный dataURL (ограничение по стороне 2000px)
 async function imageToDataUrl(srcDataUrl){
   const im=await loadImage(srcDataUrl); let w=im.naturalWidth||im.width, h=im.naturalHeight||im.height; if(!w||!h)throw new Error('Пустая картинка');
-  const k=Math.min(1,1800/Math.max(w,h)); w=Math.round(w*k); h=Math.round(h*k);
+  const k=Math.min(1,2400/Math.max(w,h)); w=Math.round(w*k); h=Math.round(h*k);   // не уменьшаем ниже 2400px по большей стороне
   const c=document.createElement('canvas'); c.width=w; c.height=h; const ctx=c.getContext('2d'); ctx.fillStyle='#fff'; ctx.fillRect(0,0,w,h); ctx.drawImage(im,0,0,w,h);
-  return c.toDataURL('image/jpeg',0.85);
+  let out=c.toDataURL('image/png'); if(out.length>9*1024*1024) out=c.toDataURL('image/jpeg',0.92); return out;
 }
 async function urlToDataUrl(url){ if(!url)throw new Error('Нет файла'); if(url.startsWith('data:'))return url;
   const s=safeUrl(url); if(!s)throw new Error('Файл недоступен'); const r=await fetch(s); if(!r.ok)throw new Error('Не удалось загрузить файл плана');
