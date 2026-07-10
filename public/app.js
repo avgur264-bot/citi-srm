@@ -2702,6 +2702,9 @@ function importModal(type){
   openM(`<div class="modal-h"><h3>⤓ Импорт из таблицы (Excel / CSV)</h3><span class="x" onclick="closeM()">×</span></div>
   <div class="modal-b">
     <div class="field"><label>Что импортируем</label><select id="imp-type" onchange="importModal(this.value)">${opts}</select></div>
+    ${type==='units'?`<div class="field"><label>Импортировать в объект</label>
+      <select id="imp-target" onchange="importPreview('units')"><option value="">— брать из столбца «Объект» (создаст новый, если такого нет)</option>${buildingsList().map(b=>`<option value="${b.id}">${esc(b.name)}</option>`).join('')}</select>
+      <div class="t-sub" style="margin-top:3px">Если выбрать объект — все строки попадут в него, независимо от столбца «Объект».</div></div>`:''}
     <div class="t-sub" style="margin-bottom:8px">Скачайте шаблон, заполните в Excel/Google Таблицах и загрузите файл <b>.xlsx</b> или <b>.csv</b> (либо вставьте текстом). Берётся первый лист. Импорт только добавляет новые строки; дубли по ключу пропускаются.</div>
     <button class="btn ghost sm" onclick="downloadTemplate('${type}')">⤓ Скачать шаблон ${IMPORT_DEFS[type].title}</button>
     <div class="field" style="margin-top:10px"><label>Файл Excel (.xlsx) или CSV</label><input type="file" accept=".xlsx,.xls,.csv,text/csv" onchange="importFile(this)"></div>
@@ -2744,7 +2747,10 @@ function importPreview(type){
   for(let r=1;r<rows.length;r++){ const row=rows[r]; const get=k=>idx[k]>=0?String(row[idx[k]]||'').trim():'';
     const rec=buildImportRec(type,get,errors,r+1); if(rec) toAdd.push(rec); }
   _importPrep={type,toAdd};
+  // новые объекты, которые импорт создаст автоматически (для помещений с неизвестным объектом)
+  const newObjs=[...new Set(toAdd.filter(r=>typeof r.building==='string'&&r.building.startsWith('__new__:')).map(r=>r.building.slice(8)))];
   box.innerHTML=`<div class="card" style="background:var(--bg2)"><div class="t-strong">Будет добавлено: ${toAdd.length}</div>
+    ${newObjs.length?`<div class="t-sub" style="color:var(--accent2);margin-top:4px">Будет создан новый объект: ${newObjs.map(esc).join(', ')}</div>`:''}
     ${errors.length?`<div class="t-sub" style="color:var(--amber);margin-top:6px">Пропущено строк: ${errors.length}<br>${errors.slice(0,8).map(esc).join('<br>')}${errors.length>8?'<br>…':''}</div>`:'<div class="t-sub" style="color:var(--green);margin-top:6px">Ошибок не найдено.</div>'}</div>`;
   applyBtn.disabled = toAdd.length===0;
 }
@@ -2753,12 +2759,17 @@ function buildImportRec(type,get,errors,line){
     if(buildingsList().some(b=>b.name.toLowerCase()===name.toLowerCase())){errors.push(`Строка ${line}: объект «${name}» уже есть`);return null;}
     return {id:'b'+Date.now()+'_'+line,name,address:get('address')}; }
   if(type==='units'){ const num=get('id').replace(/[<>"'`&]/g,''); if(!num){errors.push(`Строка ${line}: пустой номер`);return null;}
-    const bn=get('building'); const b=buildingsList().find(x=>x.name.toLowerCase()===bn.toLowerCase()||x.id===bn);
-    if(!b){errors.push(`Строка ${line}: объект «${bn}» не найден`);return null;}
-    // дубликат — только В ЭТОМ объекте (в разных объектах номера могут совпадать)
-    if(DB.units.some(u=>u.building===b.id && (u.num||u.id)===num)){errors.push(`Строка ${line}: помещение «${num}» уже есть в этом объекте`);return null;}
-    const id=genUnitId(num,b.id);   // глобально-уникальный внутренний id; при коллизии между объектами id≠num
-    return {id,num,building:b.id,floor:+get('floor')||1,area:+String(get('area')).replace(',','.')||0,type:get('type')||'Офис',tenant:null,status:'free',ownership:'own',owner:null,responsible:null,documents:[]}; }
+    const targetId=(typeof val==='function'?val('imp-target'):'')||'';   // выбранный объект переопределяет столбец
+    let b=null, buildingRef, seed;
+    if(targetId){ b=buildingOf(targetId)||null; buildingRef=b?b.id:targetId; seed=targetId; }
+    else { const bn=(get('building')||'').trim(); if(!bn){errors.push(`Строка ${line}: не указан объект`);return null;}
+      b=buildingsList().find(x=>x.name.toLowerCase()===bn.toLowerCase()||x.id===bn)||null;
+      buildingRef = b ? b.id : ('__new__:'+bn.replace(/[<>"'`&]/g,''));   // если нет — автосоздание при импорте
+      seed=bn; }
+    // дубликат — только В ЭТОМ объекте (для нового объекта дублей нет)
+    if(b && DB.units.some(u=>u.building===b.id && (u.num||u.id)===num)){errors.push(`Строка ${line}: помещение «${num}» уже есть в этом объекте`);return null;}
+    const id=genUnitId(num,seed);   // глобально-уникальный внутренний id; при коллизии между объектами id≠num
+    return {id,num,building:buildingRef,floor:+get('floor')||1,area:+String(get('area')).replace(',','.')||0,type:get('type')||'Офис',tenant:null,status:'free',ownership:'own',owner:null,responsible:null,documents:[]}; }
   if(type==='tenants'){ const name=get('name'); if(!name){errors.push(`Строка ${line}: пустое название`);return null;}
     if(DB.tenants.some(t=>t.name.toLowerCase()===name.toLowerCase()||(get('inn')&&t.inn===get('inn')))){errors.push(`Строка ${line}: арендатор «${name}» уже есть`);return null;}
     return {id:'t'+Date.now()+'_'+line,name,inn:get('inn'),contact:get('contact'),phone:get('phone'),email:get('email'),industry:get('industry')}; }
@@ -2773,12 +2784,25 @@ function buildImportRec(type,get,errors,line){
 async function importApply(type){
   if(!_importPrep||_importPrep.type!==type||!_importPrep.toAdd.length) return;
   const add=_importPrep.toAdd;
+  let newObjNames=[];
   if(type==='buildings') DB.buildings.push(...add);
-  else if(type==='units') DB.units.push(...add);
+  else if(type==='units'){
+    // автосоздание объектов, которых ещё нет (building='__new__:<имя>')
+    const nameToId={};
+    add.forEach(u=>{ if(typeof u.building==='string' && u.building.startsWith('__new__:')){
+      const nm=u.building.slice(8);
+      let id=nameToId[nm.toLowerCase()];
+      if(!id){ const ex=buildingsList().find(x=>x.name.toLowerCase()===nm.toLowerCase());
+        if(ex){ id=ex.id; } else { id='b'+Date.now()+'_'+Math.random().toString(36).slice(2,6); DB.buildings.push({id,name:nm,address:''}); newObjNames.push(nm); }
+        nameToId[nm.toLowerCase()]=id; }
+      u.building=id;
+    }});
+    DB.units.push(...add);
+  }
   else if(type==='tenants') DB.tenants.push(...add);
   else if(type==='contracts'){ add.forEach(c=>{ const u=unitOf(c.unit); if(u)u.tenant=c._setTenant; delete c._setTenant; }); DB.contracts.push(...add); }
   _importPrep=null; closeM(); await afterStateChange();
-  alert(`Импортировано: ${add.length}. Готово.`);
+  alert(`Импортировано: ${add.length}.${newObjNames.length?` Создан объект: ${newObjNames.join(', ')}.`:''} Готово.`);
 }
 
 /* ============================================================
