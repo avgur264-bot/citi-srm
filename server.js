@@ -136,6 +136,7 @@ function buildAssistantData(state, role, scope){
   const inB = b => !scope || scope==='all' || b===scope;
   const tName = Object.fromEntries((state.tenants||[]).map(t=>[t.id,t.name]));
   const uB = Object.fromEntries((state.units||[]).map(u=>[u.id,u.building]));
+  const uN = Object.fromEntries((state.units||[]).map(u=>[u.id,(u.num||u.id)]));   // id → отображаемый номер (уникален в объекте)
   const cU = Object.fromEntries((state.contracts||[]).map(c=>[c.id,c.unit]));
   const L=[];
   const today = new Date(new Date().toISOString().slice(0,10));
@@ -150,14 +151,14 @@ function buildAssistantData(state, role, scope){
       const sum=debt.reduce((s,p)=>s+(p.amount-p.paid),0);
       L.push(`Неоплаченные платежи: ${debt.length} на ${Math.round(sum)} ₽.`);
       debt.slice(0,15).forEach(p=>{ const c=(state.contracts||[]).find(x=>x.id===p.contract); const od=dl(p.due);
-        const who = cv('tenants') ? (tName[c&&c.tenant]||p.contract) : (c?c.unit:p.contract);
+        const who = cv('tenants') ? (tName[c&&c.tenant]||p.contract) : (c?(uN[c.unit]||c.unit):p.contract);
         L.push(`  • ${who} — ${Math.round(p.amount-p.paid)} ₽ за ${p.period}, срок ${fmtDate(p.due)}${od<0?` (просрочено ${-od} дн)`:''}.`); });
     } else L.push('Неоплаченных платежей нет.');
   }
   // договоры на исходе (≤60 дн) — только если роль видит договоры
   if(cv('contracts')){
     const exp=(state.contracts||[]).filter(c=>c.status!=='ended' && inB(uB[c.unit]) && dl(c.end)<=60 && dl(c.end)>-3650).sort((a,b)=>dl(a.end)-dl(b.end));
-    if(exp.length){ L.push(`Договоры истекают/истекли (≤60 дн): ${exp.length}.`); exp.slice(0,10).forEach(c=>L.push(`  • ${cv('tenants')?(tName[c.tenant]||c.id):c.id} (${c.unit}) — до ${fmtDate(c.end)}.`)); }
+    if(exp.length){ L.push(`Договоры истекают/истекли (≤60 дн): ${exp.length}.`); exp.slice(0,10).forEach(c=>L.push(`  • ${cv('tenants')?(tName[c.tenant]||c.id):c.id} (${uN[c.unit]||c.unit}) — до ${fmtDate(c.end)}.`)); }
   }
   // ТО — только если роль видит плановое ТО
   if(cv('upkeep')){
@@ -199,8 +200,11 @@ function normalizeAction(raw, st, role){
   const tByName = n => { n=String(n||'').toLowerCase().trim(); return n?tenants.find(t=>(t.name||'').toLowerCase().includes(n)):null; };
   const cById = id => contracts.find(c=>c.id===id);
   const tById = id => tenants.find(t=>t.id===id);
+  // помещение может задаваться номером (num) или внутренним id — приводим к id; для показа — номер
+  const resolveUnit = v => { const s=String(v==null?'':v); const u=units.find(x=>x.id===s)||units.find(x=>String(x.num||x.id)===s); return u?u.id:s; };
+  const uDisp = id => { const u=units.find(x=>x.id===id); return u?(u.num||u.id):id; };
   const findContract = raw0 => { let cs=contracts.filter(c=>c.status!=='ended');
-    if(raw0.unit) cs=cs.filter(c=>c.unit===raw0.unit);
+    if(raw0.unit){ const un=resolveUnit(raw0.unit); cs=cs.filter(c=>c.unit===un); }
     if(raw0.tenant){ const t=tByName(raw0.tenant); if(t) cs=cs.filter(c=>c.tenant===t.id); }
     return cs; };
   const need = (cond,msg)=>{ if(!cond) throw msg; };
@@ -209,13 +213,13 @@ function normalizeAction(raw, st, role){
       case 'pay': {
         need(canEditS(role,'payments',st),'У вас нет прав отмечать оплаты.');
         let cs=payments.filter(p=>(p.amount-p.paid)>0);
-        if(raw.unit) cs=cs.filter(p=>{const c=cById(p.contract);return c&&c.unit===raw.unit;});
+        if(raw.unit){ const un=resolveUnit(raw.unit); cs=cs.filter(p=>{const c=cById(p.contract);return c&&c.unit===un;}); }
         if(raw.tenant){ const t=tByName(raw.tenant); need(t,'Не нашёл арендатора «'+raw.tenant+'».'); cs=cs.filter(p=>{const c=cById(p.contract);return c&&c.tenant===t.id;}); }
         if(raw.period) cs=cs.filter(p=>p.period===raw.period);
         need(cs.length,'Не нашёл неоплаченный платёж по этим данным.');
         need(cs.length===1,'Нашёл несколько подходящих платежей — уточните период или помещение.');
         const p=cs[0], c=cById(p.contract), t=tById(c.tenant), rem=p.amount-p.paid;
-        return { ok:true, action:{ type:'pay', params:{paymentId:p.id}, label:`Отметить оплату ${_money(rem)} по «${t?t.name:c.unit}» (помещ. ${c.unit}) за ${p.period}` } };
+        return { ok:true, action:{ type:'pay', params:{paymentId:p.id}, label:`Отметить оплату ${_money(rem)} по «${t?t.name:uDisp(c.unit)}» (помещ. ${uDisp(c.unit)}) за ${p.period}` } };
       }
       case 'task_create': {
         need(canEditS(role,'tasks',st),'У вас нет прав создавать задачи.');
@@ -241,14 +245,14 @@ function normalizeAction(raw, st, role){
         need(raw.end && /^\d{4}-\d{2}-\d{2}$/.test(raw.end),'Укажите новую дату окончания (ГГГГ-ММ-ДД).');
         const cs=findContract(raw); need(cs.length,'Не нашёл договор по этим данным.'); need(cs.length===1,'Нашёл несколько договоров — уточните арендатора или помещение.');
         const c=cs[0], t=tById(c.tenant);
-        return { ok:true, action:{ type:'contract_renew', params:{contractId:c.id,end:raw.end}, label:`Продлить договор «${t?t.name:c.id}» (${c.unit}) до ${raw.end}` } };
+        return { ok:true, action:{ type:'contract_renew', params:{contractId:c.id,end:raw.end}, label:`Продлить договор «${t?t.name:c.id}» (${uDisp(c.unit)}) до ${raw.end}` } };
       }
       case 'contract_rate': {
         need(canEditS(role,'contracts',st),'У вас нет прав на договоры.');
         need(raw.rate!=null && +raw.rate>0 && +raw.rate<=10_000_000,'Укажите корректную новую ставку.');
         const cs=findContract(raw); need(cs.length,'Не нашёл договор по этим данным.'); need(cs.length===1,'Нашёл несколько договоров — уточните арендатора или помещение.');
         const c=cs[0], t=tById(c.tenant), rt=raw.rateType==='flat'?'flat':'sqm';
-        return { ok:true, action:{ type:'contract_rate', params:{contractId:c.id,rate:+raw.rate,rateType:rt}, label:`Изменить ставку договора «${t?t.name:c.id}» (${c.unit}) на ${_money(+raw.rate)}${rt==='flat'?' /мес за помещение':' /м²'}` } };
+        return { ok:true, action:{ type:'contract_rate', params:{contractId:c.id,rate:+raw.rate,rateType:rt}, label:`Изменить ставку договора «${t?t.name:c.id}» (${uDisp(c.unit)}) на ${_money(+raw.rate)}${rt==='flat'?' /мес за помещение':' /м²'}` } };
       }
       case 'upkeep_done': {
         need(canEditS(role,'upkeep',st),'У вас нет прав на ТО.');
@@ -259,11 +263,11 @@ function normalizeAction(raw, st, role){
       }
       case 'assign_tenant': {
         need(canEditS(role,'contracts',st),'У вас нет прав на договоры.');
-        need(raw.unit,'Укажите помещение.'); const u=units.find(x=>x.id===raw.unit); need(u,'Не нашёл помещение «'+raw.unit+'».'); need(!u.tenant,'Помещение «'+raw.unit+'» уже занято.');
+        need(raw.unit,'Укажите помещение.'); const u=units.find(x=>x.id===raw.unit||String(x.num||x.id)===String(raw.unit)); need(u,'Не нашёл помещение «'+raw.unit+'».'); need(!u.tenant,'Помещение «'+(u.num||u.id)+'» уже занято.');
         need(raw.tenant,'Укажите арендатора.'); need(raw.rate!=null && +raw.rate>0 && +raw.rate<=10_000_000,'Укажите корректную ставку.');
         const ex=tByName(raw.tenant); const rt=raw.rateType==='flat'?'flat':'sqm';
         need(ex || canEditS(role,'tenants',st),'Нет прав создавать нового арендатора.');
-        return { ok:true, action:{ type:'assign_tenant', params:{unit:raw.unit,tenantId:ex?ex.id:null,tenantName:ex?ex.name:String(raw.tenant).slice(0,120),rate:+raw.rate,rateType:rt}, label:`Заселить «${ex?ex.name:raw.tenant}» в ${raw.unit} по ${_money(+raw.rate)}${rt==='flat'?' /мес':' /м²'}` } };
+        return { ok:true, action:{ type:'assign_tenant', params:{unit:u.id,tenantId:ex?ex.id:null,tenantName:ex?ex.name:String(raw.tenant).slice(0,120),rate:+raw.rate,rateType:rt}, label:`Заселить «${ex?ex.name:raw.tenant}» в ${u.num||u.id} по ${_money(+raw.rate)}${rt==='flat'?' /мес':' /м²'}` } };
       }
       default: return { ok:false, error:null };
     }

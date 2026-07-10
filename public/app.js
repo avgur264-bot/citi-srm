@@ -62,6 +62,17 @@ const safeUrl=u=>{ const s=String(u||'').trim(); return (/^(https?:\/\/|mailto:)
 const csvCell=v=>{ let s=String(v==null?'':v); if(/^[=+\-@\t\r]/.test(s)) s="'"+s; return '"'+s.replace(/"/g,'""')+'"'; };
 const tenantOf=id=>DB.tenants.find(t=>t.id===id);
 const unitOf=id=>DB.units.find(u=>u.id===id);
+// Отображаемый номер помещения (уникален в рамках объекта). id — внутренний глобальный ключ, НЕ показывать.
+const unitNum=id=>{const u=unitOf(id);return u?(u.num||u.id):id;};
+// Генерация глобально-уникального id для нового помещения: если номер свободен глобально — id=номер (как раньше);
+// при коллизии (такой номер уже есть в другом объекте) — уникальный id без спецсимволов.
+function genUnitId(num,building){
+  const clean=s=>String(s).replace(/[<>"'`&]/g,'');
+  const n=clean(num); if(!unitOf(n)) return n;
+  const base=clean(n+'_'+String(building||'').replace(/[^0-9A-Za-zА-Яа-я_-]/g,'').slice(0,8))||('u'+Date.now().toString(36));
+  let id=base,k=2; while(unitOf(id)){ id=base+'_'+k; k++; }
+  return id;
+}
 const contractOf=id=>DB.contracts.find(c=>c.id===id);
 const userOf=id=>USERS.find(u=>u.id===id);
 const unitStatus=u=>{ if(!u.tenant) return u.status||'free';
@@ -127,6 +138,8 @@ function myReminders(){
 
 function ensureState(){
   if(!DB) return;
+  // Миграция: у помещений без num проставляем num=id (отображение не меняется, id — прежний ключ связей)
+  if(Array.isArray(DB.units)) DB.units.forEach(u=>{ if(u.num===undefined||u.num===null||u.num==='') u.num=u.id; });
   if(!Array.isArray(DB.salaries)) DB.salaries=[];
   if(!Array.isArray(DB.requests)) DB.requests=[];
   if(!Array.isArray(DB.equipment)) DB.equipment=[];
@@ -425,11 +438,11 @@ function runSearch(q){
   if(canView('tenants')) sTenants().filter(t=>(t.name||'').toLowerCase().includes(q)||(t.inn||'').includes(q)||(t.contact||'').toLowerCase().includes(q))
     .slice(0,6).forEach(t=>add('👥',t.name,`Арендатор · ИНН ${esc(t.inn||'—')}`,'tenantInfo',t.id));
   // помещения
-  if(canView('objects')) sUnits().filter(u=>(u.id||'').toLowerCase().includes(q)||(u.type||'').toLowerCase().includes(q))
-    .slice(0,6).forEach(u=>add('🏢',`Помещение ${u.id}`,`${esc(u.type||'')} · ${u.area} м²`,'unitInfo',u.id));
+  if(canView('objects')) sUnits().filter(u=>((u.num||u.id||'')+' '+(u.id||'')).toLowerCase().includes(q)||(u.type||'').toLowerCase().includes(q))
+    .slice(0,6).forEach(u=>add('🏢',`Помещение ${u.num||u.id}`,`${esc(u.type||'')} · ${u.area} м²`,'unitInfo',u.id));
   // договоры
-  if(canView('contracts')) sContracts().filter(c=>{const t=tenantOf(c.tenant);return (c.id||'').toLowerCase().includes(q)||(c.unit||'').toLowerCase().includes(q)||(t&&(t.name||'').toLowerCase().includes(q));})
-    .slice(0,6).forEach(c=>{const t=tenantOf(c.tenant);add('📄',`Договор ${(c.id||'').toUpperCase()}`,`${esc(t?t.name:'')} · ${esc(c.unit)}`,'contractInfo',c.id);});
+  if(canView('contracts')) sContracts().filter(c=>{const t=tenantOf(c.tenant);return (c.id||'').toLowerCase().includes(q)||(unitNum(c.unit)||'').toLowerCase().includes(q)||(t&&(t.name||'').toLowerCase().includes(q));})
+    .slice(0,6).forEach(c=>{const t=tenantOf(c.tenant);add('📄',`Договор ${(c.id||'').toUpperCase()}`,`${esc(t?t.name:'')} · ${esc(unitNum(c.unit))}`,'contractInfo',c.id);});
   // платежи
   if(canView('payments')) sPayments().filter(p=>{const c=contractOf(p.contract);const t=c&&tenantOf(c.tenant);return (p.period||'').includes(q)||(t&&(t.name||'').toLowerCase().includes(q));})
     .slice(0,6).forEach(p=>{const c=contractOf(p.contract);const t=c&&tenantOf(c.tenant);add('💳',`Платёж ${p.period}`,`${esc(t?t.name:'')} · ${money(p.amount)} · ${p.status}`,'payModal',p.id);});
@@ -665,7 +678,7 @@ const DASH_CATALOG={
   adsKpi:{label:'KPI · Реклама',span:1,build:()=>{const ls=(DB.listings||[]).filter(a=>SCOPE==='all'||a.building===SCOPE);const act=ls.filter(a=>a.status==='active').length;const v=ls.reduce((s,a)=>s+(a.views||0),0);return kpi('Объявления','#22a7f0','📣',act+' активн.','👁 '+fmt(v)+' просмотров','');}},
   chIncome:{label:'График · Доходы и расходы',span:2,build:()=>`<div class="card"><div class="panel-title"><h3>Доходы и расходы</h3><span class="muted">тыс ₽ · 6 мес</span></div><canvas id="chIncome" height="120"></canvas></div>`,draw:drawIncome},
   chOcc:{label:'График · Структура площадей',span:1,build:()=>`<div class="card"><div class="panel-title"><h3>Структура площадей</h3><span class="muted">м²</span></div><canvas id="chOcc" height="120"></canvas></div>`,draw:drawOcc},
-  overdue:{label:'Виджет · Просроченные платежи',span:2,build:()=>{const o=sPayments().filter(p=>p.status==='overdue').map(p=>{const c=contractOf(p.contract);const t=c&&tenantOf(c.tenant);return{name:t?t.name:'—',unit:c?c.unit:'—',amount:p.amount-p.paid};});
+  overdue:{label:'Виджет · Просроченные платежи',span:2,build:()=>{const o=sPayments().filter(p=>p.status==='overdue').map(p=>{const c=contractOf(p.contract);const t=c&&tenantOf(c.tenant);return{name:t?t.name:'—',unit:c?unitNum(c.unit):'—',amount:p.amount-p.paid};});
     return dashCard('⚠️ Просроченные платежи',o.length,dashRows(o.map(x=>`<tr><td><div class="t-strong">${esc(x.name)}</div><div class="t-sub">Помещение ${esc(x.unit)}</div></td><td style="text-align:right"><span class="pill red">${money(x.amount)}</span></td></tr>`),'Нет просрочек'));}},
   tasks:{label:'Виджет · Ближайшие задачи',span:2,build:()=>{const t=TASKS.filter(x=>x.status!=='done').sort((a,b)=>daysLeft(a.due)-daysLeft(b.due)).slice(0,5);
     return dashCard('Ближайшие задачи',t.length,dashRows(t.map(x=>`<tr><td><div class="t-strong">${esc(x.title)}</div><div class="t-sub">${esc(x.assignee_name||'—')} · ${esc(x.unit)}</div></td><td style="text-align:right">${prioPill(x.priority)}<div class="t-sub" style="margin-top:4px">${dueLabel(x.due)}</div></td></tr>`),'Нет задач'));}},
@@ -684,7 +697,7 @@ const DASH_CATALOG={
     const rows=[['План доход',money(iP)],['Факт доход',money(iF)+' '+pctCell(iF,iP)],['План расход',money(eP)],['Факт расход',money(eF)+' '+pctCell(eF,eP,true)],['NOI (факт)',`<b>${money(iF-eF)}</b>`]].map(([l,v])=>`<tr><td class="t-sub">${l}</td><td style="text-align:right">${v}</td></tr>`);
     return dashCard('📈 Бюджет '+y,null,`<table><tbody>${rows.join('')}</tbody></table>`);}},
   expiring:{label:'Виджет · Договоры на исходе',span:2,build:()=>{const cs=DB.contracts.filter(c=>{if(c.status==='ended')return false;const u=unitOf(c.unit);if(!(SCOPE==='all'||(u&&u.building===SCOPE)))return false;const dl=c.end?daysLeft(c.end):9999;return dl<=90;}).sort((a,b)=>daysLeft(a.end)-daysLeft(b.end)).slice(0,5);
-    return dashCard('📄 Договоры на исходе',cs.length,dashRows(cs.map(c=>{const t=tenantOf(c.tenant);return `<tr><td><div class="t-strong">${esc(t?t.name:c.id)}</div><div class="t-sub">${esc(c.unit)} · до ${c.end?fmtD(c.end):'—'}</div></td><td style="text-align:right">${dueLabel(c.end)}</td></tr>`;}),'Нет договоров на исходе'));}},
+    return dashCard('📄 Договоры на исходе',cs.length,dashRows(cs.map(c=>{const t=tenantOf(c.tenant);return `<tr><td><div class="t-strong">${esc(t?t.name:c.id)}</div><div class="t-sub">${esc(unitNum(c.unit))} · до ${c.end?fmtD(c.end):'—'}</div></td><td style="text-align:right">${dueLabel(c.end)}</td></tr>`;}),'Нет договоров на исходе'));}},
 };
 function dashCfg(){ try{const s=JSON.parse(localStorage.getItem(dashStoreKey()));
   if(s&&Array.isArray(s.order)) return {order:s.order.filter(id=>DASH_CATALOG[id])};
@@ -802,8 +815,8 @@ function planModal(bid){
   const us=DB.units.filter(u=>u.building===bid);
   const floors=[...new Set(us.map(u=>u.floor))].sort((a,b)=>a-b);
   const tile=u=>{const st=unitStatus(u);const c=PLAN_COL[st]||PLAN_COL.free;
-    return `<div onmouseenter="planHover('${esc(u.id)}')" onclick="closeM();unitInfo('${esc(u.id)}')" title="Помещение ${esc(u.id)} — клик для подробностей" style="background:${c}1f;border:2px solid ${c};border-radius:9px;padding:9px 11px;min-width:92px;cursor:pointer">
-      <div class="t-strong">${esc(u.id)}</div><div class="t-sub">${u.area} м²</div><div style="font-size:11px;color:${c};font-weight:700;margin-top:2px">${PLAN_LBL[st]}</div></div>`;};
+    return `<div onmouseenter="planHover('${esc(u.id)}')" onclick="closeM();unitInfo('${esc(u.id)}')" title="Помещение ${esc(u.num||u.id)} — клик для подробностей" style="background:${c}1f;border:2px solid ${c};border-radius:9px;padding:9px 11px;min-width:92px;cursor:pointer">
+      <div class="t-strong">${esc(u.num||u.id)}</div><div class="t-sub">${u.area} м²</div><div style="font-size:11px;color:${c};font-weight:700;margin-top:2px">${PLAN_LBL[st]}</div></div>`;};
   // миграция старого одиночного плана (data:image) в общий список файлов
   if(b.plan && /^data:image\//.test(b.plan)){ if(!Array.isArray(b.planDocs)) b.planDocs=[]; b.planDocs.push({name:'План объекта',img:true,url:b.plan}); delete b.plan; saveState(); }
   const pd=Array.isArray(b.planDocs)?b.planDocs:[];
@@ -830,7 +843,7 @@ function planModal(bid){
 }
 function planHover(id){ const u=unitOf(id); const box=document.getElementById('planDetails'); if(!u||!box)return;
   const c=DB.contracts.find(x=>x.unit===id&&x.status!=='ended'); const t=u.tenant?tenantOf(u.tenant):null; const st=unitStatus(u); const r=u.responsible||{};
-  box.innerHTML=`<div class="t-strong" style="margin-bottom:6px">Помещение ${esc(u.id)}${u.name?' · '+esc(u.name):''} · ${u.area} м² · ${esc(u.type||'')}</div>
+  box.innerHTML=`<div class="t-strong" style="margin-bottom:6px">Помещение ${esc(u.num||u.id)}${u.name?' · '+esc(u.name):''} · ${u.area} м² · ${esc(u.type||'')}</div>
     <div class="t-sub">Статус: <b style="color:${PLAN_COL[st]}">${PLAN_LBL[st]}</b></div>
     ${t?`<div class="t-sub">Арендатор: ${esc(t.name)}</div>`:'<div class="t-sub">Помещение свободно</div>'}
     ${c?`<div class="t-sub">Аренда: ${money(c.rate)}/м² · ${money(monthlyRent(c))}/мес · договор до ${c.end?fmtD(c.end):'—'}</div>`:''}
@@ -942,7 +955,8 @@ async function runPlanRecognize(bid){
 
 function renderPlanRecTable(bid,units){
   const out=document.getElementById('planRecOut'); if(!out)return; const types=(stg().unitTypes||['Офис','Склад']);
-  const rows=units.map((u,i)=>{ const dup=!!unitOf(u.number);
+  const inThisObj=n=>DB.units.some(x=>x.building===bid && (x.num||x.id)===n);   // дубликат — только в ЭТОМ объекте
+  const rows=units.map((u,i)=>{ const dup=inThisObj(u.number);
     const topt=types.map(t=>`<option${(u.type&&String(t).toLowerCase()===String(u.type).toLowerCase())?' selected':''}>${esc(t)}</option>`).join('');
     return `<tr data-i="${i}"${dup?' style="background:rgba(255,107,107,.10)"':''}>
       <td style="text-align:center"><input type="checkbox" id="pr-chk-${i}"${dup?'':' checked'}></td>
@@ -951,8 +965,8 @@ function renderPlanRecTable(bid,units){
       <td><input id="pr-floor-${i}" type="number" value="${u.floor??''}" style="width:52px" placeholder="—"></td>
       <td><select id="pr-type-${i}">${topt}</select></td>
       <td class="t-sub" style="color:#e0564f">${dup?'уже есть':''}</td></tr>`; }).join('');
-  const dupN=units.filter(u=>unitOf(u.number)).length;
-  out.innerHTML=`<div class="sec-h">Найдено помещений: ${units.length}${dupN?` · из них уже в базе: ${dupN} (галочки сняты)`:''}</div>
+  const dupN=units.filter(u=>inThisObj(u.number)).length;
+  out.innerHTML=`<div class="sec-h">Найдено помещений: ${units.length}${dupN?` · из них уже в этом объекте: ${dupN} (галочки сняты)`:''}</div>
     <div class="t-sub" style="margin-bottom:6px">Проверьте номера и площади, поправьте при необходимости. Снимите галочку у ненужных. Красным — помещения, которые уже есть.</div>
     <div style="overflow:auto"><table id="planRecTable"><thead><tr><th></th><th>Номер</th><th>м²</th><th>Этаж</th><th>Тип</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>
     <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap"><button class="btn" onclick="addRecognizedUnits('${bid}')">✓ Добавить отмеченные</button>
@@ -961,11 +975,15 @@ function renderPlanRecTable(bid,units){
 
 async function addRecognizedUnits(bid){
   const trs=document.querySelectorAll('#planRecTable tbody tr'); const add=[]; let dup=0, blank=0;
+  const taken=new Set(DB.units.map(u=>u.id));   // для генерации глобально-уникального id
+  const genId=num=>{ if(!taken.has(num))return num; const base=(num+'_'+String(bid).replace(/[^0-9A-Za-zА-Яа-я_-]/g,'').slice(0,8))||('u'+Date.now().toString(36)); let id=base,k=2; while(taken.has(id)){id=base+'_'+k;k++;} return id; };
   trs.forEach(tr=>{ const i=tr.dataset.i; const chk=document.getElementById('pr-chk-'+i); if(!chk||!chk.checked)return;
     const num=(document.getElementById('pr-num-'+i).value||'').trim().replace(/[<>"'`&]/g,''); if(!num){blank++;return;}
-    if(unitOf(num)||add.some(u=>u.id===num)){dup++;return;}
+    // дубликат — только В ЭТОМ объекте (в разных объектах номера могут совпадать)
+    if(DB.units.some(x=>x.building===bid&&(x.num||x.id)===num) || add.some(u=>u.num===num)){dup++;return;}
     const area=+document.getElementById('pr-area-'+i).value||0; const floor=+document.getElementById('pr-floor-'+i).value||1; const type=document.getElementById('pr-type-'+i).value||'Офис';
-    add.push({ id:num,name:'',building:bid,floor,area,type,tenant:null,status:'free',ownership:'own',owner:null,
+    const id=genId(num); taken.add(id);
+    add.push({ id,num,name:'',building:bid,floor,area,type,tenant:null,status:'free',ownership:'own',owner:null,
       responsible:{name:ME.full_name,role:ME.position,phone:ME.phone,email:ME.email},documents:[] }); });
   if(!add.length){ alert('Не отмечено ни одного нового помещения'+(dup?` (пропущено дубликатов: ${dup})`:'')); return; }
   DB.units.push(...add); await afterStateChange();
@@ -1005,7 +1023,7 @@ function unitTile(u){
   const st=unitStatus(u); const cls={occupied:'u-occ',free:'u-free',reserved:'u-res',debt:'u-debt'}[st];
   const ten=u.tenant?(tenantOf(u.tenant)||{}).name:(st==='reserved'?'Бронь':'Свободно');
   return `<div class="unit ${cls}" onclick="unitInfo('${esc(u.id)}')"><span class="bar"></span>
-    <div class="u-id">${esc(u.id)}${u.name?' · '+esc(u.name):''}${u.ownership==='sold'?' 🏷':''}</div><div class="u-area">${esc(u.type)} · ${u.area} м²</div><div class="u-ten">${esc(ten)}</div>
+    <div class="u-id">${esc(u.num||u.id)}${u.name?' · '+esc(u.name):''}${u.ownership==='sold'?' 🏷':''}</div><div class="u-area">${esc(u.type)} · ${u.area} м²</div><div class="u-ten">${esc(ten)}</div>
     <div class="u-ten" style="color:var(--muted2);font-size:10.5px;margin-top:5px">📎 ${(u.documents||[]).length} док.${u.ownership==='sold'?' · сторонний собств.':''}</div></div>`;
 }
 function miniStat(label,v,color){return `<div class="card"><div class="label" style="color:var(--muted);font-size:12px">${label}</div><div style="font-size:24px;font-weight:750;margin-top:4px;color:${color?'var(--'+color+')':'var(--txt)'}">${v}</div></div>`;}
@@ -1020,7 +1038,7 @@ function tenants(){
   renderTenants();
 }
 function tenantBuilding(t){const c=DB.contracts.find(c=>c.tenant===t.id);return c?(unitOf(c.unit)?.building||null):null;}
-function tenantUnit(t){const c=DB.contracts.find(c=>c.tenant===t.id);return c?(c.unit||''):'';}
+function tenantUnit(t){const c=DB.contracts.find(c=>c.tenant===t.id);return c?unitNum(c.unit):'';}
 const byUnitNo=(a,b)=>String(tenantUnit(a)).localeCompare(String(tenantUnit(b)),undefined,{numeric:true});
 function tenantTable(list){
   return `<div style="overflow-x:auto"><table><thead><tr><th>Арендатор</th><th>Контакт</th><th>Отрасль</th><th>Помещение</th><th>Аренда/мес</th><th>Статус оплат</th></tr></thead><tbody>${list.map(tenantRow).join('')}</tbody></table></div>`;
@@ -1031,7 +1049,7 @@ function tenantRow(t){
   const stp=pay?payPill(pay):'<span class="pill gray">—</span>';
   return `<tr onclick="tenantInfo('${t.id}')" style="cursor:pointer"><td><div class="t-strong">${esc(t.name)}</div><div class="t-sub">ИНН ${esc(t.inn)}</div></td>
     <td><div>${esc(t.contact)}</div><div class="t-sub">${esc(t.phone)}</div></td><td><span class="pill blue">${esc(t.industry)}</span></td>
-    <td>${esc(c?c.unit:'—')}</td><td class="t-strong">${c?money(monthlyRent(c)):'—'}</td><td>${stp}</td></tr>`;
+    <td>${esc(c?unitNum(c.unit):'—')}</td><td class="t-strong">${c?money(monthlyRent(c)):'—'}</td><td>${stp}</td></tr>`;
 }
 function renderTenants(){
   const q=(document.getElementById('tsearch')?.value||'').toLowerCase();
@@ -1069,7 +1087,7 @@ function contracts(){
 function contractRow(c){const t=tenantOf(c.tenant);const dl=daysLeft(c.end);
   const stPill=c.status==='expiring'||dl<90?`<span class="pill amber">Истекает (${dl} дн)</span>`:`<span class="pill green">Активен</span>`;
   return `<tr style="cursor:pointer" onclick="contractInfo('${c.id}')"><td><div class="t-strong">${(c.id||'').toUpperCase()}</div><div class="t-sub">${esc(t?t.name:'—')}</div></td>
-    <td>${c.unit}</td><td>${fmt(c.rate)}<div class="t-sub">${c.rateType==='flat'?'₽/мес за помещ.':'₽/м²'}</div></td><td class="t-strong">${money(monthlyRent(c))}</td>
+    <td>${esc(unitNum(c.unit))}</td><td>${fmt(c.rate)}<div class="t-sub">${c.rateType==='flat'?'₽/мес за помещ.':'₽/м²'}</div></td><td class="t-strong">${money(monthlyRent(c))}</td>
     <td><div>${fmtD(c.start)} —</div><div class="t-sub">${fmtD(c.end)}</div></td><td>${c.indexation}%/год</td><td>${stPill}</td></tr>`;
 }
 function fmtD(d){return new Date(d).toLocaleDateString('ru-RU',{day:'2-digit',month:'2-digit',year:'2-digit'});}
@@ -1107,7 +1125,7 @@ const payLabel=k=>payMethods()[k]||k;
 const payMethodOpts=(sel='bank')=>Object.entries(payMethods()).map(([k,v])=>`<option value="${esc(k)}"${k===sel?' selected':''}>${esc(v)}</option>`).join('');
 function pTx(p){ if(p.transactions&&p.transactions.length) return p.transactions; if(p.paid>0) return [{amount:p.paid,date:p.paidDate||p.due,method:'bank',legacy:true}]; return []; }
 function paymentRow(p){const c=contractOf(p.contract);const t=c&&tenantOf(c.tenant);const bal=p.amount-p.paid;
-  return `<tr><td class="t-strong">${esc(t?t.name:'—')}</td><td>${esc(c?c.unit:'—')}</td><td>${p.period}</td><td>${money(p.amount)}</td>
+  return `<tr><td class="t-strong">${esc(t?t.name:'—')}</td><td>${esc(c?unitNum(c.unit):'—')}</td><td>${p.period}</td><td>${money(p.amount)}</td>
     <td>${p.paid?money(p.paid):'—'}</td><td class="t-sub">${fmtD(p.due)}</td><td>${payPill(p)}</td>
     <td style="text-align:right;white-space:nowrap">
       ${bal>0&&canEdit('payments')?`<button class="btn sm" title="Отметить полностью оплаченным (сегодня, безналичный)" onclick="quickPay('${p.id}')">✓ Оплачено</button> `:''}
@@ -1128,7 +1146,7 @@ async function quickPay(id){
 }
 function payPill(p){const m={paid:['green','Оплачен'],overdue:['red','Просрочен'],partial:['amber','Частично'],pending:['blue','Ожидание']};const x=m[p.status]||['gray','—'];return `<span class="pill ${x[0]}">${x[1]}</span>`;}
 function payModal(id){const p=DB.payments.find(x=>x.id===id);if(!p)return;const c=contractOf(p.contract);const t=c&&tenantOf(c.tenant);const rem=p.amount-p.paid;const tx=pTx(p);const editable=rem>0&&canEdit('payments');
-  const cUnit=c?c.unit:'—';const tName=t?t.name:'—';
+  const cUnit=c?unitNum(c.unit):'—';const tName=t?t.name:'—';
   openM(`<div class="modal-h"><h3>Оплата · ${p.period}</h3><span class="x" onclick="closeM()">×</span></div>
   <div class="modal-b">
     ${infoRow('Арендатор',esc(tName))}${infoRow('Помещение',esc(cUnit))}
@@ -1182,7 +1200,7 @@ function printReceipt(pid, txIndex){
     ${row('Дата платежа',x.date?fmtD(x.date):'—')}
     ${row('Объект',esc(b&&b.name||'—'))}
     ${row('Адрес',esc(b&&b.address||'—'))}
-    ${row('Помещение',esc(c.unit))}
+    ${row('Помещение',esc((u&&(u.num||u.id))||c.unit||'—'))}
     ${row('Арендатор',esc(t.name))}
     ${row('ИНН',esc(t.inn||'—'))}
     ${row('Назначение','Аренда за '+p.period)}
@@ -1242,9 +1260,9 @@ function utilities(){
       if(cv.offsetParent!==null) chartFactories['chExp-'+b.id](); }});
 }
 function utilTable(list){
-  const rows=[...list].sort((a,b)=>String(a.unit).localeCompare(String(b.unit),'ru',{numeric:true}));   // по номеру помещения, а не по порядку внесения
+  const rows=[...list].sort((a,b)=>String(unitNum(a.unit)).localeCompare(String(unitNum(b.unit)),'ru',{numeric:true}));   // по номеру помещения, а не по порядку внесения
   return `<div style="overflow-x:auto"><table><thead><tr><th>Помещение</th><th>Эл-во</th><th>Вода</th><th>Отопл.</th><th>Итого</th><th>Статус</th></tr></thead><tbody>
-    ${rows.length?rows.map(u=>{const tot=u.electricity+u.water+u.heating;const clk=canEdit('utilities');const un=unitOf(u.unit);return `<tr${clk?` style="cursor:pointer" onclick="utilEdit('${esc(u.id)}')"`:''}><td class="t-strong">${esc(u.unit)}${un&&un.name?`<div class="t-sub">${esc(un.name)}</div>`:''}</td><td>${fmt(u.electricity)}</td><td>${fmt(u.water)}</td><td>${fmt(u.heating)}</td><td class="t-strong">${money(tot)}</td><td>${utilPill(u.status)}</td></tr>`;}).join(''):'<tr><td colspan="6" class="empty">Нет начислений</td></tr>'}
+    ${rows.length?rows.map(u=>{const tot=u.electricity+u.water+u.heating;const clk=canEdit('utilities');const un=unitOf(u.unit);return `<tr${clk?` style="cursor:pointer" onclick="utilEdit('${esc(u.id)}')"`:''}><td class="t-strong">${esc(unitNum(u.unit))}${un&&un.name?`<div class="t-sub">${esc(un.name)}</div>`:''}</td><td>${fmt(u.electricity)}</td><td>${fmt(u.water)}</td><td>${fmt(u.heating)}</td><td class="t-strong">${money(tot)}</td><td>${utilPill(u.status)}</td></tr>`;}).join(''):'<tr><td colspan="6" class="empty">Нет начислений</td></tr>'}
     </tbody></table></div>`;
 }
 function expenseTable(list){
@@ -1338,7 +1356,7 @@ function readingsModal(){
   <div class="modal-b">
     <div class="row2">
       <div class="field"><label>Объект</label><select id="rd-building" onchange="rdUnitsRefresh()">${buildingsList().map(b=>`<option value="${b.id}"${b.id===def?' selected':''}>${esc(b.name)}</option>`).join('')}</select></div>
-      <div class="field"><label>Помещение</label><select id="rd-unit" onchange="rdPrefill()">${units.map(u=>`<option value="${esc(u.id)}">${esc(u.id)}${u.name?' · '+esc(u.name):''} · ${esc(u.type||'')} — ${esc(unitOccupant(u))}</option>`).join('')}</select></div>
+      <div class="field"><label>Помещение</label><select id="rd-unit" onchange="rdPrefill()">${units.map(u=>`<option value="${esc(u.id)}">${esc(u.num||u.id)}${u.name?' · '+esc(u.name):''} · ${esc(u.type||'')} — ${esc(unitOccupant(u))}</option>`).join('')}</select></div>
     </div>
     <div class="field"><label>Период</label><input id="rd-period" type="month" value="${utilPeriod||TODAY.toISOString().slice(0,7)}" onchange="rdPrefill()"></div>
     <div class="t-sub" style="margin-bottom:8px">Электро — (текущее − предыдущее) × коэффициент × тариф. Вода — (текущее − предыдущее) × тариф. Отопление — площадь помещения × тариф ₽/м². Тарифы и коэффициент берутся из карточки объекта/«Настроек», можно переопределить.</div>
@@ -1361,7 +1379,7 @@ function readingsModal(){
   rdPrefill();
 }
 function rdUnitsRefresh(){ const b=val('rd-building'); const sel=document.getElementById('rd-unit');
-  sel.innerHTML=DB.units.filter(u=>u.building===b).map(u=>`<option value="${esc(u.id)}">${esc(u.id)}${u.name?' · '+esc(u.name):''} · ${esc(u.type||'')} — ${esc(unitOccupant(u))}</option>`).join(''); rdPrefill(); }
+  sel.innerHTML=DB.units.filter(u=>u.building===b).map(u=>`<option value="${esc(u.id)}">${esc(u.num||u.id)}${u.name?' · '+esc(u.name):''} · ${esc(u.type||'')} — ${esc(unitOccupant(u))}</option>`).join(''); rdPrefill(); }
 function rdPrefill(){ const unit=val('rd-unit'); const period=val('rd-period'); const bid=val('rd-building'); const u=unitOf(unit);
   UTIL_KINDS.forEach(([k,,,mode,coef])=>{ const te=document.getElementById('rd-'+k+'-tar'); if(te) te.value=buildingTariff(bid,k);
     if(coef){ const ce=document.getElementById('rd-'+k+'-coef'); if(ce) ce.value=buildingElecCoef(bid); }
@@ -1787,7 +1805,7 @@ function reqCard(r){
   const dl=daysLeft(r.due), cls=reqOpen(r)&&dl<0?'overdue':(reqOpen(r)&&dl<=3?'soon':'');
   return `<div class="task-card ${cls}">
     <div class="t-strong" style="margin-bottom:6px;cursor:pointer" onclick="requestInfo('${r.id}')">${esc(r.title)}</div>
-    <div class="t-sub" style="margin-bottom:5px">🏢 ${esc(b?b.name:r.building)}${r.unit?' · 📍 '+esc(r.unit):''}${t?' · 👤 '+esc(t.name):''}</div>
+    <div class="t-sub" style="margin-bottom:5px">🏢 ${esc(b?b.name:r.building)}${r.unit?' · 📍 '+esc(unitNum(r.unit)):''}${t?' · 👤 '+esc(t.name):''}</div>
     <div class="t-sub" style="margin-bottom:8px">🛠 ${esc(r.category||'—')} · ${esc(u?u.full_name:'не назначен')}</div>
     <div style="display:flex;align-items:center;gap:8px;justify-content:space-between">${prioPill(r.priority)}<span class="t-sub">${r.status==='done'?'<span style="color:var(--green)">✓ '+(r.done_at?fmtD(r.done_at):'выполнено')+'</span>':(r.status==='rejected'?'отклонена':dueLabel(r.due))}</span></div>
     ${canEdit('requests')&&reqOpen(r)?`<button class="btn ghost sm" style="margin-top:10px;width:100%" onclick="advanceRequest('${r.id}')">${r.status==='new'?'→ В работу':'✓ Выполнено'}</button>`:''}
@@ -1796,7 +1814,7 @@ function reqCard(r){
 function requestModal(id){
   const r=id?(DB.requests||[]).find(x=>x.id===id):null;
   const def=r?r.building:(SCOPE!=='all'?SCOPE:(buildingsList()[0]||{}).id);
-  const unitOpts=b=>DB.units.filter(u=>u.building===b).map(u=>`<option value="${esc(u.id)}"${r&&r.unit===u.id?' selected':''}>${esc(u.id)}</option>`).join('');
+  const unitOpts=b=>DB.units.filter(u=>u.building===b).map(u=>`<option value="${esc(u.id)}"${r&&r.unit===u.id?' selected':''}>${esc(u.num||u.id)}</option>`).join('');
   const usr=USERS.filter(u=>u.active);
   openM(`<div class="modal-h"><h3>${r?'Заявка':'Новая заявка'}</h3><span class="x" onclick="closeM()">×</span></div>
   <div class="modal-b">
@@ -1818,7 +1836,7 @@ function requestModal(id){
   <div class="modal-f"><button class="btn ghost" onclick="closeM()">Отмена</button><button class="btn" onclick="saveRequest(${r?`'${r.id}'`:''})">${r?'Сохранить':'Создать'}</button></div>`);
 }
 function reqUnitsRefresh(){ const b=val('rq-building'); const sel=document.getElementById('rq-unit');
-  sel.innerHTML='<option value="">— не указано —</option>'+DB.units.filter(u=>u.building===b).map(u=>`<option value="${esc(u.id)}">${esc(u.id)}</option>`).join(''); }
+  sel.innerHTML='<option value="">— не указано —</option>'+DB.units.filter(u=>u.building===b).map(u=>`<option value="${esc(u.id)}">${esc(u.num||u.id)}</option>`).join(''); }
 async function saveRequest(id){
   const title=val('rq-title').trim(); if(!title) return alert('Укажите заголовок заявки');
   ensureState();
@@ -1843,7 +1861,7 @@ function requestInfo(id){
     <div class="t-strong" style="font-size:16px;margin-bottom:10px">${esc(r.title)}</div>
     ${row('Статус',reqStatusPill(r.status))}
     ${row('Объект',esc(b?b.name:r.building))}
-    ${r.unit?row('Помещение',esc(r.unit)):''}
+    ${r.unit?row('Помещение',esc(unitNum(r.unit))):''}
     ${t?row('Арендатор',esc(t.name)):''}
     ${row('Тип',esc(r.category||'—'))}
     ${row('Приоритет',prioWord(r.priority))}
@@ -2016,7 +2034,7 @@ function buildAlerts(){
   // Договоры на исходе (≤60 дн) или истёкшие
   DB.contracts.forEach(c=>{ if(c.status==='ended')return; const u=unitOf(c.unit); const b=u&&u.building; if(!inS(b))return;
     const dl=c.end?daysLeft(c.end):9999; if(dl>60)return; const t=tenantOf(c.tenant);
-    A.push({level:dl<0?'danger':dl<=30?'warn':'info',icon:'📄',cat:'Договоры',id:c.id,title:`Договор ${dl<0?'истёк':'истекает'}: ${t?t.name:c.id}`,sub:`${esc(c.unit)} · ${c.end?fmtD(c.end):''} · ${dueLabel(c.end)}`,page:'contracts',sort:dl}); });
+    A.push({level:dl<0?'danger':dl<=30?'warn':'info',icon:'📄',cat:'Договоры',id:c.id,title:`Договор ${dl<0?'истёк':'истекает'}: ${t?t.name:c.id}`,sub:`${esc(unitNum(c.unit))} · ${c.end?fmtD(c.end):''} · ${dueLabel(c.end)}`,page:'contracts',sort:dl}); });
   // Плановое ТО просрочено/скоро (≤30 дн)
   (DB.equipment||[]).forEach(e=>{ if(!inS(e.building))return; const dl=daysLeft(e.nextService); if(e.nextService==null||dl===9999||dl>30)return;
     A.push({level:dl<0?'danger':'warn',icon:'🧰',cat:'Плановое ТО',id:e.id,title:`ТО ${dl<0?'просрочено':'скоро'}: ${e.name}`,sub:`${e.nextService?fmtD(e.nextService):''} · ${dueLabel(e.nextService)}`,page:'upkeep',sort:dl}); });
@@ -2092,7 +2110,7 @@ function renewModal(id){ const c=contractOf(id); if(!c)return; const t=tenantOf(
   const defEnd=addMonths(c.end||TODAY.toISOString().slice(0,10),12);
   openM(`<div class="modal-h"><h3>Продление договора</h3><span class="x" onclick="closeM()">×</span></div>
   <div class="modal-b">
-    ${infoRow('Договор',esc((c.id||'').toUpperCase()))}${t?infoRow('Арендатор',esc(t.name)):''}${infoRow('Помещение',esc(c.unit))}
+    ${infoRow('Договор',esc((c.id||'').toUpperCase()))}${t?infoRow('Арендатор',esc(t.name)):''}${infoRow('Помещение',esc(unitNum(c.unit)))}
     ${infoRow('Текущая ставка',money(c.rate)+(c.rateType==='flat'?' /мес за помещение':' /м²'))}${infoRow('Окончание сейчас',c.end?fmtD(c.end):'—')}
     <div class="field" style="margin-top:10px"><label>Новая дата окончания</label><input id="rn-end" type="date" value="${defEnd}"></div>
     ${c.indexation?`<label style="display:flex;align-items:center;gap:9px;cursor:pointer"><input type="checkbox" id="rn-idx" checked> Применить индексацию ${c.indexation}%/год к ставке (${money(c.rate)} → ${money(Math.round(c.rate*(1+c.indexation/100)))})</label>`:''}
@@ -2108,7 +2126,7 @@ async function saveRenew(id){ const c=contractOf(id); if(!c)return; const end=va
 function remindDebtor(id){ const p=DB.payments.find(x=>x.id===id); if(!p)return;
   const c=contractOf(p.contract); const t=c&&tenantOf(c.tenant); const u=c&&unitOf(c.unit); const b=u&&buildingOf(u.building);
   const rem=p.amount-p.paid; const dl=daysLeft(p.due);
-  const text=`Уважаемый арендатор${t?' ('+t.name+')':''}!\nНапоминаем о задолженности по аренде.\nОбъект: ${b?b.name:'—'}${c?', помещение '+c.unit:''}\nПериод: ${p.period}\nК оплате: ${money(rem)}\nСрок оплаты: ${fmtD(p.due)}${dl<0?' (просрочено '+(-dl)+' дн)':''}\nПросим погасить задолженность в ближайшее время. Спасибо!`;
+  const text=`Уважаемый арендатор${t?' ('+t.name+')':''}!\nНапоминаем о задолженности по аренде.\nОбъект: ${b?b.name:'—'}${c?', помещение '+unitNum(c.unit):''}\nПериод: ${p.period}\nК оплате: ${money(rem)}\nСрок оплаты: ${fmtD(p.due)}${dl<0?' (просрочено '+(-dl)+' дн)':''}\nПросим погасить задолженность в ближайшее время. Спасибо!`;
   openM(`<div class="modal-h"><h3>📨 Напоминание должнику</h3><span class="x" onclick="closeM()">×</span></div>
   <div class="modal-b">
     ${t?infoRow('Арендатор',esc(t.name)):''}${t&&t.phone?infoRow('Телефон',esc(t.phone)):''}${t&&t.email?infoRow('Email',esc(t.email)):''}
@@ -2396,7 +2414,7 @@ function reports(){
 }
 function exportCSV(){
   let rows=[['Объект','Арендатор','Помещение','Период','Начислено','Оплачено','Задолженность','Статус']];
-  sPayments().forEach(p=>{const c=contractOf(p.contract);if(!c)return;const b=buildingOf(unitOf(c.unit)?.building);const t=tenantOf(c.tenant);rows.push([b?b.name:'',t?t.name:'',c.unit,p.period,p.amount,p.paid,p.amount-p.paid,p.status]);});
+  sPayments().forEach(p=>{const c=contractOf(p.contract);if(!c)return;const b=buildingOf(unitOf(c.unit)?.building);const t=tenantOf(c.tenant);rows.push([b?b.name:'',t?t.name:'',unitNum(c.unit),p.period,p.amount,p.paid,p.amount-p.paid,p.status]);});
   const csv='﻿'+rows.map(r=>r.map(csvCell).join(';')).join('\n');
   const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));a.download='otchet_arenda_2026-06.csv';a.click();
 }
@@ -2690,7 +2708,7 @@ function buildImportRec(type,get,errors,line){
     if(DB.units.some(u=>u.id===id)){errors.push(`Строка ${line}: помещение «${id}» уже есть`);return null;}
     const bn=get('building'); const b=buildingsList().find(x=>x.name.toLowerCase()===bn.toLowerCase()||x.id===bn);
     if(!b){errors.push(`Строка ${line}: объект «${bn}» не найден`);return null;}
-    return {id,building:b.id,floor:+get('floor')||1,area:+get('area')||0,type:get('type')||'Офис',tenant:null,status:'free',ownership:'own',owner:null,responsible:null,documents:[]}; }
+    return {id,num:id,building:b.id,floor:+get('floor')||1,area:+get('area')||0,type:get('type')||'Офис',tenant:null,status:'free',ownership:'own',owner:null,responsible:null,documents:[]}; }
   if(type==='tenants'){ const name=get('name'); if(!name){errors.push(`Строка ${line}: пустое название`);return null;}
     if(DB.tenants.some(t=>t.name.toLowerCase()===name.toLowerCase()||(get('inn')&&t.inn===get('inn')))){errors.push(`Строка ${line}: арендатор «${name}» уже есть`);return null;}
     return {id:'t'+Date.now()+'_'+line,name,inn:get('inn'),contact:get('contact'),phone:get('phone'),email:get('email'),industry:get('industry')}; }
@@ -2750,7 +2768,7 @@ function wizardModal(){
 }
 async function wizNext(){ const s=_wiz.step;
   if(s===1){ const name=val('wz-bname').trim(); if(!name) return alert('Укажите название объекта'); const id='b'+Date.now(); DB.buildings.push({id,name,address:val('wz-baddr').trim()}); _wiz.buildingId=id; }
-  if(s===2){ const id=val('wz-uid').trim(); if(!id) return alert('Укажите номер помещения'); if(DB.units.some(u=>u.id===id)) return alert('Такое помещение уже есть'); DB.units.push({id,building:_wiz.buildingId||(buildingsList()[0]||{}).id,floor:+val('wz-ufloor')||1,area:+val('wz-uarea')||0,type:val('wz-utype')||'Офис',tenant:null,status:'free',ownership:'own',owner:null,responsible:null,documents:[]}); _wiz.unitId=id; }
+  if(s===2){ const num=val('wz-uid').trim().replace(/[<>"'`&]/g,''); if(!num) return alert('Укажите номер помещения'); const bld=_wiz.buildingId||(buildingsList()[0]||{}).id; if(DB.units.some(u=>u.building===bld&&(u.num||u.id)===num)) return alert('Такое помещение уже есть в этом объекте'); const id=genUnitId(num,bld); DB.units.push({id,num,building:bld,floor:+val('wz-ufloor')||1,area:+val('wz-uarea')||0,type:val('wz-utype')||'Офис',tenant:null,status:'free',ownership:'own',owner:null,responsible:null,documents:[]}); _wiz.unitId=id; }
   if(s===3){ const name=val('wz-tname').trim(); if(!name) return alert('Укажите название арендатора'); const id='t'+Date.now(); DB.tenants.push({id,name,inn:val('wz-tinn').trim(),contact:val('wz-tcontact').trim(),phone:val('wz-tphone').trim(),email:'',industry:''}); _wiz.tenantId=id; }
   if(s===4){ if(_wiz.tenantId&&_wiz.unitId){ const u=unitOf(_wiz.unitId); const rate=+val('wz-crate')||0; const rt=val('wz-cratetype')||'sqm'; const monthly=rt==='flat'?rate:rate*(u?u.area:0); DB.contracts.push({id:'c'+Date.now(),tenant:_wiz.tenantId,unit:_wiz.unitId,rate,rateType:rt,start:val('wz-cstart'),end:val('wz-cend'),deposit:Math.round(monthly),indexation:+val('wz-cidx')||0,status:'active'}); if(u)u.tenant=_wiz.tenantId; } }
   _wiz.step++; recordAudit(); await saveState(); wizardModal();
@@ -2917,7 +2935,7 @@ function export1C(){
   if(!sc.rent && !sc.expenses && !sc.salaries) return alert('Для 1С не выбран ни один тип документов.\nНажмите «⚙ Что синхронизировать» на карточке 1С.');
   const rows=[['Тип документа','Дата','Период','Контрагент/Сотрудник','Объект','Помещение','Назначение','Сумма','Статус']];
   if(sc.rent) DB.payments.filter(p=>passScope(sc,'rent',p)).forEach(p=>{const c=contractOf(p.contract);if(!c)return;const t=tenantOf(c.tenant);const u=unitOf(c.unit);
-    rows.push(['Аренда (начисление)',p.paidDate||'',p.period,t?t.name:'',(buildingOf(u&&u.building)?.name)||'',c.unit,'Аренда за '+p.period,p.amount,p.status]);});
+    rows.push(['Аренда (начисление)',p.paidDate||'',p.period,t?t.name:'',(buildingOf(u&&u.building)?.name)||'',unitNum(c.unit),'Аренда за '+p.period,p.amount,p.status]);});
   if(sc.expenses) DB.expenses.filter(e=>passScope(sc,'expense',e)).forEach(e=>rows.push(['Расход на содержание','',e.period||'',e.vendor||'',(buildingOf(e.building)?.name)||'','',e.category,e.amount,e.status]));
   if(sc.salaries) (DB.salaries||[]).filter(s=>passScope(sc,'salary',s)).forEach(s=>{const u=userOf(s.user_id);rows.push(['Зарплата',s.paidDate||'',s.period,u?u.full_name:'','','','ФОТ '+s.period,s.amount,s.status]);});
   const csv='﻿'+rows.map(r=>r.map(csvCell).join(';')).join('\n');
@@ -3033,11 +3051,13 @@ function unitModal(presetBuilding){const def=presetBuilding||(SCOPE!=='all'?SCOP
   <div class="row2"><div class="field"><label>Этаж</label><input id="f-floor" type="number" value="1"></div><div class="field"><label>Площадь, м²</label><input id="f-area" type="number" value="100"></div></div>
   <div class="field"><label>Тип</label><select id="f-type">${(stg().unitTypes||['Офис','Склад']).map(t=>`<option>${esc(t)}</option>`).join('')}</select></div></div>
   <div class="modal-f"><button class="btn ghost" onclick="closeM()">Отмена</button><button class="btn" onclick="saveUnit()">Добавить</button></div>`);}
-async function saveUnit(){const id=val('f-id').trim().replace(/[<>"'`&]/g,''); if(!id)return alert('Укажите номер');
-  if(unitOf(id))return alert('Помещение с номером '+id+' уже существует');
-  const u={id,name:val('f-name').trim(),building:val('f-building'),floor:+val('f-floor'),area:+val('f-area'),type:val('f-type'),tenant:null,status:'free',ownership:'own',owner:null,
+async function saveUnit(){const num=val('f-id').trim().replace(/[<>"'`&]/g,''); if(!num)return alert('Укажите номер');
+  const building=val('f-building');
+  if(DB.units.some(x=>x.building===building && (x.num||x.id)===num))return alert('В этом объекте уже есть помещение с номером '+num);
+  const id=genUnitId(num,building);   // id уникален глобально; при колл[изии между объектами id≠num
+  const u={id,num,name:val('f-name').trim(),building,floor:+val('f-floor'),area:+val('f-area'),type:val('f-type'),tenant:null,status:'free',ownership:'own',owner:null,
     responsible:{name:ME.full_name,role:ME.position,phone:ME.phone,email:ME.email},
-    documents:[{name:'План_помещения_'+id+'.pdf',type:'plan',kind:'Поэтажный план'},{name:'Выписка_ЕГРН_'+id+'.pdf',type:'ownership',kind:'Право собственности'}]};
+    documents:[{name:'План_помещения_'+num+'.pdf',type:'plan',kind:'Поэтажный план'},{name:'Выписка_ЕГРН_'+num+'.pdf',type:'ownership',kind:'Право собственности'}]};
   DB.units.push(u);closeM();await afterStateChange();}
 
 /* объект (здание) */
@@ -3108,7 +3128,7 @@ function fillTenantUnits(){
   const bid=val('f-tbuilding');
   const free=DB.units.filter(u=>u.building===bid && !u.tenant);
   const sel=document.getElementById('f-tunit'); if(!sel)return;
-  sel.innerHTML=`<option value="">— не размещать сейчас —</option>`+free.map(u=>`<option value="${u.id}">${u.id} · ${u.type} · ${u.area} м²</option>`).join('');
+  sel.innerHTML=`<option value="">— не размещать сейчас —</option>`+free.map(u=>`<option value="${u.id}">${esc(u.num||u.id)} · ${u.type} · ${u.area} м²</option>`).join('');
 }
 async function saveTenant(){
   if(!val('f-name').trim())return alert('Укажите наименование');
@@ -3125,7 +3145,7 @@ async function saveTenant(){
 /* договор */
 function contractModal(){const free=sUnits().filter(u=>!u.tenant);const pool=free.length?free:sUnits();openM(`<div class="modal-h"><h3>Новый договор</h3><span class="x" onclick="closeM()">×</span></div>
   <div class="modal-b"><div class="field"><label>Арендатор</label><select id="f-ten">${DB.tenants.map(t=>`<option value="${t.id}">${esc(t.name)}</option>`).join('')}</select></div>
-  <div class="field"><label>Помещение (свободные)</label><select id="f-unit">${pool.map(u=>`<option value="${u.id}">${u.id} · ${u.area} м² · ${esc(buildingOf(u.building)?.name||'')}</option>`).join('')}</select></div>
+  <div class="field"><label>Помещение (свободные)</label><select id="f-unit">${pool.map(u=>`<option value="${u.id}">${esc(u.num||u.id)} · ${u.area} м² · ${esc(buildingOf(u.building)?.name||'')}</option>`).join('')}</select></div>
   <div class="row2"><div class="field"><label>Тип ставки</label>${rateTypeSelect('f-ratetype','sqm')}</div><div class="field"><label id="f-ratetype-lbl">Ставка ₽/м²/мес</label><input id="f-rate" type="number" value="2200"></div></div>
   <div class="row2"><div class="field"><label>Индексация %/год</label><input id="f-idx" type="number" value="6"></div><div class="field"><label>День начисления аренды (число 1–28)</label><input id="f-accrualday" type="number" min="1" max="28" placeholder="общий из настроек"></div></div>
   <div class="row2"><div class="field"><label>Начало</label><input id="f-start" type="date" value="2026-07-01"></div><div class="field"><label>Окончание</label><input id="f-end" type="date" value="2029-06-30"></div></div></div>
@@ -3139,7 +3159,7 @@ async function saveContract(){const u=val('f-unit');const unit=unitOf(u); if(!un
 
 /* платёж */
 function paymentModal(){const cs=sContracts();openM(`<div class="modal-h"><h3>Новый платёж</h3><span class="x" onclick="closeM()">×</span></div>
-  <div class="modal-b"><div class="field"><label>Договор</label><select id="f-c">${cs.map(c=>{const t=tenantOf(c.tenant);return `<option value="${c.id}">${(c.id||'').toUpperCase()} · ${esc(t?t.name:'—')} · ${esc(c.unit)}</option>`;}).join('')}</select></div>
+  <div class="modal-b"><div class="field"><label>Договор</label><select id="f-c">${cs.map(c=>{const t=tenantOf(c.tenant);return `<option value="${c.id}">${(c.id||'').toUpperCase()} · ${esc(t?t.name:'—')} · ${esc(unitNum(c.unit))}</option>`;}).join('')}</select></div>
   <div class="row2"><div class="field"><label>Период</label><input id="f-period" type="month" value="${payPeriod||'2026-07'}"></div><div class="field"><label>Сумма, ₽</label><input id="f-amount" type="number" min="0"></div></div></div>
   <div class="modal-f"><button class="btn ghost" onclick="closeM()">Отмена</button><button class="btn" onclick="savePayment()">Добавить</button></div>`);}
 async function savePayment(){const cid=val('f-c'); if(!cid)return alert('Выберите договор');
@@ -3289,7 +3309,7 @@ async function saveDoc(type,id){const e=docEntity(type,id);if(!e)return;if(!e.do
 async function delDoc(type,id,i){const e=docEntity(type,id);if(!e||!e.documents)return;if(!confirm('Удалить документ «'+e.documents[i].name+'»?'))return;
   e.documents.splice(i,1); await saveState(); render(); reopenInfo(type,id);}
 function unitInfo(id){const u=unitOf(id);const c=DB.contracts.find(c=>c.unit===id);const t=u.tenant?tenantOf(u.tenant):null;const r=u.responsible||{};
-  openM(`<div class="modal-h"><h3>Помещение ${esc(u.id)}${u.name?' · '+esc(u.name):''}</h3><span class="x" onclick="closeM()">×</span></div>
+  openM(`<div class="modal-h"><h3>Помещение ${esc(u.num||u.id)}${u.name?' · '+esc(u.name):''}</h3><span class="x" onclick="closeM()">×</span></div>
   <div class="modal-b">
     <div class="sec-h">Характеристики</div>
     ${u.name?infoRow('Название',esc(u.name)):''}${infoRow('Объект',esc(buildingOf(u.building)?.name||'—'))}${infoRow('Тип',esc(u.type))}${infoRow('Площадь',esc(u.area)+' м²')}${infoRow('Этаж',esc(u.floor))}
@@ -3308,7 +3328,7 @@ function unitInfo(id){const u=unitOf(id);const c=DB.contracts.find(c=>c.unit===i
 // выселить арендатора: завершить договор, освободить помещение (история платежей сохраняется)
 async function evictTenant(uid){ if(!canEdit('contracts'))return; const u=unitOf(uid); if(!u||!u.tenant) return;
   const t=tenantOf(u.tenant);
-  if(!confirm(`Выселить арендатора${t?` «${t.name}»`:''} из помещения ${u.id}?\n\nДоговор будет завершён, помещение станет свободным.\nАрендатор и история платежей сохранятся.`)) return;
+  if(!confirm(`Выселить арендатора${t?` «${t.name}»`:''} из помещения ${u.num||u.id}?\n\nДоговор будет завершён, помещение станет свободным.\nАрендатор и история платежей сохранятся.`)) return;
   const c=DB.contracts.find(c=>c.unit===uid && c.status!=='ended');
   if(c){ c.status='ended'; c.end=TODAY.toISOString().slice(0,10); }
   u.tenant=null; u.status='vacant';
@@ -3316,7 +3336,7 @@ async function evictTenant(uid){ if(!canEdit('contracts'))return; const u=unitOf
 // заселить арендатора в свободное помещение (выбрать существующего или создать нового) + договор
 function assignTenantModal(uid){ const u=unitOf(uid); if(!u) return; if(u.tenant) return alert('Помещение уже занято.');
   const today=TODAY.toISOString().slice(0,10);
-  openM(`<div class="modal-h"><h3>Заселить арендатора — ${esc(uid)}</h3><span class="x" onclick="unitInfo('${uid}')">×</span></div>
+  openM(`<div class="modal-h"><h3>Заселить арендатора — ${esc(unitNum(uid))}</h3><span class="x" onclick="unitInfo('${uid}')">×</span></div>
   <div class="modal-b">
     <div class="field"><label>Арендатор</label><select id="as-ten" onchange="asToggleNew()"><option value="__new">➕ Новый арендатор…</option>${DB.tenants.map(t=>`<option value="${t.id}">${esc(t.name)}</option>`).join('')}</select></div>
     <div id="as-newbox"><div class="field"><label>Название нового арендатора</label><input id="as-name" placeholder="ООО «Компания»"></div>
@@ -3336,12 +3356,12 @@ async function assignTenant(uid){ const u=unitOf(uid); if(!u||u.tenant) return; 
   u.tenant=tid; closeM(); await afterStateChange(); }
 
 function editUnitModal(id){const u=unitOf(id);if(!u)return;const r=u.responsible||{};const o=u.owner||{};
-  openM(`<div class="modal-h"><h3>Редактировать помещение ${u.id}</h3><span class="x" onclick="closeM()">×</span></div>
+  openM(`<div class="modal-h"><h3>Редактировать помещение ${esc(u.num||u.id)}</h3><span class="x" onclick="closeM()">×</span></div>
   <div class="modal-b">
     <div class="sec-h">Характеристики</div>
-    <div class="row2"><div class="field"><label>Номер помещения</label><input id="e-uid" value="${esc(u.id)}" placeholder="напр. 1-01"></div>
+    <div class="row2"><div class="field"><label>Номер помещения</label><input id="e-uid" value="${esc(u.num||u.id)}" placeholder="напр. 1-01"></div>
       <div class="field"><label>Название <span class="t-sub">(необязательно)</span></label><input id="e-uname" value="${esc(u.name||'')}" placeholder="Переговорная"></div></div>
-    <div class="t-sub" style="margin:-4px 0 6px">При изменении номера он автоматически обновится во всех договорах, платежах, коммуналке, заявках и документах.</div>
+    <div class="t-sub" style="margin:-4px 0 6px">Номер уникален в пределах объекта — в разных объектах номера могут совпадать. Он обновится во всех договорах, платежах, коммуналке, заявках и документах.</div>
     <div class="row2"><div class="field"><label>Объект</label><select id="e-building">${buildingsList().map(b=>`<option value="${b.id}"${u.building===b.id?' selected':''}>${esc(b.name)}</option>`).join('')}</select></div>
       <div class="field"><label>Тип</label><select id="e-type">${['Офис','Ритейл','Кафе','Коворкинг','Склад'].map(x=>`<option${u.type===x?' selected':''}>${x}</option>`).join('')}</select></div></div>
     <div class="row2"><div class="field"><label>Этаж</label><input id="e-floor" type="number" value="${u.floor}"></div><div class="field"><label>Площадь, м²</label><input id="e-area" type="number" value="${u.area}"></div></div>
@@ -3359,25 +3379,17 @@ function editUnitModal(id){const u=unitOf(id);if(!u)return;const r=u.responsible
   </div>
   <div class="modal-f"><button class="btn ghost" onclick="unitInfo('${u.id}')">Отмена</button><button class="btn" onclick="saveUnitEdit('${u.id}')">Сохранить</button></div>`);}
 async function saveUnitEdit(id){const u=unitOf(id);if(!u)return;
-  // переименование номера помещения с обновлением всех ссылок
-  const newId=(val('e-uid')||'').trim();
-  if(newId && newId!==id){
-    if(DB.units.some(x=>x.id!==id && x.id===newId)) return alert('Помещение с номером «'+newId+'» уже существует. Выберите другой номер.');
-    DB.contracts.forEach(c=>{ if(c.unit===id) c.unit=newId; });
-    (DB.utilities||[]).forEach(x=>{ if(x.unit===id) x.unit=newId; });
-    (DB.requests||[]).forEach(x=>{ if(x.unit===id) x.unit=newId; });
-    (DB.listings||[]).forEach(x=>{ if(x.unit===id) x.unit=newId; });
-    (DB.signage||[]).forEach(x=>{ if(x.unit===id) x.unit=newId; });
-    u.id=newId;
-    // задачи хранятся на сервере отдельно — обновим у тех, что ссылались на это помещение
-    try{ const upd=(TASKS||[]).filter(t=>t.unit===id);
-      for(const t of upd){ await api('/api/tasks/'+t.id,'PATCH',{unit:newId}); }
-      if(upd.length) await reloadTasks();
-    }catch{}
-    id=newId;
+  // Меняем ОТОБРАЖАЕМЫЙ номер (num), уникальный в пределах объекта. Внутренний id НЕ трогаем —
+  // поэтому все связи (договоры/платежи/коммуналка/заявки/задачи) остаются целыми автоматически.
+  const newNum=(val('e-uid')||'').trim().replace(/[<>"'`&]/g,'');
+  const newBuilding=val('e-building')||u.building;
+  if(newNum && (newNum!==(u.num||u.id) || newBuilding!==u.building)){
+    if(DB.units.some(x=>x.id!==id && x.building===newBuilding && (x.num||x.id)===newNum))
+      return alert('В этом объекте уже есть помещение с номером «'+newNum+'». Выберите другой номер.');
   }
+  if(newNum) u.num=newNum;
   u.name=val('e-uname').trim();
-  u.building=val('e-building'); u.type=val('e-type'); u.floor=+val('e-floor'); u.area=+val('e-area');
+  u.building=newBuilding; u.type=val('e-type'); u.floor=+val('e-floor'); u.area=+val('e-area');
   u.responsible={name:val('e-rname'),role:val('e-rrole'),phone:val('e-rphone'),email:val('e-remail')};
   u.ownership=val('e-own');
   u.owner=u.ownership==='sold'?{name:val('e-oname'),inn:val('e-oinn'),contact:val('e-ocontact')}:null;
@@ -3386,7 +3398,7 @@ async function saveUnitEdit(id){const u=unitOf(id);if(!u)return;
 async function delUnit(id){const u=unitOf(id);if(!u)return;
   const c=DB.contracts.find(c=>c.unit===id);
   const warn=c?`\n\nВнимание: по помещению есть договор — он и связанные платежи тоже будут удалены.`:'';
-  if(!confirm(`Удалить помещение ${id}?${warn}`))return;
+  if(!confirm(`Удалить помещение ${u.num||id}?${warn}`))return;
   const cids=DB.contracts.filter(c=>c.unit===id).map(c=>c.id);
   DB.contracts=DB.contracts.filter(c=>c.unit!==id);
   DB.payments=DB.payments.filter(p=>!cids.includes(p.contract));
