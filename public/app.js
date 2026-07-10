@@ -2451,7 +2451,7 @@ function salaries(){
      return `<tr><td class="t-strong">${esc(u.full_name)}</td><td class="t-sub">${esc(u.position||'—')}</td>
      <td>${rec?money(rec.amount):'<span class="t-sub">не начислено</span>'}</td>
      <td>${rec&&rec.paid?money(rec.paid):'—'}</td><td>${rec?salPill(rec):'<span class="pill gray">—</span>'}</td>
-     ${(canEdit('salaries')||canEdit('employees'))?`<td style="text-align:right;white-space:nowrap">${canEdit('salaries')?(rec?(rec.paid<rec.amount?`<button class="btn sm" onclick="salPayModal('${rec.id}')">Выплатить</button>`:'<span class="t-sub">выплачено</span>'):`<button class="btn ghost sm" onclick="salaryModal(${u.id})">Начислить</button>`):''}${canEdit('employees')?` <button class="btn ghost sm" onclick="userModal(${u.id})" title="Редактировать сотрудника">✎</button>`:''}</td>`:''}</tr>`;}).join('')}
+     ${(canEdit('salaries')||canEdit('employees'))?`<td style="text-align:right;white-space:nowrap">${canEdit('salaries')?(rec?`${rec.paid<rec.amount?`<button class="btn sm" onclick="salPayModal('${rec.id}')">Выплатить</button>`:'<span class="t-sub">выплачено</span>'} <button class="btn ghost sm" onclick="salEditModal('${rec.id}')" title="Изменить начисление">✎₽</button> <button class="btn ghost sm" onclick="delSalary('${rec.id}')" title="Удалить начисление">🗑</button>`:`<button class="btn ghost sm" onclick="salaryModal(${u.id})">Начислить</button>`):''}${canEdit('employees')?` <button class="btn ghost sm" onclick="userModal(${u.id})" title="Редактировать сотрудника">✎</button>`:''}</td>`:''}</tr>`;}).join('')}
    </tbody></table></div></div>`);
 }
 function salaryModal(uid){const u=userOf(uid);if(!u)return;
@@ -2477,6 +2477,23 @@ async function bulkAccrue(){if(!confirm('Начислить зарплату в�
   USERS.forEach(u=>{ if(!DB.salaries.some(s=>s.user_id===u.id&&s.period===salPeriod)){ const last=[...DB.salaries].reverse().find(s=>s.user_id===u.id);
     DB.salaries.push({id:'sal'+Date.now()+'_'+u.id,user_id:u.id,period:salPeriod,amount:last?last.amount:100000,paid:0,status:'accrued',paidDate:null,method:null}); }});
   await afterStateChange();}
+// изменить сумму начисления (нельзя ниже уже выплаченного)
+function salEditModal(id){const r=(DB.salaries||[]).find(s=>s.id===id);if(!r)return;const u=userOf(r.user_id);
+  openM(`<div class="modal-h"><h3>Изменить начисление</h3><span class="x" onclick="closeM()">×</span></div>
+  <div class="modal-b">${infoRow('Сотрудник',esc(u?u.full_name:''))}${infoRow('Период',fmtPeriod(r.period))}${r.paid?infoRow('Уже выплачено',money(r.paid)):''}
+  <div class="field" style="margin-top:12px"><label>Сумма начисления, ₽</label><input id="se-amt" type="number" value="${r.amount}"></div>
+  ${r.paid?`<div class="t-sub">Сумму нельзя сделать меньше уже выплаченного (${money(r.paid)}).</div>`:''}</div>
+  <div class="modal-f"><button class="btn ghost" onclick="closeM()">Отмена</button><button class="btn" onclick="saveSalEdit('${id}')">Сохранить</button></div>`);}
+async function saveSalEdit(id){const r=(DB.salaries||[]).find(s=>s.id===id);if(!r)return;const amt=+val('se-amt')||0;
+  if(amt<=0)return alert('Укажите сумму больше 0');
+  if(amt<r.paid)return alert('Сумма начисления не может быть меньше уже выплаченного ('+money(r.paid)+'). Сначала измените выплату или удалите начисление.');
+  r.amount=amt; r.status=r.paid>=r.amount?'paid':(r.paid>0?'partial':'accrued');
+  closeM(); await afterStateChange();}
+// удалить начисление (с предупреждением, если по нему была выплата)
+async function delSalary(id){const r=(DB.salaries||[]).find(s=>s.id===id);if(!r)return;const u=userOf(r.user_id);
+  const warn=r.paid>0?`\n\nВнимание: по начислению уже проведена выплата ${money(r.paid)} — она тоже будет удалена.`:'';
+  if(!confirm(`Удалить начисление ${money(r.amount)} сотруднику ${u?u.full_name:''} за ${fmtPeriod(r.period)}?${warn}`))return;
+  DB.salaries=(DB.salaries||[]).filter(s=>s.id!==id); await afterStateChange();}
 
 /* ============================================================
    ИНТЕГРАЦИИ / СИНХРОНИЗАЦИЯ
