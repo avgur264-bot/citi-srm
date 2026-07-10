@@ -2752,11 +2752,13 @@ function buildImportRec(type,get,errors,line){
   if(type==='buildings'){ const name=get('name'); if(!name){errors.push(`Строка ${line}: пустое название`);return null;}
     if(buildingsList().some(b=>b.name.toLowerCase()===name.toLowerCase())){errors.push(`Строка ${line}: объект «${name}» уже есть`);return null;}
     return {id:'b'+Date.now()+'_'+line,name,address:get('address')}; }
-  if(type==='units'){ const id=get('id').replace(/[<>"'`&]/g,''); if(!id){errors.push(`Строка ${line}: пустой номер`);return null;}
-    if(DB.units.some(u=>u.id===id)){errors.push(`Строка ${line}: помещение «${id}» уже есть`);return null;}
+  if(type==='units'){ const num=get('id').replace(/[<>"'`&]/g,''); if(!num){errors.push(`Строка ${line}: пустой номер`);return null;}
     const bn=get('building'); const b=buildingsList().find(x=>x.name.toLowerCase()===bn.toLowerCase()||x.id===bn);
     if(!b){errors.push(`Строка ${line}: объект «${bn}» не найден`);return null;}
-    return {id,num:id,building:b.id,floor:+get('floor')||1,area:+String(get('area')).replace(',','.')||0,type:get('type')||'Офис',tenant:null,status:'free',ownership:'own',owner:null,responsible:null,documents:[]}; }
+    // дубликат — только В ЭТОМ объекте (в разных объектах номера могут совпадать)
+    if(DB.units.some(u=>u.building===b.id && (u.num||u.id)===num)){errors.push(`Строка ${line}: помещение «${num}» уже есть в этом объекте`);return null;}
+    const id=genUnitId(num,b.id);   // глобально-уникальный внутренний id; при коллизии между объектами id≠num
+    return {id,num,building:b.id,floor:+get('floor')||1,area:+String(get('area')).replace(',','.')||0,type:get('type')||'Офис',tenant:null,status:'free',ownership:'own',owner:null,responsible:null,documents:[]}; }
   if(type==='tenants'){ const name=get('name'); if(!name){errors.push(`Строка ${line}: пустое название`);return null;}
     if(DB.tenants.some(t=>t.name.toLowerCase()===name.toLowerCase()||(get('inn')&&t.inn===get('inn')))){errors.push(`Строка ${line}: арендатор «${name}» уже есть`);return null;}
     return {id:'t'+Date.now()+'_'+line,name,inn:get('inn'),contact:get('contact'),phone:get('phone'),email:get('email'),industry:get('industry')}; }
