@@ -12,7 +12,7 @@ import {
   db, seed, resetData, hashPassword, verifyPassword,
   ROLES, ROLE_KEYS, perms, canView, canEdit, canViewS, canEditS
 } from './db.js';
-import { ask as llmAsk, hasModelKey, providerName } from './llm.js';
+import { ask as llmAsk, askVision, hasModelKey, hasVisionModel, visionModelName, providerName } from './llm.js';
 import { avitoConfigured, cianConfigured, feedTokenOk, feedUrls, avitoStats, buildAvitoFeedXml } from './ads.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -278,6 +278,41 @@ function assistAllowed(uid){ const now=Date.now(); const r=assistHits.get(uid)||
 let _assistDay=null, _assistDayCount=0;
 function assistDayAllowed(limit){ const d=new Date().toISOString().slice(0,10);
   if(_assistDay!==d){ _assistDay=d; _assistDayCount=0; } _assistDayCount++; return _assistDayCount<=limit; }
+
+// ---------- распознавание помещений с плана (vision) ----------
+const PLAN_RECOGNIZE_PROMPT = `Ты — помощник по коммерческой недвижимости. На изображении — поэтажный план здания.
+Найди на плане отдельные помещения (офисы, кабинеты, торговые залы, склады) с их номерами.
+Ответь СТРОГО одним массивом JSON, без пояснений и текста вокруг. Каждый элемент строго такого вида:
+{"number":"<номер помещения как на плане, строка>","area":<площадь в м² числом или null>,"floor":<номер этажа числом или null>,"type":"<назначение: Офис/Склад/Торговое/Кабинет/Санузел/Коридор, либо пусто>"}
+Правила:
+- включай только помещения, у которых на плане виден НОМЕР;
+- номер бери как на плане (например "101", "2-05", "12");
+- площадь — только если она подписана на плане (число в м²); если не видно — null, не выдумывай;
+- этаж — если очевиден из плана/подписи, иначе null;
+- коридоры, лестницы, санузлы включай только если у них есть номер;
+- не придумывай помещения, которых нет.
+Верни ТОЛЬКО JSON-массив.`;
+
+// разбор ответа модели в чистый массив помещений (санитизация)
+function parsePlanUnits(raw){
+  let s = String(raw||'').trim();
+  const a = s.indexOf('['), z = s.lastIndexOf(']');
+  if(a>=0 && z>a) s = s.slice(a, z+1);           // вырезаем массив из возможного markdown/текста
+  let arr; try{ arr = JSON.parse(s); }catch{ return []; }
+  if(!Array.isArray(arr)) return [];
+  const out = [], seen = new Set();
+  for(const it of arr){
+    if(!it || typeof it!=='object') continue;
+    const num = String(it.number ?? it.num ?? it.id ?? '').trim().replace(/[<>"'`&]/g,'').slice(0,20);
+    if(!num || seen.has(num)) continue; seen.add(num);
+    let area = Number(it.area); if(!isFinite(area) || area<=0 || area>100000) area = null; else area = Math.round(area*10)/10;
+    let floor = parseInt(it.floor,10); if(!isFinite(floor) || floor< -5 || floor>200) floor = null;
+    const type = String(it.type ?? it.kind ?? '').trim().replace(/[<>"'`&]/g,'').slice(0,30);
+    out.push({ number:num, area, floor, type });
+    if(out.length>=300) break;
+  }
+  return out;
+}
 
 // ---------- ежедневная сводка в Telegram ----------
 const fmtMoney = n => new Intl.NumberFormat('ru-RU').format(Math.round(n||0)) + ' ₽';
@@ -830,6 +865,34 @@ async function api(req, res, url){
     }catch(e){
       console.error('[assistant] error', e.message);
       return send(res,200,{ enabled:true, error:'Помощник временно недоступен, попробуйте позже.' });
+    }finally{ clearTimeout(timer); }
+  }
+
+  // ---- Распознавание помещений с плана (vision; в базу НЕ пишет — только предлагает) ----
+  if(path==='/api/plan/recognize' && method==='POST'){
+    const st = JSON.parse(db.prepare(`SELECT json FROM state WHERE key='main'`).get().json);
+    const cfg = (st.settings && st.settings.assistant) || {};
+    if(!hasVisionModel() || !cfg.enabled) return send(res,200,{ enabled:false });   // нет ключа/модели или помощник выключен
+    if(!canEditS(me.role,'objects',st)) return send(res,403,{ error:'Нет прав на изменение объектов' });
+    if(!assistAllowed(me.id)) return send(res,429,{ error:'Слишком часто. Подождите минуту.' });
+    const b = await readBody(req);
+    if(!b.dataUrl || !/^data:image\/(png|jpe?g|webp)/i.test(String(b.dataUrl))) return send(res,400,{ error:'Нужна картинка плана (PNG/JPG)' });
+    const mime = (/^data:([^;,]+)[;,]/.exec(b.dataUrl)||[])[1] || 'image/png';
+    const buf = Buffer.from((b.dataUrl.split(',')[1]||''), 'base64');
+    if(!buf.length) return send(res,400,{ error:'Пустой файл' });
+    if(buf.length > 10*1024*1024) return send(res,413,{ error:'Картинка больше 10 МБ — уменьшите масштаб' });
+    const fl = String(b.floor ?? '').replace(/[^0-9-]/g,'').slice(0,4);
+    const prompt = PLAN_RECOGNIZE_PROMPT + (fl!=='' ? `\nВсе помещения на этом изображении относятся к этажу ${fl}.` : '');
+    const ctrl = new AbortController(); const timer = setTimeout(()=>ctrl.abort(), 55_000);
+    try{
+      const raw = await askVision(prompt, { buffer:buf, mime, name: /png/i.test(mime)?'plan.png':'plan.jpg' }, { signal: ctrl.signal });
+      const units = parsePlanUnits(raw);
+      console.log(`[plan] uid=${me.id} распознано=${units.length} модель=${visionModelName()}`);
+      return send(res,200,{ enabled:true, units, model: visionModelName() });
+    }catch(e){
+      console.error('[plan] error', e.message);
+      const msg = e.name==='AbortError' ? 'превышено время ожидания (план слишком сложный)' : e.message;
+      return send(res,200,{ enabled:true, error:'Не удалось распознать план: '+msg });
     }finally{ clearTimeout(timer); }
   }
 

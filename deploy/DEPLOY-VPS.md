@@ -55,9 +55,12 @@ ssh root@IP_СЕРВЕРА
 Скопируйте и выполните одной командой:
 
 ```bash
-apt update && apt install -y docker.io docker-compose-plugin sqlite3 git
+apt update && apt install -y docker.io docker-compose-v2 sqlite3 git
 systemctl enable --now docker
 ```
+
+> Примечание: в Ubuntu пакет с командой `docker compose` называется `docker-compose-v2`
+> (не `docker-compose-plugin` — это имя только в репозитории Docker).
 
 Проверка: `docker --version` должна показать версию.
 

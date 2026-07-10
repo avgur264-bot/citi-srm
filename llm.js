@@ -58,6 +58,52 @@ async function gigachatAsk(messages, opts){
   return (j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content) || '';
 }
 
+// ---------- GigaChat Vision (распознавание изображений) ----------
+// Механизм: 1) загружаем картинку в файловое хранилище GigaChat (POST /files,
+// multipart), получаем id; 2) шлём обычный chat/completions, но в сообщении
+// добавляем attachments:[id]. Vision поддерживают модели GigaChat-Pro / GigaChat-2-Max.
+const GC_FILES = process.env.GIGACHAT_FILES_URL || 'https://gigachat.devices.sberbank.ru/api/v1/files';
+const VISION_MODEL = process.env.GIGACHAT_VISION_MODEL || process.env.LLM_VISION_MODEL || 'GigaChat-2-Max';
+
+// доступно ли распознавание картинок (сейчас — только GigaChat с ключом)
+export function hasVisionModel(){ return PROVIDER === 'gigachat' && !!process.env.GIGACHAT_AUTH_KEY; }
+export function visionModelName(){ return VISION_MODEL; }
+
+// загрузка картинки в хранилище GigaChat → id файла (FormData/Blob — глобальные в Node 18+)
+async function gigachatUploadImage(buf, mime, filename){
+  const token = await gigachatToken();
+  const fd = new FormData();
+  fd.append('purpose', 'general');
+  fd.append('file', new Blob([buf], { type: mime || 'image/png' }), filename || 'plan.png');
+  const r = await fetch(GC_FILES, { method:'POST', headers:{ 'Authorization':'Bearer '+token, 'Accept':'application/json' }, body: fd });
+  if(r.status === 401){ _gcToken = null; throw new Error('GigaChat 401 (токен/ключ)'); }
+  if(!r.ok){ const t = await r.text().catch(()=> ''); throw new Error('GigaChat upload '+r.status+' '+t.slice(0,200)); }
+  const j = await r.json();
+  const id = j.id || (j.data && j.data[0] && j.data[0].id);
+  if(!id) throw new Error('GigaChat: не получен id файла');
+  return id;
+}
+
+// Запрос к vision-модели: текстовый промпт + одна картинка (Buffer). Возвращает текст ответа.
+// image = { buffer, mime, name }
+export async function askVision(prompt, image, opts={}){
+  if(PROVIDER !== 'gigachat') throw new Error('Распознавание изображений доступно только с GigaChat');
+  const fileId = await gigachatUploadImage(image.buffer, image.mime, image.name);
+  const token = await gigachatToken();
+  const r = await fetch(GC_CHAT, {
+    method:'POST',
+    headers:{ 'Authorization':'Bearer '+token, 'Content-Type':'application/json', 'Accept':'application/json' },
+    body: JSON.stringify({ model: VISION_MODEL,
+      messages: [{ role:'user', content: prompt, attachments: [fileId] }],
+      temperature: opts.temperature ?? 0.1, max_tokens: opts.maxTokens ?? 1500 }),
+    signal: opts.signal,
+  });
+  if(r.status === 401){ _gcToken = null; throw new Error('GigaChat 401 (токен/ключ)'); }
+  if(!r.ok){ const t = await r.text().catch(()=> ''); throw new Error('GigaChat vision '+r.status+' '+t.slice(0,300)); }
+  const j = await r.json();
+  return (j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content) || '';
+}
+
 // ---------- YandexGPT (задел; включается LLM_PROVIDER=yandexgpt) ----------
 async function yandexAsk(messages, opts){
   const key = process.env.YANDEX_API_KEY, folder = process.env.YANDEX_FOLDER_ID;

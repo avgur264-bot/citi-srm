@@ -192,6 +192,7 @@ async function api(path, method='GET', body){
   // Telegram-отправка и AI-помощник работают только на реальном сервере, не в автономном демо.
   if(path==='/api/notify/test') return {ok:false, demo:true};
   if(path==='/api/assistant'&&method==='POST') return {enabled:false};
+  if(path==='/api/plan/recognize'&&method==='POST') return {enabled:false}; // распознавание плана недоступно в автономном демо
   // В автономном демо нет файловой системы — храним файл встроенным data-URL (как раньше).
   if(path==='/api/files'&&method==='POST') return {url:body.dataUrl, stored:'embed'};
   if(path==='/api/auth/register'&&method==='POST'){

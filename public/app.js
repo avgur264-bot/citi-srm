@@ -818,6 +818,8 @@ function planModal(bid){
       ).join('')}</div>`:''}
     ${ed?`<div class="field"><label>${pd.length?'Добавить ещё файлы плана':'Загрузить план объекта'} <span class="t-sub">— PNG, JPG, WEBP или PDF, можно несколько файлов, до 12 МБ каждый</span></label>
       <input type="file" accept="image/png,image/jpeg,image/webp,application/pdf" multiple onchange="onPlanFiles('${bid}',this)" style="font-size:13px;padding:8px;border:1px dashed var(--line2);border-radius:9px;background:var(--bg2);width:100%"></div>`:''}
+    ${ed&&assistOn()?`<div style="margin:2px 0 10px"><button class="btn ghost sm" onclick="recognizePlanModal('${bid}')">🤖 Распознать помещения с плана (ИИ)</button>
+      <div class="t-sub" style="margin-top:3px">GigaChat прочитает план (картинку или PDF) и предложит список помещений — вы проверите и добавите.</div></div>`:''}
     <div class="sec-h">Схема занятости</div>
     <div style="display:flex;gap:14px;flex-wrap:wrap;margin-bottom:12px;font-size:12px">${Object.entries(PLAN_LBL).map(([k,l])=>`<span style="display:inline-flex;align-items:center;gap:5px"><i style="width:12px;height:12px;border-radius:3px;background:${PLAN_COL[k]};display:inline-block"></i>${l}</span>`).join('')}</div>
     ${floors.length?floors.map(f=>`<div style="margin-bottom:12px"><div class="t-sub" style="margin-bottom:6px">Этаж ${f}</div>
@@ -857,6 +859,119 @@ function openPlanFile(bid,i){ const b=buildingOf(bid); const d=((b&&b.planDocs)|
   const s=safeUrl(url); if(s) window.open(s,'_blank','noopener'); else alert('Файл недоступен для открытия.'); }
 async function delPlanDoc(bid,i){ const b=buildingOf(bid); if(!b||!Array.isArray(b.planDocs))return; const d=b.planDocs[i]; if(!d)return;
   if(!confirm('Убрать «'+(d.name||'файл')+'» из плана объекта?'))return; b.planDocs.splice(i,1); await afterStateChange(); planModal(bid); }
+
+/* ---------- Распознавание помещений с плана (ИИ, GigaChat Vision) ---------- */
+// динамическая подгрузка pdf.js (для рендера PDF-плана в картинку) — только когда нужно
+let _pdfjsPromise=null;
+function loadScriptOnce(src){ return new Promise((res,rej)=>{ const s=document.createElement('script'); s.src=src; s.onload=()=>res(); s.onerror=()=>rej(new Error('Не удалось загрузить '+src)); document.head.appendChild(s); }); }
+async function ensurePdfJs(){
+  if(window.pdfjsLib) return window.pdfjsLib;
+  if(!_pdfjsPromise){ _pdfjsPromise=(async()=>{
+    await loadScriptOnce('https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js');
+    if(window.pdfjsLib) window.pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+  })(); }
+  await _pdfjsPromise; if(!window.pdfjsLib) throw new Error('pdf.js не загрузился'); return window.pdfjsLib;
+}
+function dataUrlToBytes(u){ const b64=String(u).split(',')[1]||''; const bin=atob(b64); const arr=new Uint8Array(bin.length); for(let i=0;i<bin.length;i++)arr[i]=bin.charCodeAt(i); return arr; }
+function loadImage(src){ return new Promise((res,rej)=>{ const im=new Image(); im.onload=()=>res(im); im.onerror=()=>rej(new Error('Не удалось прочитать картинку')); im.src=src; }); }
+// первую страницу PDF → PNG (с ограничением размера)
+async function pdfToImageDataUrl(pdfDataUrl){
+  const pdfjs=await ensurePdfJs(); const pdf=await pdfjs.getDocument({data:dataUrlToBytes(pdfDataUrl)}).promise; const page=await pdf.getPage(1);
+  const v1=page.getViewport({scale:1}); const maxD=2000; const scale=Math.min(2.5, maxD/Math.max(v1.width,v1.height));
+  const vp=page.getViewport({scale}); const c=document.createElement('canvas'); c.width=Math.round(vp.width); c.height=Math.round(vp.height);
+  await page.render({canvasContext:c.getContext('2d'),viewport:vp}).promise;
+  let out=c.toDataURL('image/png'); if(out.length>12*1024*1024) out=c.toDataURL('image/jpeg',0.9); return out;
+}
+// картинку → нормализованный dataURL (ограничение по стороне 2000px)
+async function imageToDataUrl(srcDataUrl){
+  const im=await loadImage(srcDataUrl); let w=im.naturalWidth||im.width, h=im.naturalHeight||im.height; if(!w||!h)throw new Error('Пустая картинка');
+  const k=Math.min(1,2000/Math.max(w,h)); w=Math.round(w*k); h=Math.round(h*k);
+  const c=document.createElement('canvas'); c.width=w; c.height=h; c.getContext('2d').drawImage(im,0,0,w,h);
+  let out=c.toDataURL('image/png'); if(out.length>12*1024*1024) out=c.toDataURL('image/jpeg',0.9); return out;
+}
+async function urlToDataUrl(url){ if(!url)throw new Error('Нет файла'); if(url.startsWith('data:'))return url;
+  const s=safeUrl(url); if(!s)throw new Error('Файл недоступен'); const r=await fetch(s); if(!r.ok)throw new Error('Не удалось загрузить файл плана');
+  const bl=await r.blob(); return await new Promise((res,rej)=>{ const fr=new FileReader(); fr.onload=()=>res(String(fr.result)); fr.onerror=()=>rej(new Error('Ошибка чтения файла')); fr.readAsDataURL(bl); }); }
+const isPdfDoc = d => !d.img && /\.pdf($|\?)/i.test((d.name||'')+' '+(d.url||''));
+
+function recognizePlanModal(bid){
+  const b=buildingOf(bid); if(!b)return; const pd=Array.isArray(b.planDocs)?b.planDocs:[];
+  const choices=pd.map((d,i)=>`<label style="display:flex;gap:8px;align-items:center;margin:4px 0;cursor:pointer">
+    <input type="radio" name="prsrc" value="${i}"${i===0?' checked':''}> <span>${d.img?'🖼':'📄'} ${esc(d.name||('План '+(i+1)))}</span></label>`).join('');
+  openM(`<div class="modal-h"><h3>🤖 Распознавание помещений с плана</h3><span class="x" onclick="closeM()">×</span></div>
+  <div class="modal-b">
+    <div class="t-sub" style="margin-bottom:8px">ИИ (GigaChat) прочитает план и предложит список помещений с номерами и площадями. Вы проверите и добавите нужные — до подтверждения в базу ничего не попадёт. Точность зависит от чёткости плана.</div>
+    ${pd.length?`<div class="sec-h" style="margin-top:0">Выберите загруженный план</div>${choices}`:'<div class="t-sub">У объекта пока нет загруженных планов — загрузите файл ниже.</div>'}
+    <div class="field" style="margin-top:8px"><label>${pd.length?'…или загрузите новый файл':'Загрузите файл плана'} <span class="t-sub">(PNG, JPG или PDF)</span></label>
+      <input type="file" id="prFile" accept="image/png,image/jpeg,image/webp,application/pdf" style="font-size:13px;padding:8px;border:1px dashed var(--line2);border-radius:9px;background:var(--bg2);width:100%"></div>
+    <div class="row2" style="margin-top:4px"><div class="field"><label>Этаж <span class="t-sub">(если план одного этажа)</span></label><input id="prFloor" type="number" placeholder="напр. 1"></div>
+      <div class="field" style="display:flex;align-items:flex-end"><button class="btn" style="width:100%" onclick="runPlanRecognize('${bid}')">🔍 Распознать</button></div></div>
+    <div id="planRecOut" style="margin-top:10px"></div>
+  </div>
+  <div class="modal-f"><button class="btn ghost" onclick="closeM()">Закрыть</button></div>`);
+}
+
+async function runPlanRecognize(bid){
+  const out=document.getElementById('planRecOut'); const say=h=>{ if(out)out.innerHTML=h; };
+  try{
+    const b=buildingOf(bid); const pd=Array.isArray(b.planDocs)?b.planDocs:[];
+    const fi=document.getElementById('prFile'); const f=fi&&fi.files&&fi.files[0];
+    let srcDataUrl, isPdf;
+    say('<div class="t-sub">⏳ Готовлю изображение…</div>');
+    if(f){
+      if(!/^(image\/(png|jpe?g|webp)|application\/pdf)$/i.test(f.type)) throw new Error('Подходят только PNG, JPG или PDF');
+      if(f.size>15*1024*1024) throw new Error('Файл больше 15 МБ');
+      srcDataUrl=await new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(String(r.result));r.onerror=()=>rej(new Error('Ошибка чтения файла'));r.readAsDataURL(f);});
+      isPdf=/pdf/i.test(f.type);
+    }else{
+      const sel=document.querySelector('input[name="prsrc"]:checked'); if(!sel) throw new Error('Выберите план или загрузите файл');
+      const d=pd[+sel.value]; if(!d) throw new Error('План не найден'); srcDataUrl=await urlToDataUrl(d.url); isPdf=isPdfDoc(d);
+    }
+    say('<div class="t-sub">⏳ Обрабатываю изображение…</div>');
+    const imgDataUrl=isPdf?await pdfToImageDataUrl(srcDataUrl):await imageToDataUrl(srcDataUrl);
+    say('<div class="t-sub">🤖 GigaChat распознаёт план… это может занять до минуты.</div>');
+    const floor=(document.getElementById('prFloor').value||'').trim();
+    const r=await api('/api/plan/recognize','POST',{dataUrl:imgDataUrl,building:bid,floor});
+    if(r.enabled===false){ say('<div class="empty">ИИ-помощник выключен или не задан ключ модели. Включите в «Настройки → AI-помощник».</div>'); return; }
+    if(r.error){ say('<div class="empty">⚠️ '+esc(r.error)+'</div>'); return; }
+    const units=Array.isArray(r.units)?r.units:[];
+    if(!units.length){ say('<div class="empty">Не удалось распознать помещения. Попробуйте более чёткий файл, увеличьте масштаб плана или укажите этаж.</div>'); return; }
+    renderPlanRecTable(bid,units);
+  }catch(e){ say('<div class="empty">⚠️ '+esc(e.message||String(e))+'</div>'); }
+}
+
+function renderPlanRecTable(bid,units){
+  const out=document.getElementById('planRecOut'); if(!out)return; const types=(stg().unitTypes||['Офис','Склад']);
+  const rows=units.map((u,i)=>{ const dup=!!unitOf(u.number);
+    const topt=types.map(t=>`<option${(u.type&&String(t).toLowerCase()===String(u.type).toLowerCase())?' selected':''}>${esc(t)}</option>`).join('');
+    return `<tr data-i="${i}"${dup?' style="background:rgba(255,107,107,.10)"':''}>
+      <td style="text-align:center"><input type="checkbox" id="pr-chk-${i}"${dup?'':' checked'}></td>
+      <td><input id="pr-num-${i}" value="${esc(u.number)}" style="width:78px"></td>
+      <td><input id="pr-area-${i}" type="number" step="0.1" value="${u.area??''}" style="width:66px" placeholder="—"></td>
+      <td><input id="pr-floor-${i}" type="number" value="${u.floor??''}" style="width:52px" placeholder="—"></td>
+      <td><select id="pr-type-${i}">${topt}</select></td>
+      <td class="t-sub" style="color:#e0564f">${dup?'уже есть':''}</td></tr>`; }).join('');
+  const dupN=units.filter(u=>unitOf(u.number)).length;
+  out.innerHTML=`<div class="sec-h">Найдено помещений: ${units.length}${dupN?` · из них уже в базе: ${dupN} (галочки сняты)`:''}</div>
+    <div class="t-sub" style="margin-bottom:6px">Проверьте номера и площади, поправьте при необходимости. Снимите галочку у ненужных. Красным — помещения, которые уже есть.</div>
+    <div style="overflow:auto"><table id="planRecTable"><thead><tr><th></th><th>Номер</th><th>м²</th><th>Этаж</th><th>Тип</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>
+    <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap"><button class="btn" onclick="addRecognizedUnits('${bid}')">✓ Добавить отмеченные</button>
+      <button class="btn ghost" onclick="recognizePlanModal('${bid}')">↻ Заново</button></div>`;
+}
+
+async function addRecognizedUnits(bid){
+  const trs=document.querySelectorAll('#planRecTable tbody tr'); const add=[]; let dup=0, blank=0;
+  trs.forEach(tr=>{ const i=tr.dataset.i; const chk=document.getElementById('pr-chk-'+i); if(!chk||!chk.checked)return;
+    const num=(document.getElementById('pr-num-'+i).value||'').trim().replace(/[<>"'`&]/g,''); if(!num){blank++;return;}
+    if(unitOf(num)||add.some(u=>u.id===num)){dup++;return;}
+    const area=+document.getElementById('pr-area-'+i).value||0; const floor=+document.getElementById('pr-floor-'+i).value||1; const type=document.getElementById('pr-type-'+i).value||'Офис';
+    add.push({ id:num,name:'',building:bid,floor,area,type,tenant:null,status:'free',ownership:'own',owner:null,
+      responsible:{name:ME.full_name,role:ME.position,phone:ME.phone,email:ME.email},documents:[] }); });
+  if(!add.length){ alert('Не отмечено ни одного нового помещения'+(dup?` (пропущено дубликатов: ${dup})`:'')); return; }
+  DB.units.push(...add); await afterStateChange();
+  alert('Добавлено помещений: '+add.length+(dup?`\nПропущено дубликатов: ${dup}`:'')+(blank?`\nПропущено без номера: ${blank}`:''));
+  closeM(); planModal(bid);
+}
 
 /* ---------- универсальная сворачиваемая секция (для арендаторов/договоров по объектам) ---------- */
 const expandedSections = new Set();
