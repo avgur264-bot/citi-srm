@@ -2467,13 +2467,23 @@ async function saveSalary(uid){const amt=+val('s-amt')||0;const per=val('s-per')
   if(DB.salaries.some(s=>s.user_id===uid&&s.period===per))return alert('За этот период сотруднику уже начислено');
   DB.salaries.push({id:'sal'+Date.now(),user_id:uid,period:per,amount:amt,paid:0,status:'accrued',paidDate:null,method:null});
   salPeriod=per; closeM(); await afterStateChange();}
-function salPayModal(id){const r=(DB.salaries||[]).find(s=>s.id===id);if(!r)return;const u=userOf(r.user_id);const rem=r.amount-r.paid;
-  openM(`<div class="modal-h"><h3>Выплата зарплаты</h3><span class="x" onclick="closeM()">×</span></div>
-  <div class="modal-b">${infoRow('Сотрудник',esc(u?u.full_name:''))}${infoRow('Период',fmtPeriod(r.period))}${infoRow('Начислено',money(r.amount))}${infoRow('Выплачено',money(r.paid))}${infoRow('Остаток',money(rem))}
-  <div class="row2" style="margin-top:12px"><div class="field"><label>Сумма выплаты, ₽</label><input id="sp-amt" type="number" value="${rem}"></div><div class="field"><label>Способ</label><select id="sp-method">${payMethodOpts('bank')}</select></div></div></div>
-  <div class="modal-f"><button class="btn ghost" onclick="closeM()">Отмена</button><button class="btn" onclick="saveSalPay('${id}')">Выплатить</button></div>`);}
+function salTx(r){ if(Array.isArray(r.transactions)&&r.transactions.length) return r.transactions; return r.paid>0?[{amount:r.paid,date:r.paidDate,method:r.method}]:[]; }
+function salPayModal(id){const r=(DB.salaries||[]).find(s=>s.id===id);if(!r)return;const u=userOf(r.user_id);const rem=r.amount-r.paid;const tx=salTx(r);
+  openM(`<div class="modal-h"><h3>Выплата зарплаты / аванс</h3><span class="x" onclick="closeM()">×</span></div>
+  <div class="modal-b">${infoRow('Сотрудник',esc(u?u.full_name:''))}${infoRow('Период',fmtPeriod(r.period))}${infoRow('Начислено',money(r.amount))}${infoRow('Выплачено',money(r.paid))}${infoRow('Остаток',rem>0?`<span style="color:var(--red)">${money(rem)}</span>`:'<span style="color:var(--green)">0 ₽</span>')}
+  ${tx.length?`<div class="sec-h">История выплат</div>`+tx.map(x=>`<div class="doc"><div class="di">💸</div><div style="flex:1;min-width:0"><div class="t-strong">${money(x.amount)} · ${esc(payLabel(x.method))}${x.note?` · ${esc(x.note)}`:''}</div><div class="t-sub">${x.date?fmtD(x.date):'—'}</div></div></div>`).join(''):''}
+  ${rem>0?`<div class="sec-h">Внести выплату или аванс</div>
+  <div class="row2"><div class="field"><label>Сумма, ₽</label><input id="sp-amt" type="number" value="${rem}"></div><div class="field"><label>Дата</label><input id="sp-date" type="date" value="${TODAY.toISOString().slice(0,10)}"></div></div>
+  <div class="field"><label>Способ</label><select id="sp-method">${payMethodOpts('bank')}</select></div>
+  <div class="t-sub">Меньше остатка — это <b>аванс</b> (статус «Частично»). Можно вносить несколько авансов; при полной сумме статус станет «Выплачено».</div>`:'<div class="t-sub" style="margin-top:8px">Выплачено полностью.</div>'}</div>
+  <div class="modal-f">${rem>0?`<button class="btn ghost" onclick="closeM()">Отмена</button><button class="btn" onclick="saveSalPay('${id}')">Провести</button>`:'<button class="btn" onclick="closeM()">Закрыть</button>'}</div>`);}
 async function saveSalPay(id){const r=(DB.salaries||[]).find(s=>s.id===id);if(!r)return;const add=+val('sp-amt')||0;if(add<=0)return alert('Укажите сумму');
-  r.paid=Math.min(r.amount,r.paid+add);r.paidDate=TODAY.toISOString().slice(0,10);r.method=val('sp-method');r.status=r.paid>=r.amount?'paid':'partial';
+  if(!Array.isArray(r.transactions)) r.transactions = r.paid>0?[{amount:r.paid,date:r.paidDate,method:r.method}]:[];
+  const date=val('sp-date')||TODAY.toISOString().slice(0,10); const method=val('sp-method');
+  const isAdvance=(r.paid+add)<r.amount;
+  r.transactions.push({amount:add,date,method,note:isAdvance?'аванс':'окончательный расчёт'});
+  r.paid=Math.min(r.amount,r.transactions.reduce((s,x)=>s+(+x.amount||0),0));
+  r.paidDate=date;r.method=method;r.status=r.paid>=r.amount?'paid':'partial';
   closeM(); await afterStateChange();}
 async function bulkAccrue(){if(!confirm('Начислить зарплату всем сотрудникам за '+fmtPeriod(salPeriod)+'? (тем, у кого ещё не начислено за этот период)'))return;
   if(!DB.salaries)DB.salaries=[];
