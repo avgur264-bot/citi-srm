@@ -606,6 +606,25 @@ async function api(req, res, url){
     return send(res,200,{ ok:true });
   }
 
+  // ---- Выгрузка бэкапа по токену (для автоматического скачивания на сервер клиента) ----
+  // Включается только если задан BACKUP_TOKEN в окружении клиента (иначе 404 — эндпоинта как бы нет).
+  // Отдаёт то же, что кнопка «Скачать бэкап»: состояние + задачи. Сравнение токена — постоянное время.
+  if(path==='/api/backup' && method==='GET'){
+    const want = process.env.BACKUP_TOKEN || '';
+    if(!want){ res.writeHead(404,{'Content-Type':'text/plain; charset=utf-8'}); return res.end('Not found'); }
+    const got = url.searchParams.get('token') || '';
+    const A = Buffer.from(String(want)), B = Buffer.from(String(got));
+    if(A.length!==B.length || !timingSafeEqual(A,B)){ res.writeHead(403,{'Content-Type':'text/plain; charset=utf-8'}); return res.end('Forbidden'); }
+    let st, tasks=[];
+    try{ st = loadMain(); tasks = db.prepare('SELECT * FROM tasks ORDER BY id').all(); }
+    catch(e){ console.error('[backup] read', e.message); res.writeHead(500); return res.end('backup error'); }
+    const body = JSON.stringify({ app:'СИТИ SRM', version:1, date:new Date().toISOString(), state: st, tasks });
+    console.log(`[backup] выгрузка по токену (объектов=${(st.buildings||[]).length}, помещений=${(st.units||[]).length})`);
+    res.writeHead(200,{ 'Content-Type':'application/json; charset=utf-8', 'Cache-Control':'no-store',
+      'Content-Disposition':`attachment; filename="citi-srm-backup-${new Date().toISOString().slice(0,10)}.json"` });
+    return res.end(body);
+  }
+
   // ---- всё ниже требует аутентификации ----
   const me = authUser(req);
   if(!me) return send(res,401,{error:'Требуется вход'});
