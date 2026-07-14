@@ -627,6 +627,19 @@ function loginKey(req, email){ return clientIp(req)+'|'+email; }
 function isLocked(key){ const r=loginFails.get(key); if(!r) return false; if(Date.now()-r.ts > 15*60*1000){ loginFails.delete(key); return false; } return r.count>=8; }
 function noteFail(key){ const r=loginFails.get(key)||{count:0,ts:0}; r.count++; r.ts=Date.now(); loginFails.set(key,r); }
 
+// Общий лимит запросов к API на один IP (анти-«выкачивание» базы скриптом и анти-DoS).
+// Обычной работе не мешает: живой пользователь делает единицы запросов в минуту.
+const apiHits = new Map();
+const API_LIMIT = 240, API_WINDOW = 60*1000;
+function apiRateOk(req){
+  const ip = clientIp(req), now = Date.now();
+  const r = apiHits.get(ip);
+  if(!r || now - r.ts > API_WINDOW){ apiHits.set(ip, {n:1, ts:now}); return true; }
+  r.n++;
+  return r.n <= API_LIMIT;
+}
+setInterval(()=>{ const now=Date.now(); for(const [k,v] of apiHits) if(now-v.ts > API_WINDOW) apiHits.delete(k); }, 5*60*1000).unref?.();
+
 function parseCookies(req){
   const out={}; const h=req.headers.cookie; if(!h) return out;
   for(const part of h.split(';')){ const i=part.indexOf('='); if(i>-1) out[part.slice(0,i).trim()]=decodeURIComponent(part.slice(i+1).trim()); }
@@ -655,14 +668,21 @@ function send(res, code, obj, headers={}){
   res.writeHead(code, { 'Content-Type':'application/json; charset=utf-8', ...SEC_HEADERS, ...headers });
   res.end(body);
 }
+// «отпечаток» пароля: попадает в токен. Сменили пароль — все старые сессии этого
+// пользователя мгновенно недействительны (иначе украденная cookie жила бы ещё 7 дней).
+const pwStamp = hash => createHmac('sha256', SECRET).update(String(hash||'')).digest('base64url').slice(0,16);
 function authUser(req){
   const t = parseCookies(req).srm_token;
   const p = verifyToken(t);
   if(!p) return null;
-  return db.prepare('SELECT * FROM users WHERE id=? AND active=1').get(p.uid) || null;
+  const u = db.prepare('SELECT * FROM users WHERE id=? AND active=1').get(p.uid) || null;
+  if(!u) return null;
+  if(p.pv && p.pv !== pwStamp(u.password)) return null;   // пароль сменили → токен недействителен
+  return u;
 }
 function setAuthCookie(req, res, uid){
-  const token = signToken({ uid, exp: Date.now() + 7*864e5 });
+  const u = db.prepare('SELECT password FROM users WHERE id=?').get(uid);
+  const token = signToken({ uid, pv: pwStamp(u && u.password), exp: Date.now() + 7*864e5 });
   const secure = (req.headers['x-forwarded-proto']==='https') ? ' Secure;' : '';
   res.setHeader('Set-Cookie', `srm_token=${token}; HttpOnly;${secure} Path=/; Max-Age=${7*86400}; SameSite=Lax`);
 }
@@ -1202,8 +1222,11 @@ async function api(req, res, url){
       return send(res,200,{ url:'/api/files/'+folder+'/'+encodeURIComponent(fname), stored:'file', size:buf.length });
     }catch(e){ console.error('file upload', e.message); return send(res,500,{error:'Не удалось сохранить файл'}); }
   }
-  // ---- отдача документа (только залогиненным) ----
+  // ---- отдача документа (только залогиненным и только тем, кто видит хоть один раздел с документами) ----
   if(seg[1]==='files' && method==='GET' && seg.length>2){
+    const stG = loadState();
+    if(!isFull(me.role) && !['objects','tenants','contracts','ads'].some(m=>canViewS(me,m,stG)))
+      return send(res,403,{error:'Нет доступа к документам'});
     const rel = decodeURIComponent(seg.slice(2).join('/'));
     const safe = normalize(rel).replace(/^(\.\.[/\\])+/,'');
     const abs = join(FILES_PATH, safe);
@@ -1272,7 +1295,10 @@ const srv = http.createServer(async (req,res)=>{
   const url = new URL(req.url, `http://${req.headers.host}`);
   try{
     if(url.pathname.startsWith('/feed/')) return serveFeed(req,res,url);
-    if(url.pathname.startsWith('/api/')) return await api(req,res,url);
+    if(url.pathname.startsWith('/api/')){
+      if(!apiRateOk(req)) return send(res,429,{error:'Слишком много запросов. Подождите минуту.'});
+      return await api(req,res,url);
+    }
     return await serveStatic(req,res,url);
   }catch(err){
     console.error(err);
