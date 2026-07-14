@@ -3,10 +3,15 @@
 # Только чтение выписки (scope GET_STATEMENT_ACCOUNT / GET_CLIENT_ACCOUNTS).
 #
 # Использование:
-#   ./set-sber-keys.sh <клиент> <путь_к_файлу.p12> <пароль_p12> <client_id> <client_secret> <refresh_token> <номер_счёта>
+#   ./set-sber-keys.sh <клиент> <путь_к_файлу.p12> <пароль_p12> <client_id> <client_secret> <refresh_token> <номер_счёта> [test|prod]
 #
-# Пример:
-#   ./set-sber-keys.sh zimin /root/sber-zimin.p12 'ПарольОтP12' abc-123 s3cr3t rt_xxx 40702810100000001234
+# Последний аргумент — контур (необязательный, по умолчанию prod):
+#   test — песочница Сбера (https://iftfintech.testsbi.sberbank.ru:9443)
+#   prod — боевой контур   (https://fintech.sberbank.ru:9443)
+#
+# Примеры:
+#   ./set-sber-keys.sh zimin /root/sber-zimin.p12 'ПарольОтP12' abc-123 s3cr3t rt_xxx 40702810100000001234 test
+#   ./set-sber-keys.sh zimin /root/sber-prod.p12  'ПарольОтP12' abc-123 s3cr3t rt_xxx 40702810100000001234 prod
 #
 # Что делает:
 #   • кладёт сертификат в data-том клиента (clients/<имя>/data/sber.p12, рядом с базой — не в git);
@@ -15,11 +20,16 @@
 # Секреты в браузер и в БД не попадают (только окружение + файл на диске сервера).
 set -euo pipefail
 
-NAME="${1:-}"; P12="${2:-}"; P12PASS="${3:-}"; CID="${4:-}"; CSECRET="${5:-}"; RTOKEN="${6:-}"; ACCOUNT="${7:-}"
+NAME="${1:-}"; P12="${2:-}"; P12PASS="${3:-}"; CID="${4:-}"; CSECRET="${5:-}"; RTOKEN="${6:-}"; ACCOUNT="${7:-}"; ENVKIND="${8:-prod}"
 if [ $# -lt 7 ]; then
-  echo "Использование: $0 <клиент> <файл.p12> <пароль_p12> <client_id> <client_secret> <refresh_token> <номер_счёта>"
+  echo "Использование: $0 <клиент> <файл.p12> <пароль_p12> <client_id> <client_secret> <refresh_token> <номер_счёта> [test|prod]"
   exit 1
 fi
+case "$ENVKIND" in
+  test) API_BASE="https://iftfintech.testsbi.sberbank.ru:9443" ;;
+  prod) API_BASE="https://fintech.sberbank.ru:9443" ;;
+  *) echo "Ошибка: последний аргумент — 'test' или 'prod' (по умолчанию prod)."; exit 1 ;;
+esac
 [ -f "$P12" ] || { echo "Ошибка: файл сертификата не найден: $P12"; exit 1; }
 printf '%s' "$ACCOUNT" | grep -qE '^[0-9]{20}$' || { echo "Ошибка: номер счёта — 20 цифр."; exit 1; }
 
@@ -36,7 +46,7 @@ echo "→ Сертификат скопирован в clients/$NAME/data/sber.p
 
 BAK="$CF.bak-$(date +%Y%m%d-%H%M%S)"
 cp "$CF" "$BAK"
-awk -v pass="$P12PASS" -v cid="$CID" -v csec="$CSECRET" -v rtok="$RTOKEN" -v acc="$ACCOUNT" '
+awk -v pass="$P12PASS" -v cid="$CID" -v csec="$CSECRET" -v rtok="$RTOKEN" -v acc="$ACCOUNT" -v base="$API_BASE" '
   /SBER_PFX_PATH|SBER_PFX_PASS|SBER_CLIENT_ID|SBER_CLIENT_SECRET|SBER_REFRESH_TOKEN|SBER_ACCOUNT|SBER_API_BASE/ { next }
   { print }
   /^[[:space:]]*environment:[[:space:]]*$/ && !done {
@@ -46,6 +56,7 @@ awk -v pass="$P12PASS" -v cid="$CID" -v csec="$CSECRET" -v rtok="$RTOKEN" -v acc
     print "      - SBER_CLIENT_SECRET=" csec
     print "      - SBER_REFRESH_TOKEN=" rtok
     print "      - SBER_ACCOUNT=" acc
+    print "      - SBER_API_BASE=" base
     done=1
   }
 ' "$BAK" > "$CF"
@@ -61,6 +72,7 @@ docker compose -f "$CF" up -d
 
 echo
 echo "✓ Банк (Сбер) подключён для клиента '$NAME'. Счёт: ••••${ACCOUNT: -4}"
+echo "  Контур: $ENVKIND ($API_BASE)"
 echo
 echo "Проверка: в интерфейсе → «Синхронизация» → карточка «Банк» → «↻ Синхронизировать»."
 echo "Первый прогон покажет в логах пример ответа банка:"
