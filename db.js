@@ -30,17 +30,57 @@ export const ROLE_KEYS = Object.keys(ROLES);
 export const perms = role => ROLES[role] || ROLES.maintenance;
 export const canView = (role, mod) => perms(role).view.includes(mod);
 export const canEdit = (role, mod) => perms(role).edit.includes(mod);
-// Эффективные права с учётом редактируемой матрицы прав клиента (state.roleMatrix).
-// admin/owner всегда полные. Применять на СЕРВЕРЕ для авторизации (иначе матрица — лишь фронтовая иллюзия).
-export function rolePerms(role, state){
+
+// ---------- Особые действия (тонкая настройка сверх «изменять») ----------
+// Ключ → {mod, title}: действие доступно, только если есть право edit на модуль И действие отмечено.
+export const ACTIONS = {
+  pay:      { mod:'payments',     title:'Вносить оплату аренды' },
+  accrue:   { mod:'payments',     title:'Начислять аренду' },
+  readings: { mod:'utilities',    title:'Вносить показания счётчиков / котельную / ГСМ' },
+  salPay:   { mod:'salaries',     title:'Выплачивать зарплату' },
+  import:   { mod:'objects',      title:'Импорт из файлов (CSV/Excel)' },
+  export:   { mod:'reports',      title:'Экспорт данных (CSV)' },
+  bankSync: { mod:'integrations', title:'Синхронизация с банком / площадками' },
+};
+export const ACTION_KEYS = Object.keys(ACTIONS);
+const isFullRole = r => r==='admin' || r==='owner';
+const arrOr = (a, def) => Array.isArray(a) ? a.filter(x=>typeof x==='string') : def;
+
+// Эффективные права: базовая роль → матрица ролей клиента (state.roleMatrix) → персональные права (state.userPerms[id]).
+// `who` — объект пользователя ({id, role}) либо просто строка роли (тогда персональные не применяются).
+// admin/owner всегда полные.
+export function effPerms(who, state){
+  const role = (who && typeof who==='object') ? who.role : who;
   const base = perms(role);
-  if(role==='admin' || role==='owner') return base;
-  const ov = state && state.roleMatrix && state.roleMatrix[role];
-  if(!ov || typeof ov!=='object') return base;
-  return { view: Array.isArray(ov.view)?ov.view:base.view, edit: Array.isArray(ov.edit)?ov.edit:base.edit };
+  if(isFullRole(role)) return { view:[...ALL], edit:[...ALL], add:[...ALL], del:[...ALL], acts:[...ACTION_KEYS] };
+  // 1) матрица ролей
+  const rov = state && state.roleMatrix && state.roleMatrix[role];
+  let view = base.view, edit = base.edit;
+  if(rov && typeof rov==='object'){ view = arrOr(rov.view, base.view); edit = arrOr(rov.edit, base.edit); }
+  let add = edit, del = edit, acts = ACTION_KEYS.filter(k => edit.includes(ACTIONS[k].mod));
+  // 2) персональные права сотрудника (перекрывают роль)
+  const uid = (who && typeof who==='object' && who.id!=null) ? String(who.id) : null;
+  const uov = uid && state && state.userPerms && state.userPerms[uid];
+  if(uov && typeof uov==='object'){
+    view = arrOr(uov.view, view);
+    edit = arrOr(uov.edit, edit);
+    add  = arrOr(uov.add,  edit);
+    del  = arrOr(uov.del,  edit);
+    acts = arrOr(uov.acts, ACTION_KEYS.filter(k => edit.includes(ACTIONS[k].mod)));
+  }
+  // инварианты: изменять/добавлять/удалять нельзя без просмотра; действие — только внутри разрешённого модуля
+  view = [...new Set([...view, ...edit, 'dashboard'])];
+  add  = add.filter(m => edit.includes(m));
+  del  = del.filter(m => edit.includes(m));
+  acts = acts.filter(k => ACTIONS[k] && edit.includes(ACTIONS[k].mod));
+  return { view, edit, add, del, acts };
 }
-export const canViewS = (role, mod, state) => rolePerms(role, state).view.includes(mod);
-export const canEditS = (role, mod, state) => rolePerms(role, state).edit.includes(mod);
+export function rolePerms(role, state){ const p = effPerms(role, state); return { view:p.view, edit:p.edit }; }
+export const canViewS = (who, mod, state) => effPerms(who, state).view.includes(mod);
+export const canEditS = (who, mod, state) => effPerms(who, state).edit.includes(mod);
+export const canAddS  = (who, mod, state) => effPerms(who, state).add.includes(mod);
+export const canDelS  = (who, mod, state) => effPerms(who, state).del.includes(mod);
+export const canActS  = (who, act, state) => effPerms(who, state).acts.includes(act);
 
 // ---------- Пароли ----------
 export function hashPassword(pw){

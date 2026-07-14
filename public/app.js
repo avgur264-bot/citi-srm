@@ -46,8 +46,16 @@ let current='dashboard';
 let SCOPE = localStorage.getItem('citi_srm_scope') || 'all'; // 'all' или id объекта
 const TODAY = new Date();
 
-const canView = m => ME && ME.permissions.view.includes(m);
-const canEdit = m => ME && ME.permissions.edit.includes(m);
+// Права ИМЕННО этого сотрудника приходят с сервера (роль → матрица ролей → персональные права).
+// Никогда не считаем их на клиенте «на глаз»: сервер — единственный источник правды.
+let MYP = null;   // {view, edit, add, del, acts}
+let ACT_CATALOG = {};
+const myp = () => MYP || (ME && ME.permissions) || {view:[],edit:[],add:[],del:[],acts:[]};
+const canView = m => !!ME && (myp().view||[]).includes(m);
+const canEdit = m => !!ME && (myp().edit||[]).includes(m);
+const canAdd  = m => !!ME && ((myp().add||myp().edit||[]).includes(m));   // добавлять новые записи
+const canDel  = m => !!ME && ((myp().del||myp().edit||[]).includes(m));   // удалять записи
+const canAct  = a => !!ME && (myp().acts||[]).includes(a);                // особые действия (оплата, счётчики, импорт…)
 // логин: вводят только имя → подставляем домен; полный email оставляем как есть
 const LOGIN_DOMAIN='@citisrm.ru';
 const mkLogin = v => { v=(v||'').trim(); return !v? '' : (v.includes('@')? v.toLowerCase() : v.toLowerCase()+LOGIN_DOMAIN); };
@@ -141,6 +149,7 @@ function ensureState(){
   if(!DB) return;
   // Миграция: у помещений без num проставляем num=id (отображение не меняется, id — прежний ключ связей)
   if(Array.isArray(DB.units)) DB.units.forEach(u=>{ if(u.num===undefined||u.num===null||u.num==='') u.num=u.id; });
+  if(!DB.userPerms || typeof DB.userPerms!=='object' || Array.isArray(DB.userPerms)) DB.userPerms={};
   if(!Array.isArray(DB.salaries)) DB.salaries=[];
   if(!Array.isArray(DB.requests)) DB.requests=[];
   if(!Array.isArray(DB.equipment)) DB.equipment=[];
@@ -202,6 +211,7 @@ function applyAccent(){ const a=stg().accent; const r=document.documentElement;
 async function loadData(){
   const b = await api('/api/bootstrap');
   ME=b.user; ROLES=b.roles; DB=b.state; TASKS=b.tasks; USERS=b.users;
+  MYP = b.myPerms || null; ACT_CATALOG = b.actions || {};
   ensureState(); applyRoleOverrides(); resetAuditBaseline();
 }
 // применяем настроенную клиентом матрицу прав поверх ролей по умолчанию (admin/owner всегда полные)
@@ -463,12 +473,12 @@ document.addEventListener('click',e=>{ const g=document.getElementById('gsearchR
 /* ---------- быстрое добавление (B4 FAB) ---------- */
 function quickAddItems(){
   const it=[];
-  if(canEdit('payments') && DB && DB.contracts && DB.contracts.length) it.push(['💳','Платёж','paymentModal()']);
-  if(canEdit('tasks')) it.push(['✓','Задача','taskModal()']);
-  if(canEdit('requests')) it.push(['🛠','Заявка','requestModal()']);
-  if(canEdit('tenants')) it.push(['👥','Арендатор','tenantModal()']);
-  if(canEdit('objects')) it.push(['🏢','Помещение','unitModal()']);
-  if(canEdit('contracts') && DB && DB.tenants && DB.tenants.length) it.push(['📄','Договор','contractModal()']);
+  if(canAdd('payments') && DB && DB.contracts && DB.contracts.length) it.push(['💳','Платёж','paymentModal()']);
+  if(canAdd('tasks')) it.push(['✓','Задача','taskModal()']);
+  if(canAdd('requests')) it.push(['🛠','Заявка','requestModal()']);
+  if(canAdd('tenants')) it.push(['👥','Арендатор','tenantModal()']);
+  if(canAdd('objects')) it.push(['🏢','Помещение','unitModal()']);
+  if(canAdd('contracts') && DB && DB.tenants && DB.tenants.length) it.push(['📄','Договор','contractModal()']);
   return it;
 }
 function quickAddMenu(){
@@ -593,6 +603,7 @@ function auditDiff(prev,curr){ const out=[];
   if(JSON.stringify(prev.settings)!==JSON.stringify(curr.settings)) out.push('Настройки системы: изменены');
   if(prev.penaltyRate!==curr.penaltyRate) out.push('Ставка пени: изменена');
   if(JSON.stringify(prev.roleMatrix)!==JSON.stringify(curr.roleMatrix)) out.push('Права доступа (роли): изменены');
+  if(JSON.stringify(prev.userPerms)!==JSON.stringify(curr.userPerms)) out.push('Права доступа (персональные): изменены');
   return out; }
 function recordAudit(){ if(!ME||!DB) return; ensureState();
   const curr=stripAudit(DB);
@@ -656,7 +667,8 @@ async function silentRefresh(){
 /* ---------- настраиваемый дашборд (персональный, перетаскиваемый) ---------- */
 let _dashM=null;
 const dashStoreKey=()=>'citi_srm_dash2_'+(ME?ME.id:'x');
-const DASH_DEFAULT_ORDER=['occ','billed','collected','planMonth','debt','net','chIncome','chOcc','overdue','tasks'];
+const DASH_DEFAULT_ORDER=['occ','billed','collected','planMonth','debt','net','utilBilled','utilCollected','utilDebt','fot','chIncome','chOcc','overdue','utilOverdue','expenses','alerts','tasks'];
+const DASH_VER=2; // при росте версии старый сохранённый набор виджетов сбрасывается на новый набор по умолчанию
 function dashCard(title,badge,inner){ return `<div class="card"><div class="panel-title"><h3>${title}</h3>${badge!=null?`<span class="muted">${badge}</span>`:''}</div>${inner}</div>`; }
 function dashRows(rows,emptyTxt){ return `<table><tbody>${rows.length?rows.join(''):`<tr><td class="empty">${emptyTxt}</td></tr>`}</tbody></table>`; }
 /* каталог виджетов: id → {label, span (1=малый,2=широкий), build:()=>html, draw?:()=>void} */
@@ -702,7 +714,28 @@ const DASH_CATALOG={
     return dashCard('📈 Бюджет '+y,null,`<table><tbody>${rows.join('')}</tbody></table>`);}},
   expiring:{label:'Виджет · Договоры на исходе',span:2,build:()=>{const cs=DB.contracts.filter(c=>{if(c.status==='ended')return false;const u=unitOf(c.unit);if(!(SCOPE==='all'||(u&&u.building===SCOPE)))return false;const dl=c.end?daysLeft(c.end):9999;return dl<=90;}).sort((a,b)=>daysLeft(a.end)-daysLeft(b.end)).slice(0,5);
     return dashCard('📄 Договоры на исходе',cs.length,dashRows(cs.map(c=>{const t=tenantOf(c.tenant);return `<tr><td><div class="t-strong">${esc(t?t.name:c.id)}</div><div class="t-sub">${esc(unitNum(c.unit))} · до ${c.end?fmtD(c.end):'—'}</div></td><td style="text-align:right">${dueLabel(c.end)}</td></tr>`;}),'Нет договоров на исходе'));}},
+  // --- Коммуналка и расходы (для сотрудника, который ведёт коммуналку) ---
+  utilBilled:{label:'KPI · Коммуналка начислено',span:1,build:()=>{const s=utilStats();
+    return kpi('Коммуналка начислено','#a78bfa','🧾',fmt(s.issued/1000)+' тыс','выставлено к оплате','');}},
+  utilCollected:{label:'KPI · Коммуналка собрано',span:1,build:()=>{const s=utilStats();
+    return kpi('Коммуналка собрано','#37d39b','💧',fmt(s.paid/1000)+' тыс',pct(s.paid,s.issued)+'% собираемость','up');}},
+  utilDebt:{label:'KPI · Долг по коммуналке',span:1,build:()=>{const s=utilStats();
+    return kpi('Долг по коммуналке','#ff5d6c','⚠️',fmt(s.debt/1000)+' тыс',s.debtCnt+' счёт(ов) не оплачено','down');}},
+  utilOverdue:{label:'Виджет · Просроченная коммуналка',span:2,build:()=>{
+    const o=sUtilities().filter(u=>u.status==='overdue').map(u=>({unit:unitNum(u.unit),period:u.period,amount:utilSum(u)})).sort((a,b)=>b.amount-a.amount).slice(0,6);
+    return dashCard('⚡ Просроченная коммуналка',o.length,dashRows(o.map(x=>`<tr><td><div class="t-strong">Помещение ${esc(x.unit)}</div><div class="t-sub">${esc(x.period||'')}</div></td><td style="text-align:right"><span class="pill red">${money(x.amount)}</span></td></tr>`),'Просрочек по коммуналке нет'));}},
+  expenses:{label:'Виджет · Расходы по категориям',span:2,build:()=>{
+    const by={}; sExpenses().forEach(e=>{ by[e.category||'Прочее']=(by[e.category||'Прочее']||0)+(+e.amount||0); });
+    const rows=Object.entries(by).sort((a,b)=>b[1]-a[1]).slice(0,6);
+    const tot=Object.values(by).reduce((s,v)=>s+v,0);
+    return dashCard('🧾 Расходы по категориям',money(tot),dashRows(rows.map(([c,v])=>`<tr><td class="t-sub">${esc(c)}</td><td style="text-align:right" class="t-strong">${money(v)}</td></tr>`),'Расходов нет'));}},
 };
+// суммы по коммуналке в текущем разрезе объектов (статусы: plan/invoiced/overdue/paid)
+const utilSum = u => (+u.electricity||0)+(+u.water||0)+(+u.heating||0);
+function utilStats(){ const us=sUtilities(); let issued=0,paid=0,debt=0,debtCnt=0;
+  us.forEach(u=>{ const v=utilSum(u); if(!UTIL_ISSUED(u.status)) return; issued+=v;
+    if(u.status==='paid') paid+=v; else { debt+=v; debtCnt++; } });
+  return {issued,paid,debt,debtCnt}; }
 // Какой раздел нужен, чтобы видеть виджет. Без этого сотрудник без прав на платежи
 // видел на дашборде сбор аренды и долги (данные приходили с сервера и рисовались).
 const DASH_NEED={
@@ -711,13 +744,14 @@ const DASH_NEED={
   net:'payments', chIncome:'payments', overdue:'payments', aging:'payments',
   expiring:'contracts', fot:'salaries', budget:'budget', adsKpi:'ads',
   tasks:'tasks', requests:'requests', upkeep:'upkeep',
+  utilBilled:'utilities', utilCollected:'utilities', utilDebt:'utilities', utilOverdue:'utilities', expenses:'utilities',
   alerts:null,   // «Центр сроков» — агрегатор, сам берёт только доступные роли данные
 };
 const dashAllowed = id => { const w=DASH_CATALOG[id]; if(!w) return false; const n=DASH_NEED[id]; return !n || canView(n); };
 function dashCfg(){ try{const s=JSON.parse(localStorage.getItem(dashStoreKey()));
-  if(s&&Array.isArray(s.order)) return {order:s.order.filter(dashAllowed)};
-  }catch{} return {order:DASH_DEFAULT_ORDER.filter(dashAllowed)}; }
-function saveDashCfg(c){ localStorage.setItem(dashStoreKey(), JSON.stringify(c)); }
+  if(s&&Array.isArray(s.order)&&s.ver===DASH_VER) return {ver:DASH_VER,order:s.order.filter(dashAllowed)};
+  }catch{} return {ver:DASH_VER,order:DASH_DEFAULT_ORDER.filter(dashAllowed)}; }
+function saveDashCfg(c){ localStorage.setItem(dashStoreKey(), JSON.stringify({ver:DASH_VER,order:c.order})); }
 function dashboard(){
   _dashM=metrics(); const cfg=dashCfg();
   const tiles=cfg.order.map(id=>{const w=DASH_CATALOG[id];if(!w)return '';
@@ -780,14 +814,14 @@ function objects(){
   const bs = SCOPE==='all'? buildingsList() : [buildingOf(SCOPE)].filter(Boolean);
   const us=sUnits();
   el(head('Объекты и занятость', scopeSub(),
-    canEdit('objects')?`<button class="btn ghost" onclick="importModal('units')">⤓ Импорт</button> <button class="btn ghost" onclick="buildingModal()">+ Объект</button> <button class="btn" onclick="unitModal()">+ Помещение</button>`:'')+
+    `${canAct('import')?`<button class="btn ghost" onclick="importModal('units')">⤓ Импорт</button> `:''}${canAdd('objects')?`<button class="btn ghost" onclick="buildingModal()">+ Объект</button> <button class="btn" onclick="unitModal()">+ Помещение</button>`:''}`)+
   `<div class="grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:18px">
     ${miniStat('Объектов',bs.length,'violet')}
     ${miniStat('Помещений',us.length)}
     ${miniStat('Занято',us.filter(u=>u.tenant).length,'green')}
     ${miniStat('Заполняемость',m.occPct+'%','blue')}
   </div><div id="bcards"></div>`);
-  const addCard = (canEdit('objects')&&SCOPE==='all') ? `<div class="card" style="border-style:dashed;text-align:center;cursor:pointer" onclick="buildingModal()"><div style="padding:16px;color:var(--accent2);font-weight:650;font-size:14px">＋ Добавить новый объект</div></div>` : '';
+  const addCard = (canAdd('objects')&&SCOPE==='all') ? `<div class="card" style="border-style:dashed;text-align:center;cursor:pointer" onclick="buildingModal()"><div style="padding:16px;color:var(--accent2);font-weight:650;font-size:14px">＋ Добавить новый объект</div></div>` : '';
   document.getElementById('bcards').innerHTML = (bs.map(buildingCard).join('') || '<div class="card"><div class="empty">Объекты не найдены</div></div>') + addCard;
 }
 const expandedBuildings = new Set(); // какие объекты развёрнуты в режиме «Все объекты»
@@ -807,9 +841,9 @@ function buildingCard(b){
       </div>
       <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end">
         <button class="btn ghost sm" onclick="planModal('${b.id}')" title="План и схема занятости">📐 План</button>
-        ${canEdit('objects')?`<button class="btn ghost sm" onclick="unitModal('${b.id}')">+ Помещение</button>`:''}
-        ${canEdit('tenants')?`<button class="btn ghost sm" onclick="tenantModal('${b.id}')">+ Арендатор</button>`:''}
-        ${canEdit('objects')?`<button class="btn ghost sm" onclick="editBuildingModal('${b.id}')" title="Редактировать объект">✎</button><button class="btn ghost sm" onclick="delBuilding('${b.id}')" title="Удалить объект">🗑</button>`:''}
+        ${canAdd('objects')?`<button class="btn ghost sm" onclick="unitModal('${b.id}')">+ Помещение</button>`:''}
+        ${canAdd('tenants')?`<button class="btn ghost sm" onclick="tenantModal('${b.id}')">+ Арендатор</button>`:''}
+        ${canEdit('objects')?`<button class="btn ghost sm" onclick="editBuildingModal('${b.id}')" title="Редактировать объект">✎</button>`:''}${canDel('objects')?`<button class="btn ghost sm" onclick="delBuilding('${b.id}')" title="Удалить объект">🗑</button>`:''}
         <div class="legend" style="margin-left:6px"><span><i style="background:var(--green)"></i>Занято</span><span><i style="background:var(--red)"></i>Долг</span><span><i style="background:var(--amber)"></i>Резерв</span><span><i style="background:var(--muted2)"></i>Свободно</span></div></div>
     </div>
     <div id="floors-${b.id}" style="display:${expanded?'block':'none'};margin-top:14px">${body}</div>
@@ -1061,7 +1095,7 @@ function miniStat(label,v,color){return `<div class="card"><div class="label" st
    АРЕНДАТОРЫ
    ============================================================ */
 function tenants(){
-  el(head('Арендаторы',`${sTenants().length} компаний · ${scopeSub()}`, canEdit('tenants')?`<button class="btn ghost" onclick="importModal('tenants')">⤓ Импорт</button> <button class="btn" onclick="tenantModal()">+ Арендатор</button>`:'')+
+  el(head('Арендаторы',`${sTenants().length} компаний · ${scopeSub()}`, `${canAct('import')&&canEdit('tenants')?`<button class="btn ghost" onclick="importModal('tenants')">⤓ Импорт</button> `:''}${canAdd('tenants')?`<button class="btn" onclick="tenantModal()">+ Арендатор</button>`:''}`)+
   `<div class="toolbar"><input class="search" id="tsearch" placeholder="Поиск по названию, ИНН..." oninput="renderTenants()"></div>
   <div id="tbcards"></div>`);
   renderTenants();
@@ -1103,7 +1137,7 @@ function renderTenants(){
    ============================================================ */
 function contracts(){
   const bs = SCOPE==='all'? buildingsList() : [buildingOf(SCOPE)].filter(Boolean);
-  el(head('Договоры аренды',`${sContracts().length} договоров · ${scopeSub()}`, canEdit('contracts')?`<button class="btn" onclick="contractModal()">+ Договор</button>`:'')+
+  el(head('Договоры аренды',`${sContracts().length} договоров · ${scopeSub()}`, canAdd('contracts')?`<button class="btn" onclick="contractModal()">+ Договор</button>`:'')+
   `<div id="cbcards"></div>`);
   document.getElementById('cbcards').innerHTML = bs.map(b=>{
     const cs=DB.contracts.filter(c=>unitOf(c.unit)?.building===b.id);
@@ -1132,7 +1166,7 @@ function payments(){
   const ps0 = sPayments().filter(inPer);
   const billed=ps0.reduce((s,p)=>s+p.amount,0), collected=ps0.reduce((s,p)=>s+p.paid,0), debt=billed-collected;
   const pers=[...new Set(DB.payments.map(p=>p.period).filter(Boolean))].sort().reverse();
-  el(head('Платежи аренды',`${payPeriod?'Период: '+fmtPeriod(payPeriod):'Все периоды'} · ${scopeSub()}`, canEdit('payments')?`<button class="btn" onclick="paymentModal()">+ Начисление</button>`:'')+
+  el(head('Платежи аренды',`${payPeriod?'Период: '+fmtPeriod(payPeriod):'Все периоды'} · ${scopeSub()}`, (canAdd('payments')&&canAct('accrue'))?`<button class="btn" onclick="paymentModal()">+ Начисление</button>`:'')+
   `<div class="toolbar"><span class="t-sub">Период:</span><select class="search" style="width:auto;min-width:160px" onchange="setPayPeriod(this.value)"><option value="">Все периоды</option>${pers.map(p=>`<option value="${p}"${payPeriod===p?' selected':''}>${fmtPeriod(p)}</option>`).join('')}</select></div>
   <div class="grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:18px">
     ${miniStat('Начислено',money(billed))}${miniStat('Собрано',money(collected),'green')}
@@ -1157,13 +1191,14 @@ function paymentRow(p){const c=contractOf(p.contract);const t=c&&tenantOf(c.tena
   return `<tr><td class="t-strong">${esc(t?t.name:'—')}</td><td>${esc(c?unitNum(c.unit):'—')}</td><td>${p.period}</td><td>${money(p.amount)}</td>
     <td>${p.paid?money(p.paid):'—'}</td><td class="t-sub">${fmtD(p.due)}</td><td>${payPill(p)}</td>
     <td style="text-align:right;white-space:nowrap">
-      ${bal>0&&canEdit('payments')?`<button class="btn sm" title="Отметить полностью оплаченным (сегодня, безналичный)" onclick="quickPay('${p.id}')">✓ Оплачено</button> `:''}
+      ${bal>0&&canEdit('payments')&&canAct('pay')?`<button class="btn sm" title="Отметить полностью оплаченным (сегодня, безналичный)" onclick="quickPay('${p.id}')">✓ Оплачено</button> `:''}
       <button class="btn ghost sm" title="Открыть / история / частичная оплата" onclick="payModal('${p.id}')">${bal>0?'Оплата':'⋯'}</button>
       ${p.paid>0?`<button class="btn ghost sm" title="Печать квитанции" onclick="printReceipt('${p.id}')">🖶</button>`:''}
     </td></tr>`;
 }
 // B2. Оплата в один тап: полная оплата, способ по умолчанию (безналичный), дата = сегодня.
 async function quickPay(id){
+  if(!canAct('pay')) return alert('Нет права вносить оплату.');
   const p=DB.payments.find(x=>x.id===id); if(!p) return;
   const rem=p.amount-p.paid; if(rem<=0) return;
   if(!p.transactions||!p.transactions.length){ p.transactions = p.paid>0?[{amount:p.paid,date:p.paidDate||p.due,method:'bank'}]:[]; }
@@ -1174,7 +1209,7 @@ async function quickPay(id){
   await afterStateChange();
 }
 function payPill(p){const m={paid:['green','Оплачен'],overdue:['red','Просрочен'],partial:['amber','Частично'],pending:['blue','Ожидание']};const x=m[p.status]||['gray','—'];return `<span class="pill ${x[0]}">${x[1]}</span>`;}
-function payModal(id){const p=DB.payments.find(x=>x.id===id);if(!p)return;const c=contractOf(p.contract);const t=c&&tenantOf(c.tenant);const rem=p.amount-p.paid;const tx=pTx(p);const editable=rem>0&&canEdit('payments');
+function payModal(id){const p=DB.payments.find(x=>x.id===id);if(!p)return;const c=contractOf(p.contract);const t=c&&tenantOf(c.tenant);const rem=p.amount-p.paid;const tx=pTx(p);const editable=rem>0&&canEdit('payments')&&canAct('pay');
   const cUnit=c?unitNum(c.unit):'—';const tName=t?t.name:'—';
   openM(`<div class="modal-h"><h3>Оплата · ${p.period}</h3><span class="x" onclick="closeM()">×</span></div>
   <div class="modal-b">
@@ -1188,9 +1223,9 @@ function payModal(id){const p=DB.payments.find(x=>x.id===id);if(!p)return;const 
     <div class="field"><label>Способ оплаты</label><select id="pay-method">${payMethodOpts('bank')}</select></div>
     <div class="t-sub">Можно внести частично — статус обновится автоматически (Частично / Оплачен).</div>`:''}
   </div>
-  <div class="modal-f">${canEdit('payments')?`<button class="btn danger" onclick="delPayment('${id}')">🗑 Удалить начисление</button>`:''}<div class="spacer"></div>${editable?`<button class="btn ghost" onclick="closeM()">Отмена</button><button class="btn" onclick="savePay('${id}')">Зачесть оплату</button>`:'<button class="btn" onclick="closeM()">Закрыть</button>'}</div>`);}
+  <div class="modal-f">${canDel('payments')?`<button class="btn danger" onclick="delPayment('${id}')">🗑 Удалить начисление</button>`:''}<div class="spacer"></div>${editable?`<button class="btn ghost" onclick="closeM()">Отмена</button><button class="btn" onclick="savePay('${id}')">Зачесть оплату</button>`:'<button class="btn" onclick="closeM()">Закрыть</button>'}</div>`);}
 // удалить начисление (платёж) целиком — вместе с внесёнными по нему оплатами
-async function delPayment(id){ if(!canEdit('payments'))return; const p=DB.payments.find(x=>x.id===id); if(!p)return;
+async function delPayment(id){ if(!canDel('payments'))return; const p=DB.payments.find(x=>x.id===id); if(!p)return;
   const c=contractOf(p.contract); const t=c&&tenantOf(c.tenant);
   const warn = (+p.paid>0) ? `\n\n⚠️ По начислению уже внесена оплата ${money(p.paid)} — она тоже удалится.` : '';
   if(!confirm(`Удалить начисление за ${p.period}${t?` — ${t.name}`:''} на сумму ${money(p.amount)}?${warn}\n\nДействие необратимо.`)) return;
@@ -1378,7 +1413,7 @@ function lastReading(unitId,kind,beforePeriod){
   return recs.length? (+recs[0].readings[kind].current||0) : 0;
 }
 function readingsModal(){
-  if(!canEdit('utilities')) return;
+  if(!canEdit('utilities') || !canAct('readings')) return alert('Нет права вносить показания счётчиков.');
   const def=SCOPE!=='all'?SCOPE:(buildingsList()[0]||{}).id;
   const units=DB.units.filter(u=>u.building===def);
   openM(`<div class="modal-h"><h3>📟 Внести показания счётчиков</h3><span class="x" onclick="closeM()">×</span></div>
@@ -1469,7 +1504,7 @@ function odpuAccrued(m){ if(!m)return null; const e=m.electricity||{},w=m.water|
     heating:Math.max(0,Math.round((+h.area||0)*(+h.tariff||0))) }; }
 function odpuCollected(bid,period){ const us=DB.utilities.filter(u=>unitOf(u.unit)?.building===bid && u.period===period);
   return { electricity:us.reduce((s,u)=>s+(+u.electricity||0),0), water:us.reduce((s,u)=>s+(+u.water||0),0), heating:us.reduce((s,u)=>s+(+u.heating||0),0) }; }
-function odpuEntry(bid){ if(!canEdit('utilities')) return; const id=bid||(SCOPE!=='all'?SCOPE:(buildingsList()[0]||{}).id); if(!id) return alert('Сначала добавьте объект'); buildingMeterModal(id, utilPeriod); }
+function odpuEntry(bid){ if(!canEdit('utilities')||!canAct('readings')) return alert('Нет права вносить показания счётчиков.'); const id=bid||(SCOPE!=='all'?SCOPE:(buildingsList()[0]||{}).id); if(!id) return alert('Сначала добавьте объект'); buildingMeterModal(id, utilPeriod); }
 /* ---------- 🔥 Котельная: себестоимость отопления = топливо + зарплата кочегара(ов объекта) + обслуживание котла ---------- */
 function heatCostRec(bid,period){ return (DB.heatCost||[]).find(h=>h.building===bid && h.period===period)||null; }
 /* ---------- ⛽ ГСМ: приход + остаток → израсходовано (литры). Израсходованное автоматически = «Количество» топлива котельной ---------- */
@@ -1509,7 +1544,7 @@ function heatingCostFor(bid,period){
   if(total===0 && !heatCostRec(bid,period) && !stoker) return null;   // данных нет → в отчёте «—»
   return {fuel,stoker,boiler,total};
 }
-function boilerEntry(bid){ if(!canEdit('utilities')) return; const id=bid||(SCOPE!=='all'?SCOPE:(buildingsList()[0]||{}).id); if(!id) return alert('Сначала добавьте объект'); boilerModal(id, utilPeriod); }
+function boilerEntry(bid){ if(!canEdit('utilities')||!canAct('readings')) return alert('Нет права вносить данные котельной.'); const id=bid||(SCOPE!=='all'?SCOPE:(buildingsList()[0]||{}).id); if(!id) return alert('Сначала добавьте объект'); boilerModal(id, utilPeriod); }
 function boilerModal(bid,period){
   if(!canEdit('utilities')) return; const b=buildingOf(bid); if(!b) return;
   period=period||utilPeriod||TODAY.toISOString().slice(0,7);
@@ -1553,7 +1588,7 @@ async function saveBoiler(bid){ if(!Array.isArray(DB.heatCost)) DB.heatCost=[];
   closeM(); await afterStateChange(); }
 async function delBoiler(bid,period){ if(!confirm('Удалить данные котельной за этот период?'))return; DB.heatCost=(DB.heatCost||[]).filter(h=>!(h.building===bid && h.period===period)); closeM(); await afterStateChange(); }
 /* ⛽ ГСМ: приход + остаток → израсходовано; результат автоматически идёт в «Количество» котельной */
-function gsmEntry(bid){ if(!canEdit('utilities')) return; const id=bid||(SCOPE!=='all'?SCOPE:(buildingsList()[0]||{}).id); if(!id) return alert('Сначала добавьте объект'); gsmModal(id, utilPeriod); }
+function gsmEntry(bid){ if(!canEdit('utilities')||!canAct('readings')) return alert('Нет права вносить ГСМ.'); const id=bid||(SCOPE!=='all'?SCOPE:(buildingsList()[0]||{}).id); if(!id) return alert('Сначала добавьте объект'); gsmModal(id, utilPeriod); }
 let _gsmRows=[]; // журнал поставок в текущем окне [{date,qty,price}]
 function gsmModal(bid,period){
   if(!canEdit('utilities')) return; const b=buildingOf(bid); if(!b) return;
@@ -1782,7 +1817,7 @@ function tasks(){
   const mine=TASKS.filter(t=>t.assignee_id===ME.id&&t.status!=='done');
   const overdue=TASKS.filter(t=>t.status!=='done'&&daysLeft(t.due)<0);
   el(head('Задачи по объектам',`${TASKS.filter(t=>t.status!=='done').length} активных · мои: ${mine.length} · просрочено: ${overdue.length}`,
-    canEdit('tasks')?`<button class="btn" onclick="taskModal()">+ Задача</button>`:'')+
+    canAdd('tasks')?`<button class="btn" onclick="taskModal()">+ Задача</button>`:'')+
   `<div class="grid" style="grid-template-columns:repeat(3,1fr)" id="board"></div>`);
   const cols=[['open','Открыто','var(--muted2)'],['in_progress','В работе','var(--accent)'],['done','Готово','var(--green)']];
   document.getElementById('board').innerHTML=cols.map(([k,label,color])=>{
@@ -1818,7 +1853,7 @@ function requests(){
   const list=sRequests();
   const open=list.filter(reqOpen); const overdue=open.filter(r=>daysLeft(r.due)<0);
   el(head('Заявки на обслуживание',`${open.length} активных · просрочено: ${overdue.length} · ${scopeSub()}`,
-    canEdit('requests')?`<button class="btn" onclick="requestModal()">+ Заявка</button>`:'')+
+    canAdd('requests')?`<button class="btn" onclick="requestModal()">+ Заявка</button>`:'')+
   `<div class="grid" style="grid-template-columns:repeat(3,1fr)" id="reqboard"></div><div id="reqRej"></div>`);
   const cols=[['new','Новые','var(--muted2)'],['in_progress','В работе','var(--accent)'],['done','Выполнено','var(--green)']];
   document.getElementById('reqboard').innerHTML=cols.map(([k,label,color])=>{
@@ -2060,6 +2095,9 @@ function buildAlerts(){
   DB.payments.filter(p=>p.amount-p.paid>0 && daysLeft(p.due)<0).forEach(p=>{ const b=paymentBuilding(p); if(!inS(b))return;
     const c=contractOf(p.contract); const t=c&&tenantOf(c.tenant); const dl=daysLeft(p.due);
     A.push({level:'danger',icon:'💳',cat:'Платежи',id:p.id,title:`Просрочка оплаты: ${t?t.name:('договор '+p.contract)}`,sub:`${money(p.amount-p.paid)} · просрочено ${-dl} дн`,page:'payments',sort:dl}); });
+  // Просроченная коммуналка (счёт выставлен и не оплачен)
+  (DB.utilities||[]).filter(u=>u.status==='overdue').forEach(u=>{ const un=unitOf(u.unit); const b=un&&un.building; if(!inS(b))return;
+    A.push({level:'danger',icon:'⚡',cat:'Коммуналка',id:u.id,title:`Просрочка коммуналки: помещение ${unitNum(u.unit)}`,sub:`${money(utilSum(u))} · период ${u.period||'—'}`,page:'utilities',sort:-1}); });
   // Договоры на исходе (≤60 дн) или истёкшие
   DB.contracts.forEach(c=>{ if(c.status==='ended')return; const u=unitOf(c.unit); const b=u&&u.building; if(!inS(b))return;
     const dl=c.end?daysLeft(c.end):9999; if(dl>60)return; const t=tenantOf(c.tenant);
@@ -2362,11 +2400,12 @@ function employees(){
     const overdueCnt=TASKS.filter(t=>t.assignee_id===u.id&&t.status!=='done'&&daysLeft(t.due)<0).length;
     return `<tr><td><div class="t-strong">${esc(u.full_name)}${u.id===ME.id?' <span class="pill blue" style="padding:1px 7px">вы</span>':''}</div><div class="t-sub">${esc(u.email)}</div></td>
     <td>${esc(u.position||'—')}</td>
-    <td><span class="pill role-${u.role}">${esc(u.roleTitle)}</span></td>
+    <td><span class="pill role-${u.role}">${esc(u.roleTitle)}</span>${hasCustomPerms(u.id)?' <span class="pill amber" style="padding:1px 7px" title="Права настроены персонально">🔑 свои</span>':''}</td>
     <td class="t-sub">${esc(u.phone||'—')}</td>
     <td>${openCnt}${overdueCnt?` <span class="pill red" style="padding:1px 7px">${overdueCnt} просроч.</span>`:''}</td>
     <td>${u.active?'<span class="pill green">Активен</span>':'<span class="pill gray">Отключён</span>'}</td>
     ${editable?`<td style="text-align:right;white-space:nowrap">
+      ${isAdmin()&&u.role!=='admin'&&u.role!=='owner'?`<button class="btn ghost sm" onclick="userPermModal(${u.id})" title="Настроить права">🔑</button>`:''}
       <button class="btn ghost sm" onclick="userModal(${u.id})">✎</button>
       ${u.id!==ME.id?`<button class="btn ghost sm" onclick="delUser(${u.id})">🗑</button>`:''}</td>`:''}</tr>`;
   }).join('')}
@@ -2403,13 +2442,79 @@ async function savePermEdit(){ ensureState(); const mx={};
 async function delUser(id){ if(!confirm('Удалить сотрудника? Его задачи останутся без исполнителя.'))return;
   try{ await api('/api/users/'+id,'DELETE'); USERS=await api('/api/users'); await reloadTasks(); render(); }catch(e){alert(e.message);} }
 
+/* -------- Персональные права сотрудника (окно «🔑 Права») --------
+   Хранятся в DB.userPerms[id] = {view,edit,add,del,acts}. Меняет только админ.
+   Сервер считает права по этой же записи — интерфейс и API всегда согласованы. */
+const PERM_MODS_FULL=[['objects','Объекты и помещения'],['tenants','Арендаторы'],['contracts','Договоры'],['payments','Платежи аренды'],
+  ['utilities','Коммуналка и расходы'],['salaries','Зарплата (ФОТ)'],['budget','Бюджет и долги'],['tasks','Задачи'],['requests','Заявки'],
+  ['upkeep','Плановое ТО'],['ads','Реклама'],['reports','Отчёты'],['integrations','Синхронизация'],['employees','Сотрудники']];
+const hasCustomPerms = uid => !!(DB && DB.userPerms && DB.userPerms[String(uid)]);
+function basePermsOf(u){ // права роли (с учётом матрицы ролей) — стартовая точка
+  const r=ROLES[u.role]||{view:[],edit:[]}; const edit=r.edit.slice();
+  return { view:r.view.slice(), edit, add:edit.slice(), del:edit.slice(),
+    acts:Object.keys(ACT_CATALOG).filter(k=>edit.includes(ACT_CATALOG[k].mod)) };
+}
+function permsOfUser(u){ const cur=(DB.userPerms||{})[String(u.id)]; const base=basePermsOf(u);
+  if(!cur) return base;
+  const A=(x,d)=>Array.isArray(x)?x.slice():d;
+  const edit=A(cur.edit,base.edit);
+  return { view:A(cur.view,base.view), edit, add:A(cur.add,edit), del:A(cur.del,edit),
+    acts:A(cur.acts, Object.keys(ACT_CATALOG).filter(k=>edit.includes(ACT_CATALOG[k].mod))) };
+}
+function userPermModal(uid){
+  const u=USERS.find(x=>x.id===uid); if(!u) return;
+  if(!isAdmin()) return alert('Права меняет только администратор.');
+  if(u.role==='admin'||u.role==='owner') return alert('У администратора и собственника всегда полный доступ.');
+  const p=permsOfUser(u);
+  const cb=(id,on)=>`<input type="checkbox" id="${id}" ${on?'checked':''} style="width:17px;height:17px;accent-color:var(--accent)">`;
+  const rows=PERM_MODS_FULL.map(([m,title])=>`<tr>
+    <td class="t-strong">${title}</td>
+    <td style="text-align:center">${cb('pv-'+m,p.view.includes(m))}</td>
+    <td style="text-align:center">${cb('pe-'+m,p.edit.includes(m))}</td>
+    <td style="text-align:center">${cb('pa-'+m,p.add.includes(m))}</td>
+    <td style="text-align:center">${cb('pd-'+m,p.del.includes(m))}</td></tr>`).join('');
+  const acts=Object.entries(ACT_CATALOG).map(([k,a])=>`<label style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--line);cursor:pointer">
+    ${cb('pact-'+k,p.acts.includes(k))}<span>${esc(a.title)} <span class="t-sub">(раздел: ${esc((PERM_MODS_FULL.find(x=>x[0]===a.mod)||[,a.mod])[1])})</span></span></label>`).join('')
+    || '<div class="t-sub">Особых действий нет</div>';
+  openM(`<div class="modal-h"><h3>🔑 Права: ${esc(u.full_name)}</h3><span class="x" onclick="closeM()">×</span></div>
+  <div class="modal-b">
+    <div class="t-sub" style="margin-bottom:10px">Роль <b>${esc(u.roleTitle||u.role)}</b> — это шаблон. Здесь можно настроить доступ лично для этого сотрудника: что он <b>видит</b>, что может <b>изменять</b>, <b>добавлять</b> и <b>удалять</b>. Дашборд соберётся автоматически по этим правам.</div>
+    <div style="overflow-x:auto"><table><thead><tr><th>Раздел</th><th style="text-align:center">👁 Видит</th><th style="text-align:center">✎ Изменяет</th><th style="text-align:center">＋ Добавляет</th><th style="text-align:center">🗑 Удаляет</th></tr></thead>
+    <tbody>${rows}</tbody></table></div>
+    <div class="t-sub" style="margin-top:8px">Добавлять/удалять/изменять можно только там, где стоит «Видит». Если снять «Изменяет», то «Добавляет» и «Удаляет» тоже отключатся.</div>
+    <div class="sec-h" style="margin-top:16px">Особые действия</div>
+    ${acts}
+  </div>
+  <div class="modal-f">
+    <button class="btn ghost" onclick="resetUserPerms(${u.id})">↺ Вернуть права роли</button><div class="spacer"></div>
+    <button class="btn ghost" onclick="closeM()">Отмена</button><button class="btn" onclick="saveUserPerms(${u.id})">💾 Сохранить</button></div>`);
+}
+async function resetUserPerms(uid){
+  if(!isAdmin())return; if(!confirm('Вернуть сотруднику стандартные права его роли?'))return;
+  ensureState(); if(DB.userPerms) delete DB.userPerms[String(uid)];
+  recordAudit(); await saveState(); closeM(); render(); alert('Права сброшены на права роли.');
+}
+async function saveUserPerms(uid){
+  if(!isAdmin())return; const u=USERS.find(x=>x.id===uid); if(!u)return;
+  const on=id=>{const e=document.getElementById(id);return !!(e&&e.checked);};
+  const edit=PERM_MODS_FULL.filter(([m])=>on('pe-'+m)).map(([m])=>m);
+  const view=[...new Set([...PERM_MODS_FULL.filter(([m])=>on('pv-'+m)).map(([m])=>m), ...edit, 'dashboard'])];
+  const add=PERM_MODS_FULL.filter(([m])=>on('pa-'+m)&&edit.includes(m)).map(([m])=>m);
+  const del=PERM_MODS_FULL.filter(([m])=>on('pd-'+m)&&edit.includes(m)).map(([m])=>m);
+  const acts=Object.keys(ACT_CATALOG).filter(k=>on('pact-'+k)&&edit.includes(ACT_CATALOG[k].mod));
+  ensureState(); DB.userPerms=DB.userPerms||{}; DB.userPerms[String(uid)]={view,edit,add,del,acts};
+  recordAudit(); await saveState(); closeM(); render();
+  if(uid===ME.id){ await loadData(); render(); }
+  alert('Права сохранены. Сотруднику нужно обновить страницу (или зайти заново), чтобы они применились.');
+}
+
 /* ============================================================
    ОТЧЁТЫ
    ============================================================ */
 function reports(){
   const m=metrics();
   const bs = SCOPE==='all'? buildingsList() : [buildingOf(SCOPE)].filter(Boolean);
-  el(head('Отчёты и аналитика',`Сводная отчётность · ${scopeSub()}`,`<button class="btn ghost sm" onclick="exportCSV()">⤓ Экспорт CSV</button>`)+
+  el(head('Отчёты и аналитика',`Сводная отчётность · ${scopeSub()}`,canAct('export')?`<button class="btn ghost sm" onclick="exportCSV()">⤓ Экспорт CSV</button>`:'')+
   `<div class="grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:18px">
     ${miniStat('Собрано (всего)',money(m.collected),'green')}${miniStat('Операц. расходы',money(m.exp),'amber')}
     ${miniStat('NOI (чистый опер. доход)',money(m.net),'blue')}${miniStat('Маржа NOI',pct(m.net,m.collected)+'%','violet')}
@@ -2442,6 +2547,7 @@ function reports(){
   new Chart(document.getElementById('chFloor'),{type:'bar',data:{labels:floors.map(f=>'Этаж '+f),datasets:[{data:floors.map(f=>{const us=su.filter(u=>u.floor===f);const t=us.reduce((s,u)=>s+u.area,0);const o=us.filter(u=>u.tenant).reduce((s,u)=>s+u.area,0);return pct(o,t);}),backgroundColor:cssVar('--accent'),borderRadius:6}]},options:{plugins:{legend:{display:false}},scales:{y:{max:100,grid:{color:cssVar('--chart-grid')},ticks:{color:cssVar('--muted')}},x:{grid:{display:false},ticks:{color:cssVar('--muted')}}}}});
 }
 function exportCSV(){
+  if(!canAct('export')) return alert('Нет права на экспорт данных.');
   let rows=[['Объект','Арендатор','Помещение','Период','Начислено','Оплачено','Задолженность','Статус']];
   sPayments().forEach(p=>{const c=contractOf(p.contract);if(!c)return;const b=buildingOf(unitOf(c.unit)?.building);const t=tenantOf(c.tenant);rows.push([b?b.name:'',t?t.name:'',unitNum(c.unit),p.period,p.amount,p.paid,p.amount-p.paid,p.status]);});
   const csv='﻿'+rows.map(r=>r.map(csvCell).join(';')).join('\n');
@@ -2459,7 +2565,7 @@ function salaries(){
   const recs=(DB.salaries||[]).filter(s=>s.period===salPeriod);
   const accrued=recs.reduce((s,x)=>s+x.amount,0), paid=recs.reduce((s,x)=>s+x.paid,0);
   const pers=[...new Set((DB.salaries||[]).map(s=>s.period))].sort().reverse(); if(!pers.includes(salPeriod))pers.unshift(salPeriod);
-  el(head('Зарплата (ФОТ)',`${fmtPeriod(salPeriod)} · ${USERS.length} сотрудников`, `${canEdit('employees')?`<button class="btn ghost" onclick="userModal()">+ Сотрудник</button> `:''}${canEdit('salaries')?`<button class="btn" onclick="bulkAccrue()">Начислить всем</button>`:''}`)+
+  el(head('Зарплата (ФОТ)',`${fmtPeriod(salPeriod)} · ${USERS.length} сотрудников`, `${canAdd('employees')?`<button class="btn ghost" onclick="userModal()">+ Сотрудник</button> `:''}${canAdd('salaries')?`<button class="btn" onclick="bulkAccrue()">Начислить всем</button>`:''}`)+
    `<div class="toolbar"><span class="t-sub">Период:</span><select class="search" style="width:auto;min-width:160px" onchange="salPeriod=this.value;render()">${pers.map(p=>`<option value="${p}"${p===salPeriod?' selected':''}>${fmtPeriod(p)}</option>`).join('')}</select></div>
    <div class="grid" style="grid-template-columns:repeat(3,1fr);margin-bottom:18px">
      ${miniStat('ФОТ начислено',money(accrued),'violet')}${miniStat('Выплачено',money(paid),'green')}${miniStat('К выплате',money(accrued-paid),'red')}
@@ -2469,7 +2575,7 @@ function salaries(){
      return `<tr><td class="t-strong">${esc(u.full_name)}</td><td class="t-sub">${esc(u.position||'—')}</td>
      <td>${rec?money(rec.amount):'<span class="t-sub">не начислено</span>'}</td>
      <td>${rec&&rec.paid?money(rec.paid):'—'}</td><td>${rec?salPill(rec):'<span class="pill gray">—</span>'}</td>
-     ${(canEdit('salaries')||canEdit('employees'))?`<td style="text-align:right;white-space:nowrap">${canEdit('salaries')?(rec?`${rec.paid<rec.amount?`<button class="btn sm" onclick="salPayModal('${rec.id}')">Выплатить</button>`:'<span class="t-sub">выплачено</span>'} <button class="btn ghost sm" onclick="salEditModal('${rec.id}')" title="Изменить начисление">✎₽</button> <button class="btn ghost sm" onclick="delSalary('${rec.id}')" title="Удалить начисление">🗑</button>`:`<button class="btn ghost sm" onclick="salaryModal(${u.id})">Начислить</button>`):''}${canEdit('employees')?` <button class="btn ghost sm" onclick="userModal(${u.id})" title="Редактировать сотрудника">✎</button>`:''}</td>`:''}</tr>`;}).join('')}
+     ${(canEdit('salaries')||canEdit('employees'))?`<td style="text-align:right;white-space:nowrap">${canEdit('salaries')?(rec?`${rec.paid<rec.amount&&canAct('salPay')?`<button class="btn sm" onclick="salPayModal('${rec.id}')">Выплатить</button>`:(rec.paid>=rec.amount?'<span class="t-sub">выплачено</span>':'')} <button class="btn ghost sm" onclick="salEditModal('${rec.id}')" title="Изменить начисление">✎₽</button> ${canDel('salaries')?`<button class="btn ghost sm" onclick="delSalary('${rec.id}')" title="Удалить начисление">🗑</button>`:''}`:(canAdd('salaries')?`<button class="btn ghost sm" onclick="salaryModal(${u.id})">Начислить</button>`:'')):''}${canEdit('employees')?` <button class="btn ghost sm" onclick="userModal(${u.id})" title="Редактировать сотрудника">✎</button>`:''}</td>`:''}</tr>`;}).join('')}
    </tbody></table></div></div>`);
 }
 function salaryModal(uid){const u=userOf(uid);if(!u)return;
@@ -2483,7 +2589,7 @@ async function saveSalary(uid){const amt=+val('s-amt')||0;const per=val('s-per')
   DB.salaries.push({id:'sal'+Date.now(),user_id:uid,period:per,amount:amt,paid:0,status:'accrued',paidDate:null,method:null});
   salPeriod=per; closeM(); await afterStateChange();}
 function salTx(r){ if(Array.isArray(r.transactions)&&r.transactions.length) return r.transactions; return r.paid>0?[{amount:r.paid,date:r.paidDate,method:r.method}]:[]; }
-function salPayModal(id){const r=(DB.salaries||[]).find(s=>s.id===id);if(!r)return;const u=userOf(r.user_id);const rem=r.amount-r.paid;const tx=salTx(r);
+function salPayModal(id){if(!canAct('salPay'))return alert('Нет права выплачивать зарплату.');const r=(DB.salaries||[]).find(s=>s.id===id);if(!r)return;const u=userOf(r.user_id);const rem=r.amount-r.paid;const tx=salTx(r);
   openM(`<div class="modal-h"><h3>Выплата зарплаты / аванс</h3><span class="x" onclick="closeM()">×</span></div>
   <div class="modal-b">${infoRow('Сотрудник',esc(u?u.full_name:''))}${infoRow('Период',fmtPeriod(r.period))}${infoRow('Начислено',money(r.amount))}${infoRow('Выплачено',money(r.paid))}${infoRow('Остаток',rem>0?`<span style="color:var(--red)">${money(rem)}</span>`:'<span style="color:var(--green)">0 ₽</span>')}
   ${tx.length?`<div class="sec-h">История выплат</div>`+tx.map(x=>`<div class="doc"><div class="di">💸</div><div style="flex:1;min-width:0"><div class="t-strong">${money(x.amount)} · ${esc(payLabel(x.method))}${x.note?` · ${esc(x.note)}`:''}</div><div class="t-sub">${x.date?fmtD(x.date):'—'}</div></div></div>`).join(''):''}
@@ -2518,7 +2624,7 @@ async function saveSalEdit(id){const r=(DB.salaries||[]).find(s=>s.id===id);if(!
   r.amount=amt; r.status=r.paid>=r.amount?'paid':(r.paid>0?'partial':'accrued');
   closeM(); await afterStateChange();}
 // удалить начисление (с предупреждением, если по нему была выплата)
-async function delSalary(id){const r=(DB.salaries||[]).find(s=>s.id===id);if(!r)return;const u=userOf(r.user_id);
+async function delSalary(id){if(!canDel('salaries'))return alert('Нет права удалять начисления.');const r=(DB.salaries||[]).find(s=>s.id===id);if(!r)return;const u=userOf(r.user_id);
   const warn=r.paid>0?`\n\nВнимание: по начислению уже проведена выплата ${money(r.paid)} — она тоже будет удалена.`:'';
   if(!confirm(`Удалить начисление ${money(r.amount)} сотруднику ${u?u.full_name:''} за ${fmtPeriod(r.period)}?${warn}`))return;
   DB.salaries=(DB.salaries||[]).filter(s=>s.id!==id); await afterStateChange();}
@@ -2762,7 +2868,9 @@ function parseCSV(text){
 }
 let _importPrep=null;
 function importModal(type){
-  type=type||'buildings'; const ed=canEdit(IMPORT_DEFS[type].need); if(!ed && !isAdmin()){ return alert('Недостаточно прав для импорта.'); }
+  type=type||'buildings';
+  if(!isAdmin() && !canAct('import')) return alert('Нет права на импорт из файлов.');
+  const ed=canEdit(IMPORT_DEFS[type].need); if(!ed && !isAdmin()){ return alert('Недостаточно прав для импорта.'); }
   _importPrep=null;
   const opts=Object.entries(IMPORT_DEFS).filter(([k,d])=>canEdit(d.need)||isAdmin()).map(([k,d])=>`<option value="${k}"${k===type?' selected':''}>${d.title}</option>`).join('');
   openM(`<div class="modal-h"><h3>⤓ Импорт из таблицы (Excel / CSV)</h3><span class="x" onclick="closeM()">×</span></div>
@@ -3018,7 +3126,7 @@ function intCard(key,icon,title,desc,st,extra,extraActions){ st=st||{};
     ${st.connected?'<span class="pill green">Подключено</span>':'<span class="pill gray">Не подключено</span>'}</div>
     <div class="t-sub" style="margin-bottom:12px">${extra}${st.name?` · ${esc(st.name)}`:''}${st.base?` · ${esc(st.base)}`:''}${st.lastSync?`<br>Последняя синхронизация: ${fmtDateTime(st.lastSync)}`:''}</div>
     ${canEdit('integrations')?`<div style="display:flex;gap:8px;flex-wrap:wrap">
-      ${st.connected?`<button class="btn" onclick="intSync('${key}')">↻ Синхронизировать</button>${extraActions||''}<button class="btn ghost sm" onclick="intDisconnect('${key}')">Отключить</button>`
+      ${st.connected?`${canAct('bankSync')?`<button class="btn" onclick="intSync('${key}')">↻ Синхронизировать</button>`:''}${extraActions||''}<button class="btn ghost sm" onclick="intDisconnect('${key}')">Отключить</button>`
         :`<button class="btn" onclick="intConnect('${key}')">Подключить</button>`}</div>`:'<div class="t-sub">Нет прав на управление интеграциями</div>'}
     ${SYNC_GUIDES[key]?`<div style="margin-top:8px"><button class="btn ghost sm" onclick="syncHelp('${key}')">ℹ️ Как подключить — инструкция</button></div>`:''}
   </div>`;
@@ -3250,7 +3358,7 @@ async function saveBuildingEdit(id){const b=buildingOf(id);if(!b)return;
   b.tariffs={electricity:+val('b-tar-e')||0,water:+val('b-tar-w')||0,heating:+val('b-tar-h')||0};
   b.elecCoef=+val('b-coef-e')||1;
   closeM(); await afterStateChange(); showApp();}
-async function delBuilding(id){const b=buildingOf(id);if(!b)return;
+async function delBuilding(id){if(!canDel('objects'))return alert('Нет права удалять объекты.');const b=buildingOf(id);if(!b)return;
   const units=DB.units.filter(u=>u.building===id);
   if(units.length) return alert(`Нельзя удалить объект «${b.name}»: в нём ${units.length} помещ. Сначала удалите или перенесите помещения.`);
   if(!confirm(`Удалить объект «${b.name}»?`))return;
@@ -3364,9 +3472,9 @@ function taskInfo(id){const t=TASKS.find(x=>x.id===id);const canManage=canEdit('
   ${infoRow('Статус',{open:'Открыто',in_progress:'В работе',done:'Готово'}[t.status])}${infoRow('Поставил',esc(t.creator_name||'—'))}</div>
   <div class="modal-f">
     ${canManage&&t.status!=='done'?`<button class="btn ghost" onclick="closeM();advanceTask(${t.id})">${t.status==='open'?'→ В работу':'✓ Завершить'}</button>`:''}
-    ${canEdit('tasks')?`<button class="btn ghost" onclick="taskModal(${t.id})">✎ Изменить</button><button class="btn danger" onclick="delTask(${t.id})">Удалить</button>`:''}
+    ${canEdit('tasks')?`<button class="btn ghost" onclick="taskModal(${t.id})">✎ Изменить</button>`:''}${canDel('tasks')?`<button class="btn danger" onclick="delTask(${t.id})">Удалить</button>`:''}
     <button class="btn" onclick="closeM()">Закрыть</button></div>`);}
-async function delTask(id){ if(!confirm('Удалить задачу?'))return; try{ await api('/api/tasks/'+id,'DELETE'); closeM(); await reloadTasks(); render(); }catch(e){alert(e.message);} }
+async function delTask(id){ if(!canDel('tasks'))return alert('Нет права удалять задачи.'); if(!confirm('Удалить задачу?'))return; try{ await api('/api/tasks/'+id,'DELETE'); closeM(); await reloadTasks(); render(); }catch(e){alert(e.message);} }
 
 /* сотрудник / пользователь */
 function userModal(id){
@@ -3477,10 +3585,10 @@ function unitInfo(id){const u=unitOf(id);const c=DB.contracts.find(c=>c.unit===i
     ${docsBlock('unit',u.id,u.documents)}
   </div>
   <div class="modal-f">
-    ${(!t && canEdit('contracts'))?`<button class="btn" onclick="assignTenantModal('${u.id}')">🏠 Заселить арендатора</button>`:''}
+    ${(!t && canAdd('contracts'))?`<button class="btn" onclick="assignTenantModal('${u.id}')">🏠 Заселить арендатора</button>`:''}
     ${(t && canEdit('contracts'))?`<button class="btn ghost" onclick="editContractModal('${c.id}')">✎ Изменить аренду</button>`:''}
     ${(t && canEdit('contracts'))?`<button class="btn ghost" onclick="evictTenant('${u.id}')">🚪 Выселить арендатора</button>`:''}
-    ${canEdit('objects')?`<button class="btn ghost" onclick="editUnitModal('${u.id}')">✎ Редактировать</button><button class="btn danger" onclick="delUnit('${u.id}')">Удалить</button>`:''}<button class="btn" onclick="closeM()">Закрыть</button></div>`);}
+    ${canEdit('objects')?`<button class="btn ghost" onclick="editUnitModal('${u.id}')">✎ Редактировать</button>`:''}${canDel('objects')?`<button class="btn danger" onclick="delUnit('${u.id}')">Удалить</button>`:''}<button class="btn" onclick="closeM()">Закрыть</button></div>`);}
 // выселить арендатора: завершить договор, освободить помещение (история платежей сохраняется)
 async function evictTenant(uid){ if(!canEdit('contracts'))return; const u=unitOf(uid); if(!u||!u.tenant) return;
   const t=tenantOf(u.tenant);
@@ -3551,7 +3659,7 @@ async function saveUnitEdit(id){const u=unitOf(id);if(!u)return;
   u.owner=u.ownership==='sold'?{name:val('e-oname'),inn:val('e-oinn'),contact:val('e-ocontact')}:null;
   u.ownerUtilFee=u.ownership==='sold'?(Math.max(0,+val('e-ownerfee')||0)||null):null;
   closeM(); await afterStateChange();}
-async function delUnit(id){const u=unitOf(id);if(!u)return;
+async function delUnit(id){if(!canDel('objects'))return alert('Нет права удалять помещения.');const u=unitOf(id);if(!u)return;
   const c=DB.contracts.find(c=>c.unit===id);
   const warn=c?`\n\nВнимание: по помещению есть договор — он и связанные платежи тоже будут удалены.`:'';
   if(!confirm(`Удалить помещение ${u.num||id}?${warn}`))return;
@@ -3592,7 +3700,7 @@ async function saveTenantEdit(id){const t=tenantOf(id);if(!t)return;
   if(!val('et-name').trim())return alert('Укажите наименование');
   t.name=val('et-name'); t.contact=val('et-contact'); t.inn=val('et-inn'); t.phone=val('et-phone'); t.industry=val('et-industry'); t.email=val('et-email');
   closeM(); await afterStateChange();}
-async function delTenant(id){const t=tenantOf(id);if(!t)return;
+async function delTenant(id){if(!canDel('tenants'))return alert('Нет права удалять арендаторов.');const t=tenantOf(id);if(!t)return;
   const cs=DB.contracts.filter(c=>c.tenant===id);
   const warn=cs.length?`\n\nВнимание: у арендатора ${cs.length} договор(а) — они и платежи будут удалены, помещения освободятся.`:'';
   if(!confirm(`Удалить арендатора «${t.name}»?${warn}`))return;
@@ -3606,7 +3714,7 @@ function contractInfo(id){const c=contractOf(id);if(!c)return;const t=tenantOf(c
   openM(`<div class="modal-h"><h3>Договор ${(c.id||'').toUpperCase()}</h3><span class="x" onclick="closeM()">×</span></div>
   <div class="modal-b">${infoRow('Арендатор',esc(t?t.name:'—'))}${infoRow('Помещение',esc(c.unit)+(u?' · '+esc(u.area)+' м²':''))}${infoRow('Ставка',fmt(c.rate)+(c.rateType==='flat'?' ₽/мес (за помещение)':' ₽/м²/мес'))}${infoRow('Аренда/мес',money(monthlyRent(c)))}${infoRow('Депозит',money(c.deposit))}${infoRow('Индексация',c.indexation+'% / год')}${infoRow('Период',fmtD(c.start)+' — '+fmtD(c.end))}${infoRow('Осталось',daysLeft(c.end)+' дн')}${infoRow('День начисления аренды',c.accrualDay?('число '+c.accrualDay+' каждого месяца'):'общий (Настройки → Автоматизация)')}
   ${(Array.isArray(c.rateHistory)&&c.rateHistory.length)?`<div class="sec-h">История индексаций ставки</div>${c.rateHistory.slice().reverse().map(h=>`<div class="doc"><div class="di">📈</div><div style="flex:1;min-width:0"><div class="t-strong">${money(h.oldRate)} → ${money(h.newRate)} /м²</div><div class="t-sub">${h.date?fmtD(h.date):''}</div></div></div>`).join('')}`:''}</div>
-  <div class="modal-f">${canEdit('payments')?`<button class="btn ghost" onclick="accrueRentModal('${c.id}')">➕ Начислить аренду</button>`:''}${canEdit('contracts')?`<button class="btn ghost" onclick="editContractModal('${c.id}')">✎ Изменить аренду</button><button class="btn ghost" onclick="renewModal('${c.id}')">Продлить</button>`:''}<button class="btn" onclick="closeM()">Закрыть</button></div>`);}
+  <div class="modal-f">${canEdit('payments')&&canAct('accrue')?`<button class="btn ghost" onclick="accrueRentModal('${c.id}')">➕ Начислить аренду</button>`:''}${canEdit('contracts')?`<button class="btn ghost" onclick="editContractModal('${c.id}')">✎ Изменить аренду</button><button class="btn ghost" onclick="renewModal('${c.id}')">Продлить</button>`:''}<button class="btn" onclick="closeM()">Закрыть</button></div>`);}
 function editContractModal(id){ const c=contractOf(id); if(!c) return; const t=tenantOf(c.tenant); const u=unitOf(c.unit);
   openM(`<div class="modal-h"><h3>Изменить договор аренды</h3><span class="x" onclick="contractInfo('${id}')">×</span></div>
   <div class="modal-b">

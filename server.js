@@ -10,7 +10,8 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join, extname, normalize, sep } from 'node:path';
 import {
   db, seed, resetData, hashPassword, verifyPassword,
-  ROLES, ROLE_KEYS, perms, canView, canEdit, canViewS, canEditS
+  ROLES, ROLE_KEYS, perms, canView, canEdit, canViewS, canEditS,
+  canAddS, canDelS, canActS, effPerms, ACTIONS, ACTION_KEYS
 } from './db.js';
 import { ask as llmAsk, askVision, hasModelKey, hasVisionModel, visionModelName, providerName } from './llm.js';
 import { avitoConfigured, cianConfigured, feedTokenOk, feedUrls, avitoStats, buildAvitoFeedXml } from './ads.js';
@@ -105,10 +106,12 @@ function hasBadIds(st){
 // из-за чего сотрудник без права на платежи видел сбор аренды на дашборде.
 // Объекты и помещения (buildings/units) оставляем: это справочные данные, на них
 // ссылаются все разделы, и без них интерфейс просто разваливается.
-function filterStateForRole(state, role){
+// `who` — объект пользователя (тогда учитываются и персональные права) либо строка роли.
+function filterStateForRole(state, who){
+  const role = (who && typeof who==='object') ? who.role : who;
   if(isFull(role)) return state;
   const s = {...state};
-  const cv = m => canViewS(role, m, state);
+  const cv = m => canViewS(who, m, state);
   if(!cv('payments'))   s.payments   = [];
   if(!cv('contracts'))  s.contracts  = [];
   if(!cv('tenants'))    s.tenants    = [];
@@ -120,6 +123,8 @@ function filterStateForRole(state, role){
   if(!cv('ads')){       s.listings   = []; s.signage = []; }
   if(!cv('audit'))      s.audit      = [];
   if(!cv('integrations')) s.integrations = { ...(s.integrations||{}), log: [] };
+  // настройки прав других сотрудников — только тем, кто ведёт кадры
+  if(!cv('employees')) s.userPerms = {};
   // токен Telegram-бота — только админу/собственнику
   if(s.settings && s.settings.notify && s.settings.notify.telegram){
     s.settings = {...s.settings, notify:{...s.settings.notify, telegram:{...s.settings.notify.telegram, token:''}}};
@@ -741,7 +746,7 @@ async function api(req, res, url){
 
   // ---- Реклама: статус интеграции + ссылки на XML-фид (для вставки в кабинет площадки) ----
   if(path==='/api/ads/info' && method==='GET'){
-    if(!canViewS(me.role,'ads',loadState())) return send(res,403,{error:'Нет доступа к разделу «Реклама»'});
+    if(!canViewS(me,'ads',loadState())) return send(res,403,{error:'Нет доступа к разделу «Реклама»'});
     const origin =`${(req.headers['x-forwarded-proto']||'http')}://${req.headers.host}`;
     const urls = feedUrls(origin);
     return send(res,200,{ avitoConfigured: avitoConfigured(), cianConfigured: cianConfigured(),
@@ -749,7 +754,7 @@ async function api(req, res, url){
   }
   // ---- Банк (Сбер): статус интеграции ----
   if(path==='/api/bank/info' && method==='GET'){
-    if(!canViewS(me.role,'integrations',loadState())) return send(res,403,{error:'Нет доступа к разделу «Синхронизация»'});
+    if(!canViewS(me,'integrations',loadState())) return send(res,403,{error:'Нет доступа к разделу «Синхронизация»'});
     const s = await sberStore.load();
     return send(res,200,{ configured: sberConfigured(), account: sberAccount() ? ('•••' + String(sberAccount()).slice(-4)) : '',
       hasTokens: !!(s.refresh_token || process.env.SBER_REFRESH_TOKEN), lastSync: s.last_sync || null });
@@ -760,7 +765,8 @@ async function api(req, res, url){
   if(path==='/api/bank/sync' && method==='POST'){
     const row0 = db.prepare(`SELECT json, updated_at FROM state WHERE key='main'`).get();
     const st = JSON.parse(row0.json);
-    if(!canEditS(me.role,'payments',st)) return send(res,403,{ error:'Нет прав на изменение платежей' });
+    if(!canEditS(me,'payments',st)) return send(res,403,{ error:'Нет прав на изменение платежей' });
+    if(!canActS(me,'bankSync',st)) return send(res,403,{ error:'Нет права на синхронизацию с банком' });
     if(!sberConfigured()) return send(res,400,{ error:'Сбер не подключён: не заданы SBER_CLIENT_ID / SBER_PFX_PATH / SBER_ACCOUNT в окружении клиента.' });
     const b = await readBody(req);
     // по умолчанию — последние 7 дней (банковская выписка запрашивается по датам)
@@ -813,7 +819,7 @@ async function api(req, res, url){
     const platform = (b.platform||'').toLowerCase();
     const row = db.prepare(`SELECT json FROM state WHERE key='main'`).get();
     const st = JSON.parse(row.json);
-    if(!canEditS(me.role,'ads',st)) return send(res,403,{error:'Нет прав на изменение раздела «Реклама».'});
+    if(!canEditS(me,'ads',st)) return send(res,403,{error:'Нет прав на изменение раздела «Реклама».'});
     if(platform!=='avito') return send(res,400,{error:'Пока поддерживается только синхронизация с Авито.'});
     if(!avitoConfigured()) return send(res,400,{error:'Ключи Авито не заданы в окружении клиента. Подключите API (AVITO_CLIENT_ID/SECRET/USER_ID).'});
     const listings = Array.isArray(st.listings) ? st.listings : [];
@@ -847,13 +853,15 @@ async function api(req, res, url){
     const row = db.prepare(`SELECT json, updated_at FROM state WHERE key='main'`).get();
     const state = JSON.parse(row.json);
     // задачи — только тем, кто видит раздел «Задачи» (иначе список уходил всем)
-    const tasks = canViewS(me.role,'tasks',state) ? db.prepare(TASK_SELECT + ' ORDER BY t.id').all() : [];
-    const proj = canViewS(me.role,'employees',state) ? publicUser : liteUser; // контакты — только кадровым ролям
+    const tasks = canViewS(me,'tasks',state) ? db.prepare(TASK_SELECT + ' ORDER BY t.id').all() : [];
+    const proj = canViewS(me,'employees',state) ? publicUser : liteUser; // контакты — только кадровым ролям
     const users = db.prepare('SELECT * FROM users ORDER BY full_name').all().map(proj);
     return send(res,200,{
       user: publicUser(me),
       roles: ROLES,
-      state: { ...filterStateForRole(state, me.role), _ver: row.updated_at }, tasks, users
+      myPerms: effPerms(me, state),          // итоговые права ИМЕННО этого сотрудника (роль + матрица + персональные)
+      actions: ACTIONS,                       // каталог особых действий (для окна настройки прав)
+      state: { ...filterStateForRole(state, me), _ver: row.updated_at }, tasks, users
     });
   }
 
@@ -861,7 +869,7 @@ async function api(req, res, url){
   if(path==='/api/state'){
     if(method==='GET'){
       const row = db.prepare(`SELECT json, updated_at FROM state WHERE key='main'`).get();
-      return send(res,200, { ...filterStateForRole(JSON.parse(row.json), me.role), _ver: row.updated_at });
+      return send(res,200, { ...filterStateForRole(JSON.parse(row.json), me), _ver: row.updated_at });
     }
     if(method==='POST'){
       const b = await readBody(req);
@@ -877,7 +885,7 @@ async function api(req, res, url){
       // значит кто-то сохранил параллельно → не перетираем, просим клиента перечитать (409).
       if(b._ver && b._ver !== row.updated_at){
         return send(res,409,{ error:'Данные изменены другим пользователем. Обновите и повторите.',
-          state:{ ...filterStateForRole(cur, me.role), _ver: row.updated_at } });
+          state:{ ...filterStateForRole(cur, me), _ver: row.updated_at } });
       }
       // СЕРВЕРНАЯ авторизация (БЕЛЫЙ список): для не-админа начинаем с текущего состояния
       // и накладываем ТОЛЬКО те коллекции, которые роли разрешено редактировать. Всё прочее
@@ -885,7 +893,22 @@ async function api(req, res, url){
       let toSave = b;
       if(!isFull(me.role)){
         const merged = {...cur};
-        for(const [k,mod] of Object.entries(STATE_MOD)){ if(canEditS(me.role, mod, cur)) merged[k] = b[k]; }
+        for(const [k,mod] of Object.entries(STATE_MOD)){
+          if(!canEditS(me, mod, cur)) continue;
+          // персональные права: «добавлять» и «удалять» — отдельно от «изменять».
+          // Сверяем состав id: появились новые → нужно право add, пропали → нужно право del.
+          const A = Array.isArray(cur[k]) ? cur[k] : null, B = Array.isArray(b[k]) ? b[k] : null;
+          if(A && B){
+            const idsA = new Set(A.map(x=>x&&x.id)), idsB = new Set(B.map(x=>x&&x.id));
+            const added = [...idsB].some(id=>!idsA.has(id));
+            const removed = [...idsA].some(id=>!idsB.has(id));
+            if(added && !canAddS(me, mod, cur))
+              return send(res,403,{error:`Нет прав добавлять записи в раздел «${mod}». Обратитесь к администратору.`});
+            if(removed && !canDelS(me, mod, cur))
+              return send(res,403,{error:`Нет прав удалять записи в разделе «${mod}». Обратитесь к администратору.`});
+          }
+          merged[k] = b[k];
+        }
         const oldAudit = Array.isArray(cur.audit)?cur.audit:[];
         if(Array.isArray(b.audit) && b.audit.length >= oldAudit.length) merged.audit = b.audit.slice(-500);
         else merged.audit = oldAudit;
@@ -913,11 +936,11 @@ async function api(req, res, url){
     // права на задачи — с учётом редактируемой матрицы (canEditS), список — только тем, кто раздел видит
     if(method==='GET'){
       const st = loadState();
-      if(!canViewS(me.role,'tasks',st)) return send(res,200,[]);
+      if(!canViewS(me,'tasks',st)) return send(res,200,[]);
       return send(res,200, db.prepare(TASK_SELECT+' ORDER BY t.id').all());
     }
     if(method==='POST'){
-      if(!canEditS(me.role,'tasks',loadState())) return send(res,403,{error:'Нет прав на создание задач'});
+      if(!canEditS(me,'tasks',loadState())) return send(res,403,{error:'Нет прав на создание задач'});
       const b = await readBody(req);
       if(!b.title) return send(res,400,{error:'Укажите описание задачи'});
       const info = db.prepare(`INSERT INTO tasks(title,description,unit,assignee_id,created_by,due,priority,status,created_at)
@@ -936,7 +959,7 @@ async function api(req, res, url){
     if(method==='PATCH'){
       const b = await readBody(req);
       const isOwnerOfTask = task.assignee_id===me.id || task.created_by===me.id;
-      if(!canEditS(me.role,'tasks',loadState()) && !isOwnerOfTask) return send(res,403,{error:'Нет прав на изменение задачи'});
+      if(!canEditS(me,'tasks',loadState()) && !isOwnerOfTask) return send(res,403,{error:'Нет прав на изменение задачи'});
       const fields=[], vals=[];
       for(const k of ['title','description','unit','priority','status']) if(k in b){ fields.push(`${k}=?`); vals.push(b[k]); }
       if('assignee_id' in b){ fields.push('assignee_id=?'); vals.push(b.assignee_id||null); }
@@ -946,7 +969,7 @@ async function api(req, res, url){
       return send(res,200, db.prepare(TASK_SELECT+' WHERE t.id=?').get(id));
     }
     if(method==='DELETE'){
-      if(!canEditS(me.role,'tasks',loadState())) return send(res,403,{error:'Нет прав'});
+      if(!canEditS(me,'tasks',loadState())) return send(res,403,{error:'Нет прав'});
       db.prepare('DELETE FROM tasks WHERE id=?').run(id);
       return send(res,200,{ ok:true });
     }
@@ -955,11 +978,11 @@ async function api(req, res, url){
   // ---- сотрудники / пользователи ----
   if(path==='/api/users'){
     if(method==='GET'){
-      if(!canViewS(me.role,'employees',loadState())) return send(res,403,{error:'Нет доступа к сотрудникам'});
+      if(!canViewS(me,'employees',loadState())) return send(res,403,{error:'Нет доступа к сотрудникам'});
       return send(res,200, db.prepare('SELECT * FROM users ORDER BY full_name').all().map(publicUser));
     }
     if(method==='POST'){
-      if(!canEditS(me.role,'employees',loadState())) return send(res,403,{error:'Только администратор может добавлять сотрудников'});
+      if(!canEditS(me,'employees',loadState())) return send(res,403,{error:'Только администратор может добавлять сотрудников'});
       const b = await readBody(req);
       const email=(b.email||'').trim().toLowerCase();
       if(!email || !b.password || !b.full_name) return send(res,400,{error:'Заполните email, пароль и ФИО'});
@@ -975,7 +998,7 @@ async function api(req, res, url){
     }
   }
   if(seg[1]==='users' && seg[2]){
-    if(!canEditS(me.role,'employees',loadState())) return send(res,403,{error:'Только администратор'});
+    if(!canEditS(me,'employees',loadState())) return send(res,403,{error:'Только администратор'});
     const id=+seg[2];
     const u=db.prepare('SELECT * FROM users WHERE id=?').get(id);
     if(!u) return send(res,404,{error:'Сотрудник не найден'});
@@ -1039,7 +1062,7 @@ async function api(req, res, url){
     if(!question) return send(res,400,{ error:'Пустой вопрос' });
     const scope = (typeof b.scope==='string') ? b.scope : 'all';
     // контекст: только данные, доступные роли (filterStateForRole), без секретов
-    const safe = filterStateForRole(st, me.role);
+    const safe = filterStateForRole(st, me);
     const data = buildAssistantData(safe, me.role, scope);
     const actionsOn = cfg.actions !== false;   // Фаза 2: выполнение действий (по умолчанию вкл при включённом помощнике)
     // GigaChat требует РОВНО один системный месседж и первым — объединяем промпт + справку + данные (+ протокол действий).
@@ -1115,7 +1138,7 @@ async function api(req, res, url){
     const st = JSON.parse(db.prepare(`SELECT json FROM state WHERE key='main'`).get().json);
     const cfg = (st.settings && st.settings.assistant) || {};
     if(!hasVisionModel() || !cfg.enabled) return send(res,200,{ enabled:false });   // нет ключа/модели или помощник выключен
-    if(!canEditS(me.role,'objects',st)) return send(res,403,{ error:'Нет прав на изменение объектов' });
+    if(!canEditS(me,'objects',st)) return send(res,403,{ error:'Нет прав на изменение объектов' });
     if(!assistAllowed(me.id)) return send(res,429,{ error:'Слишком часто. Подождите минуту.' });
     const b = await readBody(req);
     if(!b.dataUrl || !/^data:image\/(png|jpe?g|webp)/i.test(String(b.dataUrl))) return send(res,400,{ error:'Нужна картинка плана (PNG/JPG)' });
@@ -1156,7 +1179,7 @@ async function api(req, res, url){
   // ---- загрузка документа в локальное файловое хранилище ----
   if(path==='/api/files' && method==='POST'){
     const stF = loadState();
-    if(!isFull(me.role) && !canEditS(me.role,'objects',stF) && !canEditS(me.role,'tenants',stF) && !canEditS(me.role,'ads',stF))
+    if(!isFull(me.role) && !canEditS(me,'objects',stF) && !canEditS(me,'tenants',stF) && !canEditS(me,'ads',stF))
       return send(res,403,{error:'Нет прав на загрузку документов'});
     const b = await readBody(req);
     if(!b.dataUrl || !/^data:/.test(b.dataUrl)) return send(res,400,{error:'Нет файла'});

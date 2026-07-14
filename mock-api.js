@@ -10,6 +10,32 @@ const SRM_ROLES={
   maintenance:{title:'Эксплуатация',view:['dashboard','objects','utilities','tasks','requests','upkeep'],edit:['utilities','tasks','requests','upkeep']},
 };
 const _perms=r=>SRM_ROLES[r]||SRM_ROLES.maintenance;
+// каталог особых действий + расчёт итоговых прав (зеркало db.js: роль → матрица ролей → персональные)
+const SRM_ACTIONS={
+  pay:{mod:'payments',title:'Вносить оплату аренды'},
+  accrue:{mod:'payments',title:'Начислять аренду'},
+  readings:{mod:'utilities',title:'Вносить показания счётчиков / котельную / ГСМ'},
+  salPay:{mod:'salaries',title:'Выплачивать зарплату'},
+  import:{mod:'objects',title:'Импорт из файлов (CSV/Excel)'},
+  export:{mod:'reports',title:'Экспорт данных (CSV)'},
+  bankSync:{mod:'integrations',title:'Синхронизация с банком / площадками'},
+};
+const _ACTK=Object.keys(SRM_ACTIONS);
+function _effPerms(u,state){
+  const role=u&&u.role; const base=_perms(role);
+  if(role==='admin'||role==='owner') return {view:[..._ALL],edit:[..._ALL],add:[..._ALL],del:[..._ALL],acts:[..._ACTK]};
+  const A=(x,d)=>Array.isArray(x)?x.slice():d;
+  const rov=state&&state.roleMatrix&&state.roleMatrix[role];
+  let view=base.view, edit=base.edit;
+  if(rov){ view=A(rov.view,base.view); edit=A(rov.edit,base.edit); }
+  let add=edit, del=edit, acts=_ACTK.filter(k=>edit.includes(SRM_ACTIONS[k].mod));
+  const uov=state&&state.userPerms&&state.userPerms[String(u.id)];
+  if(uov){ view=A(uov.view,view); edit=A(uov.edit,edit); add=A(uov.add,edit); del=A(uov.del,edit);
+    acts=A(uov.acts,_ACTK.filter(k=>edit.includes(SRM_ACTIONS[k].mod))); }
+  view=[...new Set([...view,...edit,'dashboard'])];
+  return {view,edit,add:add.filter(m=>edit.includes(m)),del:del.filter(m=>edit.includes(m)),
+    acts:acts.filter(k=>SRM_ACTIONS[k]&&edit.includes(SRM_ACTIONS[k].mod))};
+}
 const _pubUser=u=>u&&({id:u.id,email:u.email,full_name:u.full_name,position:u.position,role:u.role,roleTitle:(SRM_ROLES[u.role]||{}).title,phone:u.phone,building:u.building||'',active:!!u.active,created_at:u.created_at,permissions:_perms(u.role)});
 
 function srmBuildState(){
@@ -218,7 +244,7 @@ async function api(path, method='GET', body){
 
   const M=me(); if(!M) E('Требуется вход');
   if(path==='/api/auth/me') return {user:_pubUser(M)};
-  if(path==='/api/bootstrap') return {user:_pubUser(M),roles:SRM_ROLES,state:db.state,tasks:db.tasks.map(join),users:db.users.map(_pubUser)};
+  if(path==='/api/bootstrap') return {user:_pubUser(M),roles:SRM_ROLES,myPerms:_effPerms(M,db.state),actions:SRM_ACTIONS,state:db.state,tasks:db.tasks.map(join),users:db.users.map(_pubUser)};
   if(path==='/api/state'){ if(method==='GET') return db.state; if(method==='POST'){ db.state=body; _srmSave(db); return {ok:true}; } }
   if(path==='/api/tasks'){
     if(method==='GET') return db.tasks.map(join);
