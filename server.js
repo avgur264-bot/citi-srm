@@ -636,9 +636,14 @@ function readBody(req){
 // общие заголовки безопасности (анти-clickjacking, nosniff, referrer)
 const SEC_HEADERS = {
   'X-Frame-Options':'DENY',
-  'Content-Security-Policy':"frame-ancestors 'none'",
+  // frame-ancestors — анти-clickjacking; object-src/base-uri — против подмены базового URL и плагинов;
+  // form-action 'self' — форму нельзя отправить на чужой домен. script-src не задаём: в разметке много inline-onclick.
+  'Content-Security-Policy':"frame-ancestors 'none'; object-src 'none'; base-uri 'self'; form-action 'self'",
   'X-Content-Type-Options':'nosniff',
   'Referrer-Policy':'strict-origin-when-cross-origin',
+  'Permissions-Policy':'geolocation=(), microphone=(), camera=(), payment=()',
+  // HSTS: сайты работают только по HTTPS (Caddy), браузер запомнит и не пойдёт по http
+  'Strict-Transport-Security':'max-age=15552000; includeSubDomains',
 };
 function send(res, code, obj, headers={}){
   const body = JSON.stringify(obj);
@@ -711,9 +716,13 @@ async function api(req, res, url){
   if(path==='/api/backup' && method==='GET'){
     const want = process.env.BACKUP_TOKEN || '';
     if(!want){ res.writeHead(404,{'Content-Type':'text/plain; charset=utf-8'}); return res.end('Not found'); }
+    // тот же анти-брутфорс, что у логина: подбирать токен нельзя
+    const bkey = 'backup:' + clientIp(req);
+    if(isLocked(bkey)){ res.writeHead(429,{'Content-Type':'text/plain; charset=utf-8'}); return res.end('Too many attempts'); }
     const got = url.searchParams.get('token') || '';
     const A = Buffer.from(String(want)), B = Buffer.from(String(got));
-    if(A.length!==B.length || !timingSafeEqual(A,B)){ res.writeHead(403,{'Content-Type':'text/plain; charset=utf-8'}); return res.end('Forbidden'); }
+    if(A.length!==B.length || !timingSafeEqual(A,B)){ noteFail(bkey); res.writeHead(403,{'Content-Type':'text/plain; charset=utf-8'}); return res.end('Forbidden'); }
+    loginFails.delete(bkey);
     let st, tasks=[];
     try{ st = loadMain(); tasks = db.prepare('SELECT * FROM tasks ORDER BY id').all(); }
     catch(e){ console.error('[backup] read', e.message); res.writeHead(500); return res.end('backup error'); }
@@ -837,8 +846,9 @@ async function api(req, res, url){
   if(path==='/api/bootstrap' && method==='GET'){
     const row = db.prepare(`SELECT json, updated_at FROM state WHERE key='main'`).get();
     const state = JSON.parse(row.json);
-    const tasks = db.prepare(TASK_SELECT + ' ORDER BY t.id').all();
-    const proj = canView(me.role,'employees') ? publicUser : liteUser; // контакты — только кадровым ролям
+    // задачи — только тем, кто видит раздел «Задачи» (иначе список уходил всем)
+    const tasks = canViewS(me.role,'tasks',state) ? db.prepare(TASK_SELECT + ' ORDER BY t.id').all() : [];
+    const proj = canViewS(me.role,'employees',state) ? publicUser : liteUser; // контакты — только кадровым ролям
     const users = db.prepare('SELECT * FROM users ORDER BY full_name').all().map(proj);
     return send(res,200,{
       user: publicUser(me),
@@ -953,6 +963,7 @@ async function api(req, res, url){
       const b = await readBody(req);
       const email=(b.email||'').trim().toLowerCase();
       if(!email || !b.password || !b.full_name) return send(res,400,{error:'Заполните email, пароль и ФИО'});
+      if(String(b.password).length < 8) return send(res,400,{error:'Пароль не короче 8 символов'});
       if(db.prepare('SELECT 1 FROM users WHERE email=?').get(email)) return send(res,409,{error:'Email уже занят'});
       let role = ROLE_KEYS.includes(b.role)?b.role:'maintenance';
       if((role==='admin'||role==='owner') && !isFull(me.role)) role='manager'; // привилегированную роль выдаёт только admin/owner
@@ -978,7 +989,9 @@ async function api(req, res, url){
         if((u.role==='admin'||u.role==='owner') && !isFull(me.role)) return send(res,403,{error:'Менять роль администратора может только администратор'});
         fields.push('role=?'); vals.push(b.role); }
       if('active' in b){ fields.push('active=?'); vals.push(b.active?1:0); }
-      if('password' in b && b.password){ fields.push('password=?'); vals.push(hashPassword(b.password)); }
+      if('password' in b && b.password){
+        if(String(b.password).length < 8) return send(res,400,{error:'Пароль не короче 8 символов'});
+        fields.push('password=?'); vals.push(hashPassword(b.password)); }
       if(fields.length){ vals.push(id); db.prepare(`UPDATE users SET ${fields.join(', ')} WHERE id=?`).run(...vals); }
       return send(res,200, publicUser(db.prepare('SELECT * FROM users WHERE id=?').get(id)));
     }
@@ -1142,7 +1155,8 @@ async function api(req, res, url){
 
   // ---- загрузка документа в локальное файловое хранилище ----
   if(path==='/api/files' && method==='POST'){
-    if(!isFull(me.role) && !canEdit(me.role,'objects') && !canEdit(me.role,'tenants') && !canEdit(me.role,'ads'))
+    const stF = loadState();
+    if(!isFull(me.role) && !canEditS(me.role,'objects',stF) && !canEditS(me.role,'tenants',stF) && !canEditS(me.role,'ads',stF))
       return send(res,403,{error:'Нет прав на загрузку документов'});
     const b = await readBody(req);
     if(!b.dataUrl || !/^data:/.test(b.dataUrl)) return send(res,400,{error:'Нет файла'});
@@ -1196,7 +1210,7 @@ async function serveStatic(req,res,url){
   if(p==='/') p='/index.html';
   const safe = normalize(p).replace(/^(\.\.[/\\])+/,'');
   const file = join(PUBLIC, safe);
-  if(!file.startsWith(PUBLIC)) { res.writeHead(403); return res.end('Forbidden'); }
+  if(file !== PUBLIC && !file.startsWith(PUBLIC + sep)) { res.writeHead(403); return res.end('Forbidden'); }
   try{
     const data = await readFile(file);
     res.writeHead(200, {'Content-Type': MIME[extname(file)] || 'application/octet-stream', 'Cache-Control':'no-store', ...SEC_HEADERS});
