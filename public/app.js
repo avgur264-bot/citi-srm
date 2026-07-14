@@ -2226,7 +2226,7 @@ async function syncListings(platform){
   // Боевой режим: ключи заданы — реальный запрос к площадке через сервер
   if(configured && !IS_DEMO){
     try{
-      const r=await api('/api/ads/sync',{method:'POST',body:JSON.stringify({platform})});
+      const r=await api('/api/ads/sync','POST',{platform});   // сигнатура: api(путь, метод, тело)
       await reloadState();
       alert(`Синхронизация с «${pname}» завершена.\nОбновлено объявлений: ${r.updated||0}${r.skipped?`\nПропущено (нет extId/данных): ${r.skipped}`:''}${r.note?`\n${r.note}`:''}`);
     }catch(e){ alert('Ошибка синхронизации с «'+pname+'»:\n'+(e.message||e)); }
