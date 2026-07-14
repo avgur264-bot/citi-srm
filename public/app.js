@@ -2610,6 +2610,15 @@ function settingsPage(){
     <label style="display:flex;align-items:center;gap:10px;padding:10px 0 7px;cursor:pointer;border-top:1px solid var(--line);margin-top:10px"><input type="checkbox" id="s-autoowner" ${s.autoOwnerUtil?.enabled?'checked':''}> <span><b>Автоначисление коммуналки собственникам</b><div class="t-sub">Каждый месяц в заданный день система начисляет коммуналку (отопление) сторонним собственникам по фиксированной сумме, заданной в карточке помещения. Помещения без проданного статуса и без суммы — пропускаются.</div></span></label>
     <div class="field" style="max-width:240px"><label>День начисления (число месяца)</label><input id="s-autoowner-day" type="number" min="1" max="28" value="${Math.min(28,Math.max(1,+s.autoOwnerUtil?.day||1))}"></div>
   </div>
+  ${isAdmin()?`<div class="card" style="margin-top:16px">
+    <div class="sec-h">💾 Резервное копирование базы</div>
+    <div class="t-sub" style="margin-bottom:10px">Скачайте копию всех данных одним файлом: объекты, помещения, арендаторы, договоры, платежи, коммуналка, ФОТ, бюджет, заявки, ТО, реклама, задачи и настройки. Храните файл у себя — из него в любой момент можно восстановить базу.</div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
+      <button class="btn" onclick="downloadBackup()">⤓ Скачать бэкап</button>
+      <label class="btn ghost" style="cursor:pointer;margin:0">↥ Восстановить из бэкапа<input type="file" accept=".json,application/json" style="display:none" onchange="restoreBackup(this)"></label>
+    </div>
+    <div class="t-sub" style="margin-top:8px;color:var(--amber)">⚠️ Восстановление ПОЛНОСТЬЮ заменит текущие данные данными из файла. Перед восстановлением сделайте свежий бэкап.</div>
+  </div>`:''}
   <div class="card" style="margin-top:16px">
     <div class="sec-h">📟 Тарифы для показаний счётчиков</div>
     <div class="t-sub" style="margin-bottom:10px">Используются при вводе показаний (Коммуналка → «📟 Показания»): сумма = (текущее − предыдущее) × тариф. В форме можно переопределить.</div>
@@ -2662,6 +2671,38 @@ function onLogoFile(input){ const f=input.files&&input.files[0]; if(!f)return;
     const p=document.getElementById('logoPrev'); if(p)p.innerHTML=`<img src="${_logoData}" style="max-height:64px;border-radius:8px;background:#fff;padding:6px;box-shadow:var(--shadow)">`; };
   r.readAsDataURL(f); }
 function clearLogo(){ _logoData=''; settingsPage(); }
+
+/* ---------- Резервное копирование базы (только админ) ---------- */
+// Скачать бэкап: всё состояние (объекты/помещения/договоры/платежи/…/настройки) + задачи, одним JSON-файлом.
+function downloadBackup(){
+  if(!isAdmin()) return alert('Бэкап доступен только администратору.');
+  try{
+    const data={ app:'СИТИ SRM', version:1, date:new Date().toISOString(), state:DB, tasks:Array.isArray(window.TASKS)?TASKS:[] };
+    const blob=new Blob([JSON.stringify(data)],{type:'application/json'});
+    const a=document.createElement('a'); a.href=URL.createObjectURL(blob);
+    a.download='citi-srm-backup-'+new Date().toISOString().slice(0,10)+'.json'; a.click();
+    setTimeout(()=>URL.revokeObjectURL(a.href),3000);
+  }catch(e){ alert('Не удалось сформировать бэкап: '+(e.message||e)); }
+}
+// Восстановить из бэкапа: заменяет данные целиком (с двойным подтверждением).
+async function restoreBackup(input){
+  const f=input.files&&input.files[0]; input.value=''; if(!f)return;
+  if(!isAdmin()) return alert('Восстановление доступно только администратору.');
+  if(f.size>30*1024*1024) return alert('Файл больше 30 МБ — похоже, это не бэкап.');
+  let data; try{ data=JSON.parse(await f.text()); }catch{ return alert('Файл не читается как бэкап (ожидается JSON).'); }
+  const st=data&&data.state;
+  if(!st||typeof st!=='object'||!Array.isArray(st.buildings)||!Array.isArray(st.units))
+    return alert('Это не похоже на бэкап СИТИ SRM (нет объектов/помещений).');
+  const info=`Объектов: ${st.buildings.length}\nПомещений: ${st.units.length}\nАрендаторов: ${(st.tenants||[]).length}\nДоговоров: ${(st.contracts||[]).length}\nПлатежей: ${(st.payments||[]).length}\nЗадач: ${Array.isArray(data.tasks)?data.tasks.length:0}`;
+  if(!confirm(`ВНИМАНИЕ! Восстановление ПОЛНОСТЬЮ заменит текущие данные.\n\nВ файле (бэкап от ${data.date?String(data.date).slice(0,10):'—'}):\n${info}\n\nТекущие данные будут потеряны безвозвратно. Продолжить?`)) return;
+  if(!confirm('Последнее предупреждение: перезаписать текущую базу данными из файла?')) return;
+  try{
+    await api('/api/backup/restore','POST',{state:st,tasks:Array.isArray(data.tasks)?data.tasks:[]});
+    alert('База восстановлена из бэкапа. Страница будет перезагружена.');
+    location.reload();
+  }catch(e){ alert('Не удалось восстановить: '+(e.message||e)); }
+}
+
 async function saveSettings(){
   ensureState(); const S=DB.settings;
   S.company=(val('s-company')||'').trim()||'СИТИ SRM';

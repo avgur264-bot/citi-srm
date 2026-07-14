@@ -86,26 +86,22 @@ function srmBuildState(){
     requests:[
       {id:'r1',building:'b1',unit:'2-01',tenant:'t1',title:'Не работает кондиционер',category:'Климат / вентиляция',priority:'high',status:'in_progress',assignee_id:6,created_by:1,created_at:'2026-06-25T09:00:00.000Z',due:'2026-06-28',done_at:null,note:'Арендатор жалуется на жару, температура не опускается ниже 26°.'},
       {id:'r2',building:'b1',unit:'3-02',tenant:'t3',title:'Протечка в санузле',category:'Сантехника',priority:'high',status:'new',assignee_id:null,created_by:1,created_at:'2026-06-27T14:30:00.000Z',due:'2026-06-29',done_at:null,note:'Капает под раковиной.'},
-      {id:'r3',building:'b2',unit:'4-01',tenant:null,title:'Перегорела лампа в коридоре',category:'Электрика',priority:'low',status:'done',assignee_id:6,created_by:6,created_at:'2026-06-20T08:00:00.000Z',due:'2026-06-22',done_at:'2026-06-21T12:00:00.000Z',note:''},
     ],
     equipment:[
       {id:'eq1',building:'b1',name:'Пассажирский лифт №1',type:'Лифт',location:'Подъезд 1',vendor:'ООО «ЛифтСервис»',intervalMonths:3,lastService:'2026-04-10',nextService:'2026-07-10',note:''},
       {id:'eq2',building:'b1',name:'Система вентиляции',type:'Вентиляция / кондиционирование',location:'Кровля',vendor:'ООО «КлиматПро»',intervalMonths:6,lastService:'2025-12-15',nextService:'2026-06-15',note:'Замена фильтров при ТО'},
       {id:'eq3',building:'b1',name:'Пожарная сигнализация',type:'Пожарная сигнализация',location:'Все этажи',vendor:'ЧОП «Барьер»',intervalMonths:12,lastService:'2026-06-01',nextService:'2027-06-01',note:''},
-      {id:'eq4',building:'b2',name:'Грузовой лифт',type:'Лифт',location:'Склад',vendor:'ООО «ЛифтСервис»',intervalMonths:3,lastService:'2026-03-20',nextService:'2026-06-20',note:''},
     ],
-    budgets:{ b1:{income:48000000,expense:14000000}, b2:{income:13000000,expense:5000000} },
+    budgets:{ b1:{income:48000000,expense:14000000} },
     penaltyRate:0.1,
     listings:[
       {id:'ad1',platform:'cian',building:'b1',unit:'1-03',title:'Аренда офиса 95 м², БЦ «СИТИ Плаза»',price:285000,status:'active',url:'https://www.cian.ru/rent/commercial/',views:1240,leads:18,posted:'2026-06-01',lastSync:'2026-06-27T10:00:00.000Z'},
       {id:'ad2',platform:'avito',building:'b1',unit:'1-03',title:'Офис 95 м² в бизнес-центре, центр',price:285000,status:'active',url:'https://www.avito.ru/moskva/kommercheskaya_nedvizhimost',views:870,leads:9,posted:'2026-06-05',lastSync:null},
-      {id:'ad3',platform:'cian',building:'b2',unit:'4-02',title:'Склад 200 м², Бизнес-парк «Север»',price:180000,status:'paused',url:'',views:430,leads:4,posted:'2026-05-20',lastSync:null},
     ],
     signage:[
       {id:'sg1',owner:'tenant',tenant:'t1',building:'b1',unit:'2-01',kind:'Световой короб',permitNo:'РВ-2024-1187',issued:'2024-03-15',expiry:'2027-03-14',note:'Вывеска над входом',documents:[]},
       {id:'sg2',owner:'tenant',tenant:'t3',building:'b1',unit:'2-01',kind:'Настенная вывеска',permitNo:'РВ-2025-0455',issued:'2025-02-01',expiry:'2026-07-31',note:'',documents:[]},
       {id:'sg3',owner:'self',tenant:null,building:'b1',unit:null,kind:'Медиафасад',permitNo:'РВ-2023-0912',issued:'2023-06-01',expiry:'2026-06-15',note:'Реклама БЦ на фасаде',documents:[]},
-      {id:'sg4',owner:'self',tenant:null,building:'b2',unit:null,kind:'Рекламная стела',permitNo:'РВ-2024-2201',issued:'2024-08-01',expiry:'2027-07-31',note:'Брендинг бизнес-парка',documents:[]},
     ],
   };
   const D2={
@@ -141,13 +137,13 @@ function srmBuildState(){
   const docs=u=>{const d=[{name:'План_помещения_'+u.id+'.pdf',type:'plan',kind:'Поэтажный план'},{name:'Выписка_ЕГРН_'+u.id+'.pdf',type:'ownership',kind:'Право собственности'}];
     const c=S.contracts.find(c=>c.unit===u.id); if(c){d.push({name:'Договор_аренды_'+c.id.toUpperCase()+'.pdf',type:'contract',kind:'Договор аренды'});d.push({name:'Акт_приёма-передачи_'+u.id+'.pdf',type:'act',kind:'Акт приёма-передачи'});} return d;};
   S.expenses.forEach(e=>e.building='b1');
-  S.units.push(...D2.units.map(u=>({...u}))); S.tenants.push(...D2.tenants); S.contracts.push(...D2.contracts); S.payments.push(...D2.payments); S.expenses.push(...D2.expenses);
+  void D2; // второй объект «Север» убран из клиентского демо — оставлен один объект «СИТИ Плаза»
   S.units.forEach(u=>{ if(!u.building)u.building='b1'; const m=META[u.id]||{}; u.ownership=m.ownership||'own'; u.owner=m.owner||null;
     u.responsible=m.responsible||{name:'Минин Сергей',role:'Управляющий объектом',phone:'+7 901 770-88-07',email:'manager@citisrm.ru'};
     u.documents=docs(u);
     if(u.ownership==='sold'){u.documents.push({name:'Договор_купли-продажи_'+u.id+'.pdf',type:'contract',kind:'Договор купли-продажи (ДКП)'});u.documents.push({name:'Документы_собственника_'+u.id+'.pdf',type:'owner',kind:'Документы собственника'});}
   });
-  S.buildings=[{id:'b1',name:'БЦ «СИТИ Плаза»',address:'г. Москва, Пресненская наб., 12',floors:5,totalArea:8400}, D2.building];
+  S.buildings=[{id:'b1',name:'БЦ «СИТИ Плаза»',address:'г. Москва, Пресненская наб., 12',floors:5,totalArea:8400}];
   return S;
 }
 function srmSeed(){
@@ -193,6 +189,13 @@ async function api(path, method='GET', body){
   if(path==='/api/notify/test') return {ok:false, demo:true};
   if(path==='/api/assistant'&&method==='POST') return {enabled:false};
   if(path==='/api/plan/recognize'&&method==='POST') return {enabled:false}; // распознавание плана недоступно в автономном демо
+  // восстановление из бэкапа в автономном демо — прямо в localStorage
+  if(path==='/api/backup/restore'&&method==='POST'){
+    if(!body||!body.state) return {error:'Нет данных'};
+    db.state=body.state;
+    if(Array.isArray(body.tasks)) db.tasks=body.tasks.map((t,i)=>({...t,id:i+1}));
+    _srmSave(db); return {ok:true};
+  }
   // В автономном демо нет файловой системы — храним файл встроенным data-URL (как раньше).
   if(path==='/api/files'&&method==='POST') return {url:body.dataUrl, stored:'embed'};
   if(path==='/api/auth/register'&&method==='POST'){

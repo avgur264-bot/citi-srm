@@ -876,6 +876,43 @@ async function api(req, res, url){
     }finally{ clearTimeout(timer); }
   }
 
+  // ---- Восстановление базы из бэкапа (ТОЛЬКО админ): заменяет состояние и задачи целиком ----
+  if(path==='/api/backup/restore' && method==='POST'){
+    if(!isFull(me.role)) return send(res,403,{ error:'Восстановление доступно только администратору' });
+    const b = await readBody(req);
+    const st = b && b.state;
+    if(!st || typeof st!=='object' || !Array.isArray(st.buildings) || !Array.isArray(st.units))
+      return send(res,400,{ error:'Файл не похож на бэкап (нет объектов/помещений)' });
+    if(hasBadIds(st)) return send(res,400,{ error:'В бэкапе недопустимые символы в идентификаторах' });
+    const { _ver, ...clean } = st;                       // служебное поле версии не храним
+    const now = new Date().toISOString();
+    try{
+      db.exec('BEGIN');
+      db.prepare(`UPDATE state SET json=?, updated_at=?, updated_by=? WHERE key='main'`)
+        .run(JSON.stringify(clean), now, String(me.email || me.id));
+      if(Array.isArray(b.tasks)){
+        db.exec('DELETE FROM tasks');
+        const ins = db.prepare(`INSERT INTO tasks(title,description,unit,assignee_id,created_by,due,priority,status,created_at,done_at)
+                                VALUES(?,?,?,?,?,?,?,?,?,?)`);
+        for(const t of b.tasks.slice(0,3000)){
+          if(!t || typeof t!=='object') continue;
+          ins.run(String(t.title||'').slice(0,300), String(t.description||'').slice(0,2000), String(t.unit||'—').slice(0,60),
+                  Number.isInteger(t.assignee_id)?t.assignee_id:null, me.id, t.due||null,
+                  ['high','medium','low'].includes(t.priority)?t.priority:'medium',
+                  ['open','in_progress','done'].includes(t.status)?t.status:'open',
+                  t.created_at||now, t.done_at||null);
+        }
+      }
+      db.exec('COMMIT');
+    }catch(e){
+      try{ db.exec('ROLLBACK'); }catch{}
+      console.error('[restore] error', e.message);
+      return send(res,500,{ error:'Не удалось восстановить: '+e.message });
+    }
+    console.log(`[restore] uid=${me.id} база восстановлена из бэкапа (объектов=${st.buildings.length}, помещений=${st.units.length})`);
+    return send(res,200,{ ok:true });
+  }
+
   // ---- Распознавание помещений с плана (vision; в базу НЕ пишет — только предлагает) ----
   if(path==='/api/plan/recognize' && method==='POST'){
     const st = JSON.parse(db.prepare(`SELECT json FROM state WHERE key='main'`).get().json);
