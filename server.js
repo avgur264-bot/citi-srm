@@ -14,6 +14,7 @@ import {
 } from './db.js';
 import { ask as llmAsk, askVision, hasModelKey, hasVisionModel, visionModelName, providerName } from './llm.js';
 import { avitoConfigured, cianConfigured, feedTokenOk, feedUrls, avitoStats, buildAvitoFeedXml } from './ads.js';
+import { sberConfigured, sberAccount, getStatement as sberStatement, rotateClientSecret, secretNeedsRotation } from './sber.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PUBLIC = join(__dirname, 'public');
@@ -359,6 +360,78 @@ function notifyCfg(){ try{ const st=JSON.parse(db.prepare(`SELECT json FROM stat
 // мгновенное оповещение (если включено instant) — не блокирует ответ
 function notifyInstant(text){ const tg=notifyCfg(); if(tg&&tg.instant&&tg.token&&tg.chatId) sendTelegram(tg.token, tg.chatId, text); }
 
+// ---------- Сбер: хранилище токенов (служебный ключ, в API НЕ отдаётся) ----------
+// Живёт рядом с _secret: отдельная строка таблицы state, недоступная через /api/state.
+const sberStore = {
+  async load(){ const row = db.prepare(`SELECT json FROM state WHERE key='_sber'`).get();
+    try{ return row ? JSON.parse(row.json) : {}; }catch{ return {}; } },
+  async save(o){ const j = JSON.stringify(o||{}), now = new Date().toISOString();
+    const row = db.prepare(`SELECT key FROM state WHERE key='_sber'`).get();
+    if(row) db.prepare(`UPDATE state SET json=?, updated_at=? WHERE key='_sber'`).run(j, now);
+    else db.prepare(`INSERT INTO state(key,json,updated_at) VALUES('_sber',?,?)`).run(j, now);
+  },
+};
+
+// ---------- Сбер: сверка поступлений с начислениями аренды ----------
+// Консервативно: автоматически засчитываем платёж, только если совпадение НАДЁЖНОЕ —
+// сумма совпала И есть подтверждение (ИНН плательщика = ИНН арендатора, либо в назначении
+// платежа явно указан номер договора / название арендатора / номер помещения).
+// Всё остальное — в «не сопоставлено», человек разбирает руками. Деньги — не то место для догадок.
+function matchBankTxs(st, txs){
+  const payments = Array.isArray(st.payments) ? st.payments : [];
+  const contracts = Array.isArray(st.contracts) ? st.contracts : [];
+  const tenants  = Array.isArray(st.tenants)  ? st.tenants  : [];
+  const units    = Array.isArray(st.units)    ? st.units    : [];
+  const cById = Object.fromEntries(contracts.map(c=>[c.id,c]));
+  const tById = Object.fromEntries(tenants.map(t=>[t.id,t]));
+  const uNum  = id => { const u = units.find(x=>x.id===id); return u ? String(u.num||u.id) : String(id||''); };
+  const norm = s => String(s||'').toLowerCase().replace(/[«»"'`.,]/g,' ').replace(/\s+/g,' ').trim();
+  const digits = s => String(s||'').replace(/\D/g,'');
+
+  const applied = [], unmatched = [];
+  for(const tx of txs){
+    if(!tx.incoming || !(tx.amount > 0)) continue;             // интересуют только поступления
+    const p = norm(tx.purpose);
+    const inn = digits(tx.payerInn);
+
+    // кандидаты: непогашенные начисления, у которых остаток совпадает с суммой поступления
+    const cands = payments.filter(x => {
+      const rem = (+x.amount||0) - (+x.paid||0);
+      return rem > 0 && Math.abs(rem - tx.amount) < 0.01;
+    });
+
+    const scored = cands.map(x => {
+      const c = cById[x.contract] || {};
+      const t = tById[c.tenant] || {};
+      const tName = norm(t.name);
+      const strongInn  = !!(inn && digits(t.inn) && digits(t.inn) === inn);
+      const strongCid  = !!(c.id && p.includes(String(c.id).toLowerCase()));
+      const strongName = !!(tName && tName.length >= 4 && p.includes(tName));
+      const unitHit    = !!(c.unit && p.includes(norm(uNum(c.unit))));
+      const periodHit  = !!(x.period && p.includes(String(x.period)));
+      const strong = strongInn || strongCid || strongName;
+      return { pay:x, strong, unitHit, periodHit,
+               score: (strongInn?4:0)+(strongCid?3:0)+(strongName?3:0)+(unitHit?1:0)+(periodHit?1:0) };
+    }).filter(s => s.strong)                                    // без подтверждения — не засчитываем
+      .sort((a,b)=> b.score - a.score);
+
+    // засчитываем, только если подтверждённый кандидат ровно один (нет двусмысленности)
+    if(scored.length === 1 || (scored.length > 1 && scored[0].score > scored[1].score)){
+      const x = scored[0].pay;
+      if(!Array.isArray(x.transactions)) x.transactions = (+x.paid>0) ? [{amount:+x.paid, date:x.paidDate||x.due, method:'bank'}] : [];
+      x.transactions.push({ amount: tx.amount, date: tx.date || new Date().toISOString().slice(0,10), method:'bank', bankTxId: tx.id||'' });
+      x.paid = Math.min(+x.amount||0, (+x.paid||0) + tx.amount);
+      x.paidDate = tx.date || new Date().toISOString().slice(0,10);
+      x.status = (x.paid >= (+x.amount||0)) ? 'paid' : 'partial';
+      applied.push({ paymentId:x.id, amount:tx.amount, date:x.paidDate, purpose:tx.purpose, payer:tx.payerName });
+    } else {
+      unmatched.push({ date:tx.date, amount:tx.amount, payer:tx.payerName, inn:tx.payerInn, purpose:String(tx.purpose||'').slice(0,200),
+                       reason: cands.length ? 'сумма совпала, но не подтвердился плательщик/договор' : 'нет начисления на такую сумму' });
+    }
+  }
+  return { applied, unmatched };
+}
+
 // ---------- автоматизации (ежедневная проверка, серверная запись состояния) ----------
 function loadMain(){ return JSON.parse(db.prepare(`SELECT json FROM state WHERE key='main'`).get().json); }
 function saveMain(st, by){ db.prepare(`UPDATE state SET json=?, updated_at=?, updated_by=? WHERE key='main'`).run(JSON.stringify(st), new Date().toISOString(), by||'system'); }
@@ -369,6 +442,15 @@ function logAdsSync(st, by, updated, skipped, err){
   st.integrations.log.unshift({ ts:new Date().toISOString(), key:'avito', icon:'📣', title:'Авито', dir:'in',
     text: err ? ('Ошибка синхронизации: '+String(err).slice(0,160)) : `Обновлено объявлений: ${updated}${skipped?`, пропущено: ${skipped}`:''}`,
     count: updated||0, sum:0, items: err?[]:[`обновлено ${updated}`,`пропущено ${skipped}`] });
+  st.integrations.log = st.integrations.log.slice(0,50);
+}
+// запись в журнал обмена для банка (та же структура, что у рекламы — клиент рисует одинаково)
+function logBankSync(st, kind, text, items){
+  if(!st.integrations) st.integrations={};
+  if(!Array.isArray(st.integrations.log)) st.integrations.log=[];
+  st.integrations.log.unshift({ ts:new Date().toISOString(), key:'bank', icon:'🏦', title:'Банк (Сбер)', dir:'in',
+    text: String(text||'').slice(0,200), count: Array.isArray(items)?items.length:0, sum:0,
+    items: Array.isArray(items) ? items.slice(0,10) : [], kind: kind||'info' });
   st.integrations.log = st.integrations.log.slice(0,50);
 }
 const pad2 = n => String(n).padStart(2,'0');
@@ -571,7 +653,7 @@ async function api(req, res, url){
   if(path==='/api/config' && method==='GET'){
     // assistantKey — задан ли ключ модели в окружении (UI помощника показывается только тогда + при включении в Настройках)
     return send(res,200,{ allowRegistration: ALLOW_REGISTRATION, assistantKey: hasModelKey(), assistantProvider: providerName(),
-      avitoConfigured: avitoConfigured(), cianConfigured: cianConfigured() });
+      avitoConfigured: avitoConfigured(), cianConfigured: cianConfigured(), bankConfigured: sberConfigured() });
   }
   if(path==='/api/auth/register' && method==='POST'){
     if(!ALLOW_REGISTRATION) return send(res,403,{error:'Регистрация закрыта. Учётную запись создаёт администратор.'});
@@ -638,6 +720,65 @@ async function api(req, res, url){
     return send(res,200,{ avitoConfigured: avitoConfigured(), cianConfigured: cianConfigured(),
       feedProtected: !!process.env.FEED_TOKEN, feedAvito: urls.avito, feedCian: urls.cian });
   }
+  // ---- Банк (Сбер): статус интеграции ----
+  if(path==='/api/bank/info' && method==='GET'){
+    const s = await sberStore.load();
+    return send(res,200,{ configured: sberConfigured(), account: sberAccount() ? ('•••' + String(sberAccount()).slice(-4)) : '',
+      hasTokens: !!(s.refresh_token || process.env.SBER_REFRESH_TOKEN), lastSync: s.last_sync || null });
+  }
+
+  // ---- Банк (Сбер): загрузка выписки и автосверка поступлений ----
+  // ТОЛЬКО ЧТЕНИЕ выписки. Засчитывает платежи лишь при надёжном совпадении (см. matchBankTxs).
+  if(path==='/api/bank/sync' && method==='POST'){
+    const row0 = db.prepare(`SELECT json, updated_at FROM state WHERE key='main'`).get();
+    const st = JSON.parse(row0.json);
+    if(!canEditS(me.role,'payments',st)) return send(res,403,{ error:'Нет прав на изменение платежей' });
+    if(!sberConfigured()) return send(res,400,{ error:'Сбер не подключён: не заданы SBER_CLIENT_ID / SBER_PFX_PATH / SBER_ACCOUNT в окружении клиента.' });
+    const b = await readBody(req);
+    // по умолчанию — последние 7 дней (банковская выписка запрашивается по датам)
+    const days = Math.min(31, Math.max(1, +b.days || 7));
+    const acc = sberAccount();
+    const today = new Date();
+    const dates = [];
+    for(let i=0;i<days;i++){ const d=new Date(today.getTime()-i*864e5); dates.push(d.toISOString().slice(0,10)); }
+
+    let all = [], processing = false, firstRaw = null;
+    try{
+      for(const d of dates){
+        try{
+          const r = await sberStatement(sberStore, acc, d);
+          if(!firstRaw && r.rawFirstPage) firstRaw = r.rawFirstPage;
+          all = all.concat(r.transactions);
+        }catch(e){
+          if(e && e.code === 'PROCESSING'){ processing = true; continue; }   // банк ещё формирует выписку за эту дату
+          throw e;
+        }
+      }
+    }catch(e){
+      console.error('[sber] sync', e.message);
+      logBankSync(st, 'error', 'Ошибка получения выписки: ' + e.message);
+      saveMain(st, 'sber');
+      return send(res,200,{ ok:false, error:'Не удалось получить выписку: ' + e.message });
+    }
+
+    // защита от повторного зачёта одной и той же операции банка
+    const seen = new Set();
+    (st.payments||[]).forEach(p => (p.transactions||[]).forEach(t => { if(t && t.bankTxId) seen.add(String(t.bankTxId)); }));
+    const fresh = all.filter(t => !(t.id && seen.has(String(t.id))));
+
+    const { applied, unmatched } = matchBankTxs(st, fresh);
+    logBankSync(st, applied.length ? 'ok' : 'info',
+      `Выписка за ${days} дн: операций ${all.length}, новых ${fresh.length}, зачтено ${applied.length}, не сопоставлено ${unmatched.length}` +
+      (processing ? ' (часть дней банк ещё формирует)' : ''),
+      applied.map(a => `зачтено ${Math.round(a.amount)} ₽ — ${a.payer||'плательщик'}`));
+    saveMain(st, String(me.email||me.id));
+    await sberStore.save({ ...(await sberStore.load()), last_sync: new Date().toISOString() });
+    console.log(`[sber] uid=${me.id} выписка: всего=${all.length} новых=${fresh.length} зачтено=${applied.length} не сопоставлено=${unmatched.length}`);
+    // firstRaw логируем один раз в консоль — чтобы при первом боевом прогоне сверить реальные имена полей
+    if(firstRaw) console.log('[sber] пример ответа банка:', JSON.stringify(firstRaw).slice(0,600));
+    return send(res,200,{ ok:true, total: all.length, fresh: fresh.length, applied, unmatched, processing });
+  }
+
   // ---- Реклама: реальная синхронизация статистики (Фаза 1 — Авито) ----
   if(path==='/api/ads/sync' && method==='POST'){
     const b = await readBody(req);

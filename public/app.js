@@ -38,6 +38,7 @@ let ME=null, ROLES={}, DB=null, TASKS=[], USERS=[];
 let ALLOW_REG=false; // разрешена ли самостоятельная регистрация (с сервера)
 let ASSIST_KEY=false, ASSIST_PROVIDER='gigachat'; // задан ли ключ модели в окружении (AI-помощник)
 let ADS_AVITO=false, ADS_CIAN=false; // заданы ли ключи площадок (реклама) — реальная синхронизация
+let BANK_OK=false;          // подключён ли банк (Сбер): ключи+сертификат в окружении клиента
 let ADS_INFO=null;          // {feedAvito, feedCian, feedProtected} — грузится на странице «Реклама»
 let IS_DEMO=false;          // true только в автономной демо-версии (выставляется сборщиком)
 const DEMO_LIMIT=1000;      // лимит записей в демо-версии
@@ -129,7 +130,7 @@ function myReminders(){
    BOOT
    ============================================================ */
 (async function boot(){
-  try{ const c = await api('/api/config'); ALLOW_REG = !!c.allowRegistration; ASSIST_KEY = !!c.assistantKey; ASSIST_PROVIDER = c.assistantProvider||'gigachat'; ADS_AVITO = !!c.avitoConfigured; ADS_CIAN = !!c.cianConfigured; }catch{ ALLOW_REG=false; }
+  try{ const c = await api('/api/config'); ALLOW_REG = !!c.allowRegistration; ASSIST_KEY = !!c.assistantKey; ASSIST_PROVIDER = c.assistantProvider||'gigachat'; ADS_AVITO = !!c.avitoConfigured; ADS_CIAN = !!c.cianConfigured; BANK_OK = !!c.bankConfigured; }catch{ ALLOW_REG=false; }
   try{
     const {user} = await api('/api/auth/me');
     ME=user; await loadData(); showApp();
@@ -3118,6 +3119,22 @@ async function saveSyncScope(key){ ensureState();
   closeM(); await afterStateChange(); }
 async function intSync(key){
   const now=new Date().toISOString();
+  // Боевой режим: банк подключён (сертификат+ключи в окружении) — тянем РЕАЛЬНУЮ выписку и сверяем.
+  if(key==='bank' && BANK_OK && !IS_DEMO){
+    if(!confirm('Загрузить банковскую выписку за последние 7 дней и сверить поступления с начислениями аренды?\n\nЗасчитываются только надёжные совпадения (совпала сумма И подтверждён плательщик/договор). Остальное — в список «не сопоставлено» для ручной проверки.')) return;
+    try{
+      const r=await api('/api/bank/sync','POST',{days:7});
+      if(r.error){ alert('Банк: '+r.error); return; }
+      await reloadState(); render();
+      const ap=(r.applied||[]).map(a=>`• ${money(a.amount)} — ${a.payer||'плательщик не указан'}`).join('\n');
+      const un=(r.unmatched||[]).map(u=>`• ${money(u.amount)} — ${u.payer||'—'}: ${u.reason}`).join('\n');
+      alert(`Выписка загружена.\nОпераций: ${r.total||0}, новых: ${r.fresh||0}\n\n`+
+        `✅ Зачтено платежей: ${(r.applied||[]).length}${ap?`\n${ap}`:''}\n\n`+
+        `⚠️ Не сопоставлено: ${(r.unmatched||[]).length}${un?`\n${un}`:''}`+
+        (r.processing?'\n\nЧасть дней банк ещё формирует — повторите позже.':''));
+    }catch(e){ alert('Ошибка синхронизации с банком:\n'+(e.message||e)); }
+    return;
+  }
   if(key==='bank'){
     const sc=syncScope('bank');
     if(!sc.rent && !sc.expenses) return alert('Для банка не выбран ни один тип документов.\nНажмите «⚙ Что синхронизировать» на карточке банка.');
