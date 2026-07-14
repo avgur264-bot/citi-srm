@@ -87,6 +87,8 @@ const STATE_MOD = { buildings:'objects', units:'objects', tenants:'tenants', con
   requests:'requests', equipment:'upkeep', listings:'ads', signage:'ads',
   budgets:'budget', penaltyRate:'budget', integrations:'integrations' };
 const isFull = role => role==='admin' || role==='owner';
+// текущее состояние (нужно для прав: матрица ролей хранится в нём)
+const loadState = () => { try{ return JSON.parse(db.prepare(`SELECT json FROM state WHERE key='main'`).get().json); }catch{ return {}; } };
 // идентификаторы попадают в onclick="fn('${id}')" на фронте — запрещаем в них спецсимволы HTML/JS (анти-stored-XSS у корня)
 const BAD_ID = /[<>"'`\\]/;
 const ID_COLLECTIONS = ['buildings','units','tenants','contracts','payments','utilities','expenses','salaries','requests','equipment','listings','signage','buildingMeters'];
@@ -97,12 +99,27 @@ function hasBadIds(st){
   if(Array.isArray(st.contracts)) for(const c of st.contracts){ if(c && ((typeof c.unit==='string'&&BAD_ID.test(c.unit)) || (typeof c.tenant==='string'&&BAD_ID.test(c.tenant)))) return true; }
   return false;
 }
-// убираем из состояния разделы, которые роль не имеет права видеть (защита чтения)
+// Убираем из состояния ВСЁ, что роль не имеет права видеть (защита чтения).
+// Важно: данные не должны доходить до браузера вообще — иначе их видно через инструменты
+// разработчика, даже если интерфейс их прячет. Раньше резались только зарплаты и бюджет,
+// из-за чего сотрудник без права на платежи видел сбор аренды на дашборде.
+// Объекты и помещения (buildings/units) оставляем: это справочные данные, на них
+// ссылаются все разделы, и без них интерфейс просто разваливается.
 function filterStateForRole(state, role){
   if(isFull(role)) return state;
   const s = {...state};
-  if(!canViewS(role,'salaries',state)) s.salaries = [];
-  if(!canViewS(role,'budget',state)) s.budgets = {};
+  const cv = m => canViewS(role, m, state);
+  if(!cv('payments'))   s.payments   = [];
+  if(!cv('contracts'))  s.contracts  = [];
+  if(!cv('tenants'))    s.tenants    = [];
+  if(!cv('utilities')){ s.utilities  = []; s.expenses = []; s.buildingMeters = []; s.heatCost = []; s.fuelLog = []; }
+  if(!cv('salaries'))   s.salaries   = [];
+  if(!cv('budget'))     s.budgets    = {};
+  if(!cv('requests'))   s.requests   = [];
+  if(!cv('upkeep'))     s.equipment  = [];
+  if(!cv('ads')){       s.listings   = []; s.signage = []; }
+  if(!cv('audit'))      s.audit      = [];
+  if(!cv('integrations')) s.integrations = { ...(s.integrations||{}), log: [] };
   // токен Telegram-бота — только админу/собственнику
   if(s.settings && s.settings.notify && s.settings.notify.telegram){
     s.settings = {...s.settings, notify:{...s.settings.notify, telegram:{...s.settings.notify.telegram, token:''}}};
@@ -715,13 +732,15 @@ async function api(req, res, url){
 
   // ---- Реклама: статус интеграции + ссылки на XML-фид (для вставки в кабинет площадки) ----
   if(path==='/api/ads/info' && method==='GET'){
-    const origin = `${(req.headers['x-forwarded-proto']||'http')}://${req.headers.host}`;
+    if(!canViewS(me.role,'ads',loadState())) return send(res,403,{error:'Нет доступа к разделу «Реклама»'});
+    const origin =`${(req.headers['x-forwarded-proto']||'http')}://${req.headers.host}`;
     const urls = feedUrls(origin);
     return send(res,200,{ avitoConfigured: avitoConfigured(), cianConfigured: cianConfigured(),
       feedProtected: !!process.env.FEED_TOKEN, feedAvito: urls.avito, feedCian: urls.cian });
   }
   // ---- Банк (Сбер): статус интеграции ----
   if(path==='/api/bank/info' && method==='GET'){
+    if(!canViewS(me.role,'integrations',loadState())) return send(res,403,{error:'Нет доступа к разделу «Синхронизация»'});
     const s = await sberStore.load();
     return send(res,200,{ configured: sberConfigured(), account: sberAccount() ? ('•••' + String(sberAccount()).slice(-4)) : '',
       hasTokens: !!(s.refresh_token || process.env.SBER_REFRESH_TOKEN), lastSync: s.last_sync || null });
@@ -881,9 +900,14 @@ async function api(req, res, url){
 
   // ---- задачи ----
   if(path==='/api/tasks'){
-    if(method==='GET') return send(res,200, db.prepare(TASK_SELECT+' ORDER BY t.id').all());
+    // права на задачи — с учётом редактируемой матрицы (canEditS), список — только тем, кто раздел видит
+    if(method==='GET'){
+      const st = loadState();
+      if(!canViewS(me.role,'tasks',st)) return send(res,200,[]);
+      return send(res,200, db.prepare(TASK_SELECT+' ORDER BY t.id').all());
+    }
     if(method==='POST'){
-      if(!canEdit(me.role,'tasks')) return send(res,403,{error:'Нет прав на создание задач'});
+      if(!canEditS(me.role,'tasks',loadState())) return send(res,403,{error:'Нет прав на создание задач'});
       const b = await readBody(req);
       if(!b.title) return send(res,400,{error:'Укажите описание задачи'});
       const info = db.prepare(`INSERT INTO tasks(title,description,unit,assignee_id,created_by,due,priority,status,created_at)
@@ -902,7 +926,7 @@ async function api(req, res, url){
     if(method==='PATCH'){
       const b = await readBody(req);
       const isOwnerOfTask = task.assignee_id===me.id || task.created_by===me.id;
-      if(!canEdit(me.role,'tasks') && !isOwnerOfTask) return send(res,403,{error:'Нет прав на изменение задачи'});
+      if(!canEditS(me.role,'tasks',loadState()) && !isOwnerOfTask) return send(res,403,{error:'Нет прав на изменение задачи'});
       const fields=[], vals=[];
       for(const k of ['title','description','unit','priority','status']) if(k in b){ fields.push(`${k}=?`); vals.push(b[k]); }
       if('assignee_id' in b){ fields.push('assignee_id=?'); vals.push(b.assignee_id||null); }
@@ -912,7 +936,7 @@ async function api(req, res, url){
       return send(res,200, db.prepare(TASK_SELECT+' WHERE t.id=?').get(id));
     }
     if(method==='DELETE'){
-      if(!canEdit(me.role,'tasks')) return send(res,403,{error:'Нет прав'});
+      if(!canEditS(me.role,'tasks',loadState())) return send(res,403,{error:'Нет прав'});
       db.prepare('DELETE FROM tasks WHERE id=?').run(id);
       return send(res,200,{ ok:true });
     }
@@ -921,11 +945,11 @@ async function api(req, res, url){
   // ---- сотрудники / пользователи ----
   if(path==='/api/users'){
     if(method==='GET'){
-      if(!canView(me.role,'employees')) return send(res,403,{error:'Нет доступа к сотрудникам'});
+      if(!canViewS(me.role,'employees',loadState())) return send(res,403,{error:'Нет доступа к сотрудникам'});
       return send(res,200, db.prepare('SELECT * FROM users ORDER BY full_name').all().map(publicUser));
     }
     if(method==='POST'){
-      if(!canEdit(me.role,'employees')) return send(res,403,{error:'Только администратор может добавлять сотрудников'});
+      if(!canEditS(me.role,'employees',loadState())) return send(res,403,{error:'Только администратор может добавлять сотрудников'});
       const b = await readBody(req);
       const email=(b.email||'').trim().toLowerCase();
       if(!email || !b.password || !b.full_name) return send(res,400,{error:'Заполните email, пароль и ФИО'});
@@ -940,7 +964,7 @@ async function api(req, res, url){
     }
   }
   if(seg[1]==='users' && seg[2]){
-    if(!canEdit(me.role,'employees')) return send(res,403,{error:'Только администратор'});
+    if(!canEditS(me.role,'employees',loadState())) return send(res,403,{error:'Только администратор'});
     const id=+seg[2];
     const u=db.prepare('SELECT * FROM users WHERE id=?').get(id);
     if(!u) return send(res,404,{error:'Сотрудник не найден'});

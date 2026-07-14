@@ -425,7 +425,10 @@ function renderScopeSelector(){
 }
 
 const PAGES={today:todayPage,dashboard,alerts,help,objects,tenants,contracts,payments,utilities,salaries,tasks,requests,upkeep,ads,budget,employees,reports,integrations,audit:auditPage,settings:settingsPage};
-function render(){ updateBadges(); const m=document.getElementById('main'); if(!m)return; m.innerHTML=''; (PAGES[current]||dashboard)(); }
+function render(){ updateBadges(); const m=document.getElementById('main'); if(!m)return;
+  // страховка: раздел без права не откроется, даже если попасть в него ссылкой/из поиска/сохранённой вкладкой
+  if(!navVisible(current)) current = NAV.flatMap(g=>g.items).map(i=>i[0]).find(navVisible) || 'dashboard';
+  m.innerHTML=''; (PAGES[current]||dashboard)(); }
 function el(html){ const d=document.createElement('div'); d.className='page'; d.innerHTML=html; document.getElementById('main').appendChild(d); return d; }
 function head(title,sub,actions=''){ return `<div class="topbar"><div style="display:flex;align-items:center;gap:8px"><h1>${title}</h1>${PAGE_HELP[current]?`<button class="bell" style="width:30px;height:30px;font-size:15px" title="Для чего этот раздел" onclick="pageHelp()">ℹ️</button>`:''}</div><div class="sub" style="width:100%">${sub}</div><div class="spacer"></div>${actions}${searchHTML()}${bellHTML()}</div>`; }
 /* ---------- глобальный поиск (B3) ---------- */
@@ -700,9 +703,20 @@ const DASH_CATALOG={
   expiring:{label:'Виджет · Договоры на исходе',span:2,build:()=>{const cs=DB.contracts.filter(c=>{if(c.status==='ended')return false;const u=unitOf(c.unit);if(!(SCOPE==='all'||(u&&u.building===SCOPE)))return false;const dl=c.end?daysLeft(c.end):9999;return dl<=90;}).sort((a,b)=>daysLeft(a.end)-daysLeft(b.end)).slice(0,5);
     return dashCard('📄 Договоры на исходе',cs.length,dashRows(cs.map(c=>{const t=tenantOf(c.tenant);return `<tr><td><div class="t-strong">${esc(t?t.name:c.id)}</div><div class="t-sub">${esc(unitNum(c.unit))} · до ${c.end?fmtD(c.end):'—'}</div></td><td style="text-align:right">${dueLabel(c.end)}</td></tr>`;}),'Нет договоров на исходе'));}},
 };
+// Какой раздел нужен, чтобы видеть виджет. Без этого сотрудник без прав на платежи
+// видел на дашборде сбор аренды и долги (данные приходили с сервера и рисовались).
+const DASH_NEED={
+  occ:'objects', chOcc:'objects',
+  billed:'payments', collected:'payments', debt:'payments', planMonth:'payments',
+  net:'payments', chIncome:'payments', overdue:'payments', aging:'payments',
+  expiring:'contracts', fot:'salaries', budget:'budget', adsKpi:'ads',
+  tasks:'tasks', requests:'requests', upkeep:'upkeep',
+  alerts:null,   // «Центр сроков» — агрегатор, сам берёт только доступные роли данные
+};
+const dashAllowed = id => { const w=DASH_CATALOG[id]; if(!w) return false; const n=DASH_NEED[id]; return !n || canView(n); };
 function dashCfg(){ try{const s=JSON.parse(localStorage.getItem(dashStoreKey()));
-  if(s&&Array.isArray(s.order)) return {order:s.order.filter(id=>DASH_CATALOG[id])};
-  }catch{} return {order:DASH_DEFAULT_ORDER.slice()}; }
+  if(s&&Array.isArray(s.order)) return {order:s.order.filter(dashAllowed)};
+  }catch{} return {order:DASH_DEFAULT_ORDER.filter(dashAllowed)}; }
 function saveDashCfg(c){ localStorage.setItem(dashStoreKey(), JSON.stringify(c)); }
 function dashboard(){
   _dashM=metrics(); const cfg=dashCfg();
@@ -729,14 +743,14 @@ function dashDrag(){ const grid=document.getElementById('dashGrid'); if(!grid)re
 function dashSettings(){ const cfg=dashCfg(); const cur=new Set(cfg.order);
   openM(`<div class="modal-h"><h3>Настройка дашборда</h3><span class="x" onclick="closeM()">×</span></div>
   <div class="modal-b"><div class="t-sub" style="margin-bottom:10px">Отметьте блоки для показа. Порядок меняется перетаскиванием прямо на дашборде. Настройка — лично для вашего аккаунта.</div>
-  ${Object.entries(DASH_CATALOG).map(([k,w])=>`<label style="display:flex;align-items:center;gap:11px;padding:9px 0;border-bottom:1px solid var(--line);cursor:pointer">
+  ${Object.entries(DASH_CATALOG).filter(([k])=>dashAllowed(k)).map(([k,w])=>`<label style="display:flex;align-items:center;gap:11px;padding:9px 0;border-bottom:1px solid var(--line);cursor:pointer">
     <input type="checkbox" id="dc-${k}" ${cur.has(k)?'checked':''} style="width:18px;height:18px;accent-color:var(--accent)"><span>${w.label}</span></label>`).join('')}
   </div>
   <div class="modal-f"><button class="btn ghost" onclick="resetDash()">Сбросить</button><button class="btn" onclick="applyDash()">Применить</button></div>`);}
-function applyDash(){ const old=dashCfg().order; const enabled=Object.keys(DASH_CATALOG).filter(k=>document.getElementById('dc-'+k)?.checked);
+function applyDash(){ const old=dashCfg().order; const enabled=Object.keys(DASH_CATALOG).filter(k=>dashAllowed(k) && document.getElementById('dc-'+k)?.checked);
   const order=old.filter(k=>enabled.includes(k)).concat(enabled.filter(k=>!old.includes(k)));
   saveDashCfg({order}); closeM(); render(); }
-function resetDash(){ saveDashCfg({order:DASH_DEFAULT_ORDER.slice()}); closeM(); render(); }
+function resetDash(){ saveDashCfg({order:DASH_DEFAULT_ORDER.filter(dashAllowed)}); closeM(); render(); }
 function kpi(label,color,ic,v,delta,dir){
   return `<div class="card kpi"><div class="kpi-top"><span class="label">${label}</span><span class="kpi-ic" style="background:${color}22;color:${color}">${ic}</span></div>
   <div class="val">${v}</div><div class="delta ${dir}">${dir==='up'?'▲ ':dir==='down'?'▼ ':''}${delta}</div></div>`;
