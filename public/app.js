@@ -849,6 +849,8 @@ function chOpts(legend){const muted=cssVar('--muted'),grid=cssVar('--chart-grid'
 /* ============================================================
    ОБЪЕКТЫ
    ============================================================ */
+// сортировка помещений по отображаемому номеру (u.num||u.id), числовая: 101, 103, 103/1, 111…
+const byUnitId=(a,b)=>String(a.num||a.id).localeCompare(String(b.num||b.id),undefined,{numeric:true});
 function objects(){
   const m=metrics();
   const bs = SCOPE==='all'? buildingsList() : [buildingOf(SCOPE)].filter(Boolean);
@@ -870,7 +872,7 @@ function buildingCard(b){
   const totA=us.reduce((s,u)=>s+u.area,0), occA=us.filter(u=>u.tenant).reduce((s,u)=>s+u.area,0);
   const floors=[...new Set(us.map(u=>u.floor))].sort((a,b)=>a-b);
   const expanded = SCOPE!=='all' || expandedBuildings.has(b.id); // конкретный объект — сразу развёрнут
-  const body = floors.length?floors.map(f=>{const fu=us.filter(u=>u.floor===f);
+  const body = floors.length?floors.map(f=>{const fu=us.filter(u=>u.floor===f).sort(byUnitId);
       return `<div class="floor"><div class="floor-h"><b>Этаж ${f}</b> · ${fu.length} помещ. · ${fmt(fu.reduce((s,u)=>s+u.area,0))} м²</div>
       <div class="units">${fu.map(unitTile).join('')}</div></div>`;}).join(''):'<div class="empty" style="padding:24px">В объекте пока нет помещений</div>';
   return `<div class="card" style="margin-bottom:16px">
@@ -925,7 +927,7 @@ function planModal(bid){
     <div class="sec-h">Схема занятости</div>
     <div style="display:flex;gap:14px;flex-wrap:wrap;margin-bottom:12px;font-size:12px">${Object.entries(PLAN_LBL).map(([k,l])=>`<span style="display:inline-flex;align-items:center;gap:5px"><i style="width:12px;height:12px;border-radius:3px;background:${PLAN_COL[k]};display:inline-block"></i>${l}</span>`).join('')}</div>
     ${floors.length?floors.map(f=>`<div style="margin-bottom:12px"><div class="t-sub" style="margin-bottom:6px">Этаж ${f}</div>
-      <div style="display:flex;gap:8px;flex-wrap:wrap">${us.filter(u=>u.floor===f).map(tile).join('')}</div></div>`).join(''):'<div class="empty" style="padding:20px">В объекте пока нет помещений</div>'}
+      <div style="display:flex;gap:8px;flex-wrap:wrap">${us.filter(u=>u.floor===f).sort(byUnitId).map(tile).join('')}</div></div>`).join(''):'<div class="empty" style="padding:20px">В объекте пока нет помещений</div>'}
     <div class="card" id="planDetails" style="margin-top:8px;background:var(--bg2)"><div class="t-sub">Наведите курсор на помещение — появится информация. Клик — полная карточка.</div></div>
   </div>
   <div class="modal-f"><button class="btn" onclick="closeM()">Закрыть</button></div>`);
