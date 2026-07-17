@@ -1540,10 +1540,18 @@ async function saveReadings(){ const unit=val('rd-unit'); const period=val('rd-p
 }
 /* ---------- ОДПУ: общедомовые приборы учёта + сведение «Нагорело / Собрали / Разница» ---------- */
 function buildingMeter(bid,period){ return (DB.buildingMeters||[]).find(m=>m.building===bid && m.period===period)||null; }
+// «Сырое» потребление ОДПУ в физических единицах (до тарифа): эл-во кВт·ч, вода м³, отопление м².
+function odpuConsumption(m){ if(!m)return {e:0,w:0,h:0}; const e=m.electricity||{},w=m.water||{},h=m.heating||{};
+  return { e:((+e.cur||0)-(+e.prev||0))*(+e.coef||1), w:((+w.cur||0)-(+w.prev||0)), h:(+h.area||0) }; }
+// Вычитаемое потребление субсчётчика (например, ОДПУ СИТИ-2 внутри ОДПУ ТДЦ СИТИ) за тот же период.
+function odpuDeduction(m){ if(!m||!m.deduct) return {e:0,w:0,h:0};
+  const sm=(DB.buildingMeters||[]).find(x=>x.building===m.deduct && x.period===m.period);
+  return sm ? odpuConsumption(sm) : {e:0,w:0,h:0}; }
 function odpuAccrued(m){ if(!m)return null; const e=m.electricity||{},w=m.water||{},h=m.heating||{};
-  return { electricity:Math.max(0,Math.round(((+e.cur||0)-(+e.prev||0))*(+e.coef||1)*(+e.tariff||0))),
-    water:Math.max(0,Math.round(((+w.cur||0)-(+w.prev||0))*(+w.tariff||0))),
-    heating:Math.max(0,Math.round((+h.area||0)*(+h.tariff||0))) }; }
+  const own=odpuConsumption(m), sub=odpuDeduction(m); // из потребления вычитаем субсчётчик, потом ×тариф
+  return { electricity:Math.max(0,Math.round((own.e-sub.e)*(+e.tariff||0))),
+    water:Math.max(0,Math.round((own.w-sub.w)*(+w.tariff||0))),
+    heating:Math.max(0,Math.round((own.h-sub.h)*(+h.tariff||0))) }; }
 function odpuCollected(bid,period){ const us=DB.utilities.filter(u=>unitOf(u.unit)?.building===bid && u.period===period);
   return { electricity:us.reduce((s,u)=>s+(+u.electricity||0),0), water:us.reduce((s,u)=>s+(+u.water||0),0), heating:us.reduce((s,u)=>s+(+u.heating||0),0) }; }
 function odpuEntry(bid){ if(!canEdit('utilities')||!canAct('readings')) return alert('Нет права вносить показания счётчиков.'); const id=bid||(SCOPE!=='all'?SCOPE:(buildingsList()[0]||{}).id); if(!id) return alert('Сначала добавьте объект'); buildingMeterModal(id, utilPeriod); }
@@ -1754,8 +1762,10 @@ function odpuSummary(bid,period){
     return `<tr><td class="t-strong">${l}</td><td>${a==null?'—':money(a)}</td><td>${money(c)}</td><td${diff!=null&&diff!==0?` style="color:var(--amber)"`:''}>${diff==null?'—':money(diff)}</td></tr>`;
   }).join('');
   const totA=acc?(acc.electricity+acc.water+acc.heating):null, totC=col.electricity+col.water+col.heating;
+  const deductNote = (m&&m.deduct) ? `<div class="t-sub" style="margin-top:6px;color:var(--accent2)">➖ Из показаний вычтен ОДПУ объекта «${esc((buildingOf(m.deduct)||{}).name||m.deduct)}»${(DB.buildingMeters||[]).some(x=>x.building===m.deduct&&x.period===period)?'':' (за этот период у него показаний нет — вычитание 0)'}.</div>` : '';
   return `<table><thead><tr><th>Ресурс</th><th>Нагорело (ОДПУ)</th><th>Собрали (с помещений)</th><th>Разница</th></tr></thead><tbody>${rows}
     <tr style="border-top:2px solid var(--line2)"><td class="t-strong">Итого</td><td><b>${totA==null?'—':money(totA)}</b></td><td><b>${money(totC)}</b></td><td><b${totA!=null&&(totA-totC)!==0?` style="color:var(--amber)"`:''}>${totA==null?'—':money(totA-totC)}</b></td></tr></tbody></table>
+    ${deductNote}
     <div class="t-sub" style="margin-top:6px">«Разница» — общедомовые нужды / потери (показания дома минус сумма по всем помещениям, включая собственников). ${entryBtn}</div>`;
 }
 function buildingMeterModal(bid,period){
@@ -1771,6 +1781,9 @@ function buildingMeterModal(bid,period){
       <div class="field"><label>Период</label><input id="bm-period" type="month" value="${period}"></div>
     </div>
     <div class="t-sub" style="margin-bottom:8px">Показания общедомовых приборов учёта. «Нагорело» сравнивается с суммой по помещениям, разница — общедомовые нужды.</div>
+    <div class="field"><label>Вычесть показания ОДПУ другого объекта <span class="t-sub">(если этот счётчик учитывает и соседний объект)</span></label>
+      <select id="bm-deduct" onchange="bmRecalc()"><option value="">— не вычитать —</option>${buildingsList().filter(x=>x.id!==bid).map(x=>`<option value="${x.id}"${(m&&m.deduct===x.id)?' selected':''}>➖ ${esc(x.name)}</option>`).join('')}</select>
+      <div class="t-sub" id="bm-deduct-note" style="margin-top:4px"></div></div>
     <div class="card" style="background:var(--bg2);margin-bottom:8px"><div class="t-strong" style="margin-bottom:6px">Электроэнергия <span class="t-sub">(кВт·ч)</span></div>
       <div class="grid" style="grid-template-columns:repeat(4,1fr);gap:8px">
         <div class="field" style="margin:0"><label>Предыдущее</label><input id="bm-e-prev" type="number" step="any" value="${+e.prev||0}" oninput="bmRecalc()"></div>
@@ -1795,20 +1808,35 @@ function buildingMeterModal(bid,period){
   bmRecalc();
 }
 function bmRecalc(){
-  const e=Math.max(0,Math.round(((+val('bm-e-cur')||0)-(+val('bm-e-prev')||0))*(+val('bm-e-coef')||1)*(+val('bm-e-tar')||0)));
-  const w=Math.max(0,Math.round(((+val('bm-w-cur')||0)-(+val('bm-w-prev')||0))*(+val('bm-w-tar')||0)));
-  const h=Math.max(0,Math.round((+val('bm-h-area')||0)*(+val('bm-h-tar')||0)));
+  // вычитаемый субсчётчик (например, ОДПУ СИТИ-2 внутри ОДПУ ТДЦ СИТИ) за тот же период
+  const deduct=val('bm-deduct'), period=val('bm-period');
+  let sub={e:0,w:0,h:0}, subName='';
+  if(deduct){ const sm=(DB.buildingMeters||[]).find(x=>x.building===deduct && x.period===period);
+    if(sm){ sub=odpuConsumption(sm); } subName=(buildingOf(deduct)||{}).name||''; }
+  const eCons=Math.max(0,((+val('bm-e-cur')||0)-(+val('bm-e-prev')||0))*(+val('bm-e-coef')||1)-sub.e);
+  const wCons=Math.max(0,((+val('bm-w-cur')||0)-(+val('bm-w-prev')||0))-sub.w);
+  const hArea=Math.max(0,(+val('bm-h-area')||0)-sub.h);
+  const e=Math.round(eCons*(+val('bm-e-tar')||0));
+  const w=Math.round(wCons*(+val('bm-w-tar')||0));
+  const h=Math.round(hArea*(+val('bm-h-tar')||0));
   const set=(id,v)=>{const el=document.getElementById(id);if(el)el.textContent=money(v);};
   set('bm-e-sum',e);set('bm-w-sum',w);set('bm-h-sum',h);set('bm-total',e+w+h);
+  const note=document.getElementById('bm-deduct-note');
+  if(note){ if(deduct){ const has=(DB.buildingMeters||[]).some(x=>x.building===deduct && x.period===period);
+      note.innerHTML = has ? `После вычета «${esc(subName)}»: эл-во ${fmt(eCons)} кВт·ч · вода ${fmt(wCons)} м³` :
+        `⚠️ У «${esc(subName)}» нет показаний ОДПУ за ${period} — вычитать нечего. Сначала внесите их.`;
+    } else note.textContent=''; }
 }
 async function saveBuildingMeter(bid){ if(!Array.isArray(DB.buildingMeters)) DB.buildingMeters=[];
   bid=val('bm-building')||bid; const period=val('bm-period'); if(!period) return alert('Укажите период');
-  const data={ building:bid, period,
+  const deduct=val('bm-deduct')||'';
+  const data={ building:bid, period, deduct: (deduct && deduct!==bid) ? deduct : undefined,
     electricity:{prev:+val('bm-e-prev')||0,cur:+val('bm-e-cur')||0,coef:+val('bm-e-coef')||1,tariff:+val('bm-e-tar')||0},
     water:{prev:+val('bm-w-prev')||0,cur:+val('bm-w-cur')||0,tariff:+val('bm-w-tar')||0},
     heating:{area:+val('bm-h-area')||0,tariff:+val('bm-h-tar')||0} };
+  if(data.deduct===undefined) delete data.deduct;
   const ex=DB.buildingMeters.find(m=>m.building===bid && m.period===period);
-  if(ex) Object.assign(ex,data); else DB.buildingMeters.push({id:'bm'+Date.now(),...data});
+  if(ex){ Object.assign(ex,data); if(!data.deduct) delete ex.deduct; } else DB.buildingMeters.push({id:'bm'+Date.now(),...data});
   closeM(); await afterStateChange();
 }
 async function delBuildingMeter(bid,period){ if(!confirm('Удалить показания ОДПУ за этот период?'))return;
