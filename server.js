@@ -708,7 +708,7 @@ async function api(req, res, url){
     const email=(b.email||'').trim().toLowerCase();
     if(!email || !b.password || !b.full_name) return send(res,400,{error:'Заполните email, пароль и ФИО'});
     if(db.prepare('SELECT 1 FROM users WHERE email=?').get(email)) return send(res,409,{error:'Пользователь с таким email уже существует'});
-    if(String(b.password).length < 6) return send(res,400,{error:'Пароль не короче 6 символов'});
+    if(String(b.password).length < 8) return send(res,400,{error:'Пароль не короче 8 символов'});
     // самостоятельно нельзя получить привилегированную роль — только админ назначает
     const role = SELF_ROLES.includes(b.role) ? b.role : 'maintenance';
     const info = db.prepare(`INSERT INTO users(email,password,full_name,position,role,phone,active,created_at)
@@ -1022,6 +1022,10 @@ async function api(req, res, url){
     const id=+seg[2];
     const u=db.prepare('SELECT * FROM users WHERE id=?').get(id);
     if(!u) return send(res,404,{error:'Сотрудник не найден'});
+    // привилегированную учётку (admin/owner) может трогать ТОЛЬКО другой admin/owner —
+    // иначе сотрудник с правом «Сотрудники» мог сбросить пароль/отключить/удалить администратора и захватить систему
+    if((u.role==='admin'||u.role==='owner') && !isFull(me.role))
+      return send(res,403,{error:'Изменять учётную запись администратора может только администратор.'});
     if(method==='PATCH'){
       const b=await readBody(req);
       const fields=[],vals=[];

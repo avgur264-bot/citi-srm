@@ -1540,6 +1540,12 @@ async function saveReadings(){ const unit=val('rd-unit'); const period=val('rd-p
 }
 /* ---------- ОДПУ: общедомовые приборы учёта + сведение «Нагорело / Собрали / Разница» ---------- */
 function buildingMeter(bid,period){ return (DB.buildingMeters||[]).find(m=>m.building===bid && m.period===period)||null; }
+// последний ОДПУ этого объекта ДО указанного периода (для авто-подстановки «Предыдущее» = «Текущее» прошлого месяца)
+function prevBuildingMeter(bid,period){
+  const rs=(DB.buildingMeters||[]).filter(m=>m.building===bid && String(m.period)<String(period))
+    .sort((a,b)=>String(b.period).localeCompare(String(a.period)));
+  return rs[0]||null;
+}
 // «Сырое» потребление ОДПУ в физических единицах (до тарифа): эл-во кВт·ч, вода м³, отопление м².
 function odpuConsumption(m){ if(!m)return {e:0,w:0,h:0}; const e=m.electricity||{},w=m.water||{},h=m.heating||{};
   return { e:((+e.cur||0)-(+e.prev||0))*(+e.coef||1), w:((+w.cur||0)-(+w.prev||0)), h:(+h.area||0) }; }
@@ -1774,6 +1780,11 @@ function buildingMeterModal(bid,period){
   const m=buildingMeter(bid,period);
   const totalArea=Math.round(DB.units.filter(u=>u.building===bid).reduce((s,u)=>s+(+u.area||0),0)*100)/100;
   const e=(m&&m.electricity)||{}, w=(m&&m.water)||{}, h=(m&&m.heating)||{};
+  // за новый месяц «Предыдущее» = «Текущее» прошлого месяца (если за этот период ещё нет записи)
+  const pm=prevBuildingMeter(bid,period), pe=(pm&&pm.electricity)||{}, pw=(pm&&pm.water)||{};
+  const eprev = m ? (+e.prev||0) : (+pe.cur||0);
+  const wprev = m ? (+w.prev||0) : (+pw.cur||0);
+  const prevHint = pm ? `<span class="t-sub">↩ из ${pm.period}</span>` : '';
   openM(`<div class="modal-h"><h3>🏢 Показания общедомовых счётчиков (ОДПУ)</h3><span class="x" onclick="closeM()">×</span></div>
   <div class="modal-b">
     <div class="row2">
@@ -1786,14 +1797,14 @@ function buildingMeterModal(bid,period){
       <div class="t-sub" id="bm-deduct-note" style="margin-top:4px"></div></div>
     <div class="card" style="background:var(--bg2);margin-bottom:8px"><div class="t-strong" style="margin-bottom:6px">Электроэнергия <span class="t-sub">(кВт·ч)</span></div>
       <div class="grid" style="grid-template-columns:repeat(4,1fr);gap:8px">
-        <div class="field" style="margin:0"><label>Предыдущее</label><input id="bm-e-prev" type="number" step="any" value="${+e.prev||0}" oninput="bmRecalc()"></div>
+        <div class="field" style="margin:0"><label>Предыдущее ${prevHint}</label><input id="bm-e-prev" type="number" step="any" value="${eprev}" oninput="bmRecalc()"></div>
         <div class="field" style="margin:0"><label>Текущее</label><input id="bm-e-cur" type="number" step="any" value="${+e.cur||0}" oninput="bmRecalc()"></div>
         <div class="field" style="margin:0"><label>Коэффициент</label><input id="bm-e-coef" type="number" step="any" value="${+e.coef||buildingElecCoef(bid)}" oninput="bmRecalc()"></div>
         <div class="field" style="margin:0"><label>Тариф ₽</label><input id="bm-e-tar" type="number" step="any" value="${+e.tariff||buildingTariff(bid,'electricity')}" oninput="bmRecalc()"></div>
       </div><div class="t-sub" style="margin-top:6px">Нагорело: <b id="bm-e-sum">0 ₽</b></div></div>
     <div class="card" style="background:var(--bg2);margin-bottom:8px"><div class="t-strong" style="margin-bottom:6px">Вода <span class="t-sub">(м³)</span></div>
       <div class="grid" style="grid-template-columns:repeat(3,1fr);gap:8px">
-        <div class="field" style="margin:0"><label>Предыдущее</label><input id="bm-w-prev" type="number" step="any" value="${+w.prev||0}" oninput="bmRecalc()"></div>
+        <div class="field" style="margin:0"><label>Предыдущее ${prevHint}</label><input id="bm-w-prev" type="number" step="any" value="${wprev}" oninput="bmRecalc()"></div>
         <div class="field" style="margin:0"><label>Текущее</label><input id="bm-w-cur" type="number" step="any" value="${+w.cur||0}" oninput="bmRecalc()"></div>
         <div class="field" style="margin:0"><label>Тариф ₽</label><input id="bm-w-tar" type="number" step="any" value="${+w.tariff||buildingTariff(bid,'water')}" oninput="bmRecalc()"></div>
       </div><div class="t-sub" style="margin-top:6px">Нагорело: <b id="bm-w-sum">0 ₽</b></div></div>
