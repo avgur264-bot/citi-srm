@@ -1450,7 +1450,12 @@ function exportUtilReport(){
 const UTIL_KINDS=[['electricity','Электроэнергия','кВт·ч','meter',true],['water','Вода','м³','meter',false],['heating','Отопление','м²','area',false]];
 const utilKindMode=k=>(UTIL_KINDS.find(x=>x[0]===k)||[])[3]||'meter';
 function lastReading(unitId,kind,beforePeriod){
-  const recs=(DB.utilities||[]).filter(u=>u.unit===unitId && u.readings && u.readings[kind] && (!beforePeriod || String(u.period)<beforePeriod))
+  const u=unitOf(unitId); const num=u?(u.num||u.id):unitId;
+  // сопоставляем показания и по id, и по отображаемому номеру помещения — на случай смены id
+  // между объектами (тогда старые показания не «отрываются» и предыдущее подтягивается везде).
+  const sameUnit=r=>{ if(r.unit===unitId) return true; if(num && r.unit===num) return true;
+    const ru=unitOf(r.unit); return !!(ru && u && (ru.num||ru.id)===num && ru.building===u.building); };
+  const recs=(DB.utilities||[]).filter(r=>sameUnit(r) && r.readings && r.readings[kind] && (!beforePeriod || String(r.period)<beforePeriod))
     .sort((a,b)=>String(b.period).localeCompare(String(a.period)));
   return recs.length? (+recs[0].readings[kind].current||0) : 0;
 }
