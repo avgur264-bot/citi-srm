@@ -208,7 +208,7 @@ async function api(path, method='GET', body){
     return {...t,assignee_name:a?a.full_name:null,assignee_position:a?a.position:null,creator_name:c?c.full_name:null};};
 
   // В автономном демо регистрация и демо-доступ остаются открытыми.
-  if(path==='/api/config') return {allowRegistration:true, assistantKey:false, assistantProvider:'gigachat', avitoConfigured:false, cianConfigured:false, bankConfigured:false};
+  if(path==='/api/config') return {allowRegistration:true, assistantKey:false, assistantProvider:'gigachat', avitoConfigured:false, cianConfigured:false, bankConfigured:false, features:[]};
   if(path==='/api/bank/info') return {configured:false, account:'', hasTokens:false, lastSync:null};
   if(path==='/api/bank/sync'&&method==='POST') return {ok:false, error:'В автономном демо банк не подключается.'};
   // Реклама: в автономном демо API площадок недоступно — синхронизация идёт в демо-режиме на клиенте.

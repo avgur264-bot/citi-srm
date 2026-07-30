@@ -627,6 +627,14 @@ const SELF_ROLES = ['leasing','accountant','maintenance'];
 // Включить можно переменной окружения ALLOW_REGISTRATION=1 (для теста/демо).
 const ALLOW_REGISTRATION = process.env.ALLOW_REGISTRATION === '1';
 
+// ---- Флаги функций (пер-клиентские) ----
+// Особые доработки «только для одного клиента» включаются переменной окружения FEATURES
+// (список через запятую, напр. FEATURES=floorplan_export,special_report). По умолчанию — пусто:
+// у всех клиентов, где FEATURES не задан, ничего не меняется (общая логика). Включается точечно
+// скриптом deploy/platform/enable-feature.sh <клиент> <функция>. Фронт получает список в /api/config.
+const FEATURES = String(process.env.FEATURES||'').split(',').map(s=>s.trim()).filter(Boolean);
+const featureOn = name => FEATURES.includes(name);
+
 // простой лимит попыток входа (анти-брутфорс)
 const loginFails = new Map();
 // IP клиента: последний адрес в X-Forwarded-For — его добавляет НАШ Caddy (левые значения может подделать клиент)
@@ -708,7 +716,8 @@ async function api(req, res, url){
   if(path==='/api/config' && method==='GET'){
     // assistantKey — задан ли ключ модели в окружении (UI помощника показывается только тогда + при включении в Настройках)
     return send(res,200,{ allowRegistration: ALLOW_REGISTRATION, assistantKey: hasModelKey(), assistantProvider: providerName(),
-      avitoConfigured: avitoConfigured(), cianConfigured: cianConfigured(), bankConfigured: sberConfigured() });
+      avitoConfigured: avitoConfigured(), cianConfigured: cianConfigured(), bankConfigured: sberConfigured(),
+      features: FEATURES });
   }
   if(path==='/api/auth/register' && method==='POST'){
     if(!ALLOW_REGISTRATION) return send(res,403,{error:'Регистрация закрыта. Учётную запись создаёт администратор.'});

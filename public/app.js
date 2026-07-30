@@ -39,6 +39,8 @@ let ALLOW_REG=false; // разрешена ли самостоятельная �
 let ASSIST_KEY=false, ASSIST_PROVIDER='gigachat'; // задан ли ключ модели в окружении (AI-помощник)
 let ADS_AVITO=false, ADS_CIAN=false; // заданы ли ключи площадок (реклама) — реальная синхронизация
 let BANK_OK=false;          // подключён ли банк (Сбер): ключи+сертификат в окружении клиента
+let FEATURES=[];            // пер-клиентские флаги функций (с сервера); пусто = общая логика у всех
+const featureOn = name => Array.isArray(FEATURES) && FEATURES.includes(name); // «функция включена этому клиенту?»
 let ADS_INFO=null;          // {feedAvito, feedCian, feedProtected} — грузится на странице «Реклама»
 let IS_DEMO=false;          // true только в автономной демо-версии (выставляется сборщиком)
 const DEMO_LIMIT=1000;      // лимит записей в демо-версии
@@ -138,7 +140,7 @@ function myReminders(){
    BOOT
    ============================================================ */
 (async function boot(){
-  try{ const c = await api('/api/config'); ALLOW_REG = !!c.allowRegistration; ASSIST_KEY = !!c.assistantKey; ASSIST_PROVIDER = c.assistantProvider||'gigachat'; ADS_AVITO = !!c.avitoConfigured; ADS_CIAN = !!c.cianConfigured; BANK_OK = !!c.bankConfigured; }catch{ ALLOW_REG=false; }
+  try{ const c = await api('/api/config'); ALLOW_REG = !!c.allowRegistration; ASSIST_KEY = !!c.assistantKey; ASSIST_PROVIDER = c.assistantProvider||'gigachat'; ADS_AVITO = !!c.avitoConfigured; ADS_CIAN = !!c.cianConfigured; BANK_OK = !!c.bankConfigured; FEATURES = Array.isArray(c.features)?c.features:[]; }catch{ ALLOW_REG=false; }
   try{
     const {user} = await api('/api/auth/me');
     ME=user; await loadData(); showApp();
