@@ -1340,7 +1340,7 @@ function utilities(){
   const ut=UT.reduce((s,u)=>s+u.electricity+u.water+u.heating,0);
   const ex=EX.reduce((s,e)=>s+e.amount,0);
   const pers=periodsList();
-  el(head('Коммуналка и расходы на содержание',`${utilPeriod?'Период: '+fmtPeriod(utilPeriod):'Все периоды'} · ${scopeSub()}`,canEdit('utilities')?`<button class="btn ghost" onclick="readingsModal()">📟 Показания помещений</button> <button class="btn ghost" onclick="odpuEntry()">🏢 Показания ОДПУ</button> <button class="btn ghost" onclick="gsmEntry()">⛽ ГСМ</button> <button class="btn ghost" onclick="boilerEntry()">🔥 Котельная</button> <button class="btn" onclick="expenseModal()">+ Расход</button>`:'')+
+  el(head('Коммуналка и расходы на содержание',`${utilPeriod?'Период: '+fmtPeriod(utilPeriod):'Все периоды'} · ${scopeSub()}`,canEdit('utilities')?`<button class="btn ghost" onclick="readingsModal()">📟 Показания помещений</button> <button class="btn ghost" onclick="odpuEntry()">🏢 Показания ОДПУ</button> <button class="btn ghost" onclick="gsmEntry()">⛽ ГСМ</button> <button class="btn ghost" onclick="boilerEntry()">🔥 Котельная</button> <button class="btn ghost" onclick="readingsJournalEntry()">📖 Журнал показаний</button> <button class="btn" onclick="expenseModal()">+ Расход</button>`:'')+
   `<div class="toolbar"><span class="t-sub">Период:</span><select class="search" style="width:auto;min-width:160px" onchange="setUtilPeriod(this.value)"><option value="">Все периоды</option>${pers.map(p=>`<option value="${p}"${utilPeriod===p?' selected':''}>${fmtPeriod(p)}</option>`).join('')}</select></div>
   <div class="grid" style="grid-template-columns:repeat(3,1fr);margin-bottom:18px">
     ${miniStat('Коммунальные начисления',money(ut),'violet')}${miniStat('Расходы на содержание',money(ex),'amber')}${miniStat('Итого затраты',money(ut+ex),'red')}
@@ -1650,6 +1650,38 @@ async function saveBoiler(bid){ if(!Array.isArray(DB.heatCost)) DB.heatCost=[];
 async function delBoiler(bid,period){ if(!confirm('Удалить данные котельной за этот период?'))return; DB.heatCost=(DB.heatCost||[]).filter(h=>!(h.building===bid && h.period===period)); closeM(); await afterStateChange(); }
 /* ⛽ ГСМ: приход + остаток → израсходовано; результат автоматически идёт в «Количество» котельной */
 function gsmEntry(bid){ if(!canEdit('utilities')||!canAct('readings')) return alert('Нет права вносить ГСМ.'); const id=bid||(SCOPE!=='all'?SCOPE:(buildingsList()[0]||{}).id); if(!id) return alert('Сначала добавьте объект'); gsmModal(id, utilPeriod); }
+// 📖 Журнал показаний счётчиков по объекту — история за все периоды
+function readingsJournalEntry(){ const id=SCOPE!=='all'?SCOPE:(buildingsList()[0]||{}).id; if(!id) return alert('Сначала добавьте объект'); readingsJournalModal(id); }
+function readingsJournalModal(bid){ const b=buildingOf(bid); if(!b) return;
+  const recs=(DB.utilities||[]).filter(u=>unitOf(u.unit)?.building===bid && u.readings)
+    .sort((a,b)=>String(b.period).localeCompare(String(a.period)) || String(unitNum(a.unit)).localeCompare(String(unitNum(b.unit)),undefined,{numeric:true}));
+  const cell=(r,k)=>{ const d=r.readings&&r.readings[k]; if(!d) return '<span class="t-sub">—</span>';
+    if(k==='heating'){ return `${fmt(+d.area||0)} м² · <b>${money(+r.heating||0)}</b>`; }
+    const prev=+d.prev||0, cur=+d.current||0, coef=+d.coef||1; const cons=Math.max(0,(cur-prev)*coef);
+    return `${fmt(prev)}→${fmt(cur)}${coef!==1?` ×${fmt(coef)}`:''} · ${fmt(cons)} · <b>${money(+r[k]||0)}</b>`; };
+  const rows=recs.map(r=>`<tr><td class="t-sub">${fmtPeriod(r.period)}</td><td class="t-strong">${esc(unitNum(r.unit))}</td><td>${cell(r,'electricity')}</td><td>${cell(r,'water')}</td><td>${cell(r,'heating')}</td><td class="t-strong">${money((+r.electricity||0)+(+r.water||0)+(+r.heating||0))}</td></tr>`).join('');
+  const totE=recs.reduce((s,r)=>s+(+r.electricity||0),0), totW=recs.reduce((s,r)=>s+(+r.water||0),0), totH=recs.reduce((s,r)=>s+(+r.heating||0),0);
+  openM(`<div class="modal-h"><h3>📖 Журнал показаний — ${esc(b.name)}</h3><span class="x" onclick="closeM()">×</span></div>
+  <div class="modal-b">
+    <div class="row2" style="margin-bottom:10px"><div class="field"><label>Объект</label><select id="rj-building" onchange="readingsJournalModal(this.value)">${buildingsList().map(x=>`<option value="${x.id}"${x.id===bid?' selected':''}>${esc(x.name)}</option>`).join('')}</select></div></div>
+    <div class="t-sub" style="margin-bottom:8px">История показаний по всем помещениям и периодам. В ячейке: предыдущее→текущее · расход · сумма к начислению.</div>
+    <div style="overflow-x:auto"><table><thead><tr><th>Период</th><th>Помещение</th><th>Электро (кВт·ч)</th><th>Вода (м³)</th><th>Отопление (м²)</th><th>Итого ₽</th></tr></thead><tbody>
+    ${rows||'<tr><td colspan="6" class="empty">Показаний пока нет</td></tr>'}
+    ${recs.length?`<tr style="border-top:2px solid var(--line2)"><td class="t-strong" colspan="2">Итого</td><td class="t-strong">${money(totE)}</td><td class="t-strong">${money(totW)}</td><td class="t-strong">${money(totH)}</td><td class="t-strong">${money(totE+totW+totH)}</td></tr>`:''}
+    </tbody></table></div>
+  </div>
+  <div class="modal-f"><div class="spacer"></div><button class="btn ghost" onclick="exportReadingsJournal('${bid}')">⤓ Экспорт CSV</button><button class="btn" onclick="closeM()">Закрыть</button></div>`);
+}
+function exportReadingsJournal(bid){ const b=buildingOf(bid); if(!b) return;
+  const recs=(DB.utilities||[]).filter(u=>unitOf(u.unit)?.building===bid && u.readings)
+    .sort((a,b)=>String(b.period).localeCompare(String(a.period)) || String(unitNum(a.unit)).localeCompare(String(unitNum(b.unit)),undefined,{numeric:true}));
+  const out=[['Период','Помещение','Ресурс','Предыдущее','Текущее','Коэффициент','Расход','Сумма ₽']];
+  recs.forEach(r=>{ [['electricity','Электро'],['water','Вода'],['heating','Отопление']].forEach(([k,l])=>{ const d=r.readings&&r.readings[k]; if(!d)return;
+    if(k==='heating') out.push([r.period,unitNum(r.unit),l,'','',(+d.area||0)+' м²','',+r.heating||0]);
+    else { const prev=+d.prev||0,cur=+d.current||0,coef=+d.coef||1; out.push([r.period,unitNum(r.unit),l,prev,cur,coef,Math.max(0,(cur-prev)*coef),+r[k]||0]); } }); });
+  const csv='﻿'+out.map(r=>r.map(csvCell).join(';')).join('\n');
+  const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));a.download='zhurnal_pokazaniy_'+bid+'.csv';a.click();
+}
 let _gsmRows=[]; // журнал поставок в текущем окне [{date,qty,price}]
 function gsmModal(bid,period){
   if(!canEdit('utilities')) return; const b=buildingOf(bid); if(!b) return;
