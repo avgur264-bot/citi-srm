@@ -1340,7 +1340,7 @@ function utilities(){
   const ut=UT.reduce((s,u)=>s+u.electricity+u.water+u.heating,0);
   const ex=EX.reduce((s,e)=>s+e.amount,0);
   const pers=periodsList();
-  el(head('Коммуналка и расходы на содержание',`${utilPeriod?'Период: '+fmtPeriod(utilPeriod):'Все периоды'} · ${scopeSub()}`,canEdit('utilities')?`<button class="btn ghost" onclick="readingsModal()">📟 Показания помещений</button> <button class="btn ghost" onclick="odpuEntry()">🏢 Показания ОДПУ</button> <button class="btn ghost" onclick="gsmEntry()">⛽ ГСМ</button> <button class="btn ghost" onclick="boilerEntry()">🔥 Котельная</button> <button class="btn ghost" onclick="readingsJournalEntry()">📖 Журнал показаний</button> <button class="btn" onclick="expenseModal()">+ Расход</button>`:'')+
+  el(head('Коммуналка и расходы на содержание',`${utilPeriod?'Период: '+fmtPeriod(utilPeriod):'Все периоды'} · ${scopeSub()}`,canEdit('utilities')?`<button class="btn ghost" onclick="readingsModal()">📟 Показания помещений</button> <button class="btn ghost" onclick="odpuEntry()">🏢 Показания ОДПУ</button> <button class="btn ghost" onclick="gsmEntry()">⛽ ГСМ</button> <button class="btn ghost" onclick="boilerEntry()">🔥 Котельная</button> <button class="btn ghost" onclick="readingsJournalEntry()">📖 Журнал показаний</button> <button class="btn ghost" onclick="consAnalyticsEntry()">📊 Аналитика потребления</button> <button class="btn" onclick="expenseModal()">+ Расход</button>`:'')+
   `<div class="toolbar"><span class="t-sub">Период:</span><select class="search" style="width:auto;min-width:160px" onchange="setUtilPeriod(this.value)"><option value="">Все периоды</option>${pers.map(p=>`<option value="${p}"${utilPeriod===p?' selected':''}>${fmtPeriod(p)}</option>`).join('')}</select></div>
   <div class="grid" style="grid-template-columns:repeat(3,1fr);margin-bottom:18px">
     ${miniStat('Коммунальные начисления',money(ut),'violet')}${miniStat('Расходы на содержание',money(ex),'amber')}${miniStat('Итого затраты',money(ut+ex),'red')}
@@ -1681,6 +1681,38 @@ function exportReadingsJournal(bid){ const b=buildingOf(bid); if(!b) return;
     else { const prev=+d.prev||0,cur=+d.current||0,coef=+d.coef||1; out.push([r.period,unitNum(r.unit),l,prev,cur,coef,Math.max(0,(cur-prev)*coef),+r[k]||0]); } }); });
   const csv='﻿'+out.map(r=>r.map(csvCell).join(';')).join('\n');
   const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));a.download='zhurnal_pokazaniy_'+bid+'.csv';a.click();
+}
+// ---------- 📊 Аналитика потребления по объекту (динамика + аномалии ≥10%) ----------
+// потребление по одной записи показаний (электро/вода); отопление — по площади, потребление не считаем
+function readingConsumption(rec,kind){ const d=rec.readings&&rec.readings[kind]; if(!d||kind==='heating')return null;
+  const prev=+d.prev||0, cur=+d.current||0, coef=+d.coef||1; return Math.max(0,(cur-prev)*coef); }
+// суммарное потребление по объекту, ряд по периодам: [{period,value}]
+function buildingConsumption(bid,kind){ const map={}; (DB.utilities||[]).forEach(r=>{ if(unitOf(r.unit)?.building!==bid)return; const c=readingConsumption(r,kind); if(c==null)return; map[r.period]=(map[r.period]||0)+c; });
+  return Object.keys(map).sort().map(p=>({period:p,value:Math.round(map[p]*100)/100})); }
+// все аномалии (изменение к предыдущему периоду ≥10%)
+function consumptionAnomalies(bid){ const out=[]; [['electricity','Электроэнергия','кВт·ч'],['water','Вода','м³']].forEach(([k,label,unit])=>{
+  const s=buildingConsumption(bid,k); for(let i=1;i<s.length;i++){ const prev=s[i-1].value,cur=s[i].value; if(prev<=0)continue; const d=(cur-prev)/prev*100;
+    if(Math.abs(d)>=10) out.push({building:bid,kind:k,label,unit,period:s[i].period,prev,cur,deltaPct:Math.round(d)}); } }); return out; }
+// аномалия только последнего периода (для уведомлений/алертов, чтобы не спамить историей)
+function latestConsAnomaly(bid,kind){ const s=buildingConsumption(bid,kind); if(s.length<2)return null;
+  const prev=s[s.length-2].value,cur=s[s.length-1].value; if(prev<=0)return null; const d=(cur-prev)/prev*100;
+  return Math.abs(d)>=10?{period:s[s.length-1].period,prev,cur,deltaPct:Math.round(d)}:null; }
+function consAnalyticsEntry(){ const id=SCOPE!=='all'?SCOPE:(buildingsList()[0]||{}).id; if(!id)return alert('Сначала добавьте объект'); consAnalyticsModal(id); }
+function consAnalyticsModal(bid){ const b=buildingOf(bid); if(!b)return;
+  const se=buildingConsumption(bid,'electricity'), sw=buildingConsumption(bid,'water'); const anom=consumptionAnomalies(bid);
+  const anomRows = anom.length? anom.slice().reverse().map(a=>{const big=Math.abs(a.deltaPct)>=25;return `<div class="doc" style="border-left:3px solid ${big?'var(--red)':'var(--amber)'};border-radius:7px;padding:8px 10px;margin-bottom:6px"><div style="flex:1;min-width:0"><div class="t-strong">${a.deltaPct>0?'↑ рост':'↓ падение'} · ${esc(a.label)}: ${a.deltaPct>0?'+':''}${a.deltaPct}% <span class="t-sub">(${fmtPeriod(a.period)})</span></div><div class="t-sub">${fmt(a.prev)} → ${fmt(a.cur)} ${esc(a.unit)}</div></div></div>`;}).join('') : '<div class="empty" style="padding:14px">Резких изменений (≥10%) не обнаружено</div>';
+  openM(`<div class="modal-h"><h3>📊 Аналитика потребления — ${esc(b.name)}</h3><span class="x" onclick="closeM()">×</span></div>
+  <div class="modal-b">
+    <div class="row2" style="margin-bottom:10px"><div class="field"><label>Объект</label><select id="ca-building" onchange="consAnalyticsModal(this.value)">${buildingsList().map(x=>`<option value="${x.id}"${x.id===bid?' selected':''}>${esc(x.name)}</option>`).join('')}</select></div></div>
+    <div class="card" style="background:var(--bg2);margin-bottom:10px"><div class="t-strong" style="margin-bottom:6px">⚡ Электроэнергия (кВт·ч) по периодам</div><canvas id="ca-elec" height="120"></canvas>${se.length?'':'<div class="t-sub">Нет данных по электро</div>'}</div>
+    <div class="card" style="background:var(--bg2);margin-bottom:10px"><div class="t-strong" style="margin-bottom:6px">💧 Вода (м³) по периодам</div><canvas id="ca-water" height="120"></canvas>${sw.length?'':'<div class="t-sub">Нет данных по воде</div>'}</div>
+    <div class="sec-h">Резкие изменения потребления (≥10%)</div>
+    ${anomRows}
+    <div class="t-sub" style="margin-top:8px">Сравнение каждого периода с предыдущим по объекту. Порог срабатывания — 10%. Такие же уведомления приходят в «🔔 Центр сроков» и в Telegram-сводку.</div>
+  </div>
+  <div class="modal-f"><div class="spacer"></div><button class="btn" onclick="closeM()">Закрыть</button></div>`);
+  const mk=(cid,series,color)=>{ const elc=document.getElementById(cid); if(!elc||!series.length)return; new Chart(elc,{type:'line',data:{labels:series.map(x=>fmtPeriod(x.period)),datasets:[{data:series.map(x=>x.value),borderColor:color,backgroundColor:color+'22',fill:true,tension:.3,pointRadius:3}]},options:chOpts(false)}); };
+  mk('ca-elec',se,cssVar('--accent')); mk('ca-water',sw,'#37d39b');
 }
 let _gsmRows=[]; // журнал поставок в текущем окне [{date,qty,price}]
 function gsmModal(bid,period){
@@ -2233,6 +2265,10 @@ function buildAlerts(){
   (DB.signage||[]).forEach(s=>{ if(!inS(s.building))return; const dl=s.expiry?daysLeft(s.expiry):9999; if(dl>60)return;
     const who=s.owner==='self'?'собственника':((s.tenant&&tenantOf(s.tenant))?tenantOf(s.tenant).name:'арендатора');
     A.push({level:dl<0?'danger':dl<=30?'warn':'info',icon:'📣',cat:'Реклама',id:s.id,title:`Разрешение ${dl<0?'истекло':'истекает'}: ${esc(s.kind||'вывеска')} (${esc(who)})`,sub:`${esc(s.permitNo||'')} · ${s.expiry?fmtD(s.expiry):''} · ${dueLabel(s.expiry)}`,page:'ads',sort:dl}); });
+  // Резкий рост/падение потребления (≥10% к прошлому периоду) — по каждому объекту
+  buildingsList().forEach(bb=>{ if(!inS(bb.id))return; [['electricity','⚡ электроэнергии','кВт·ч'],['water','💧 воды','м³']].forEach(([k,lbl,unit])=>{
+    const a=latestConsAnomaly(bb.id,k); if(!a)return; const up=a.deltaPct>0;
+    A.push({level:Math.abs(a.deltaPct)>=25?'danger':'warn',icon:'📊',cat:'Потребление',id:'cons-'+bb.id+'-'+k,title:`Резкий ${up?'рост':'спад'} ${lbl}: ${up?'+':''}${a.deltaPct}%`,sub:`${esc(bb.name)} · ${fmtPeriod(a.period)} · ${fmt(a.prev)}→${fmt(a.cur)} ${unit}`,page:'utilities',sort:-200}); }); });
   return A.sort((x,y)=>x.sort-y.sort);
 }
 const alertColor=l=>l==='danger'?'var(--red)':l==='warn'?'var(--amber)':'var(--accent2)';

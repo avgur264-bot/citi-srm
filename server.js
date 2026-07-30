@@ -362,6 +362,14 @@ function buildDigest(){
   if(to.length){ lines.push(`\u{1F9F0} Плановое ТО (скоро/просрочено): ${to.length}`); to.slice(0,5).forEach(e=>lines.push(`   • ${e.name}`)); }
   const req=(st.requests||[]).filter(r=>r.status==='new'||r.status==='in_progress');
   if(req.length) lines.push(`\u{1F6E0} Открытые заявки: ${req.length}`);
+  // Аномалии потребления: резкое изменение ≥10% к прошлому периоду по объекту
+  const uB=Object.fromEntries((st.units||[]).map(u=>[u.id,u.building]));
+  const bName=Object.fromEntries((st.buildings||[]).map(b=>[b.id,b.name]));
+  const consByBuilding=(kind)=>{ const byB={}; (st.utilities||[]).forEach(r=>{ const b=uB[r.unit]; const d=r.readings&&r.readings[kind]; if(!b||!d||kind==='heating')return;
+    const c=Math.max(0,((+d.current||0)-(+d.prev||0))*(+d.coef||1)); (byB[b]=byB[b]||{}); byB[b][r.period]=(byB[b][r.period]||0)+c; }); return byB; };
+  [['electricity','электроэнергии','кВт·ч'],['water','воды','м³']].forEach(([k,lbl,unit])=>{ const byB=consByBuilding(k);
+    Object.keys(byB).forEach(b=>{ const ps=Object.keys(byB[b]).sort(); if(ps.length<2)return; const prev=byB[b][ps[ps.length-2]],cur=byB[b][ps[ps.length-1]]; if(prev<=0)return;
+      const d=Math.round((cur-prev)/prev*100); if(Math.abs(d)>=10) lines.push(`\u{1F4CA} Потребление ${lbl}: ${d>0?'↑ рост +':'↓ спад '}${d}% — ${bName[b]||b} (${ps[ps.length-1]}, ${Math.round(prev)}→${Math.round(cur)} ${unit})`); }); });
   const head=`\u{1F4CA} СИТИ SRM — сводка на ${new Date().toLocaleDateString('ru-RU')}`;
   return lines.length ? head+'\n\n'+lines.join('\n') : head+'\n\n✅ Срочных дел на сегодня нет.';
 }
