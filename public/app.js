@@ -1654,9 +1654,10 @@ async function delBoiler(bid,period){ if(!confirm('Удалить данные �
 function gsmEntry(bid){ if(!canEdit('utilities')||!canAct('readings')) return alert('Нет права вносить ГСМ.'); const id=bid||(SCOPE!=='all'?SCOPE:(buildingsList()[0]||{}).id); if(!id) return alert('Сначала добавьте объект'); gsmModal(id, utilPeriod); }
 // 📖 Журнал показаний счётчиков по объекту — история за все периоды
 function readingsJournalEntry(){ const id=SCOPE!=='all'?SCOPE:(buildingsList()[0]||{}).id; if(!id) return alert('Сначала добавьте объект'); readingsJournalModal(id); }
-function readingsJournalModal(bid){ const b=buildingOf(bid); if(!b) return;
-  const recs=(DB.utilities||[]).filter(u=>unitOf(u.unit)?.building===bid && u.readings)
+function readingsJournalModal(bid,unitFilter){ const b=buildingOf(bid); if(!b) return; unitFilter=unitFilter||'';
+  const recs=(DB.utilities||[]).filter(u=>unitOf(u.unit)?.building===bid && u.readings && (!unitFilter || u.unit===unitFilter))
     .sort((a,b)=>String(b.period).localeCompare(String(a.period)) || String(unitNum(a.unit)).localeCompare(String(unitNum(b.unit)),undefined,{numeric:true}));
+  const units=DB.units.filter(u=>u.building===bid).slice().sort(byUnitId);
   const cell=(r,k)=>{ const d=r.readings&&r.readings[k]; if(!d) return '<span class="t-sub">—</span>';
     if(k==='heating'){ return `${fmt(+d.area||0)} м² · <b>${money(+r.heating||0)}</b>`; }
     const prev=+d.prev||0, cur=+d.current||0, coef=+d.coef||1; const cons=Math.max(0,(cur-prev)*coef);
@@ -1665,17 +1666,18 @@ function readingsJournalModal(bid){ const b=buildingOf(bid); if(!b) return;
   const totE=recs.reduce((s,r)=>s+(+r.electricity||0),0), totW=recs.reduce((s,r)=>s+(+r.water||0),0), totH=recs.reduce((s,r)=>s+(+r.heating||0),0);
   openM(`<div class="modal-h"><h3>📖 Журнал показаний — ${esc(b.name)}</h3><span class="x" onclick="closeM()">×</span></div>
   <div class="modal-b">
-    <div class="row2" style="margin-bottom:10px"><div class="field"><label>Объект</label><select id="rj-building" onchange="readingsJournalModal(this.value)">${buildingsList().map(x=>`<option value="${x.id}"${x.id===bid?' selected':''}>${esc(x.name)}</option>`).join('')}</select></div></div>
+    <div class="row2" style="margin-bottom:10px"><div class="field"><label>Объект</label><select id="rj-building" onchange="readingsJournalModal(this.value)">${buildingsList().map(x=>`<option value="${x.id}"${x.id===bid?' selected':''}>${esc(x.name)}</option>`).join('')}</select></div>
+      <div class="field"><label>Помещение</label><select id="rj-unit" onchange="readingsJournalModal('${bid}',this.value)"><option value="">Все помещения</option>${units.map(u=>`<option value="${esc(u.id)}"${u.id===unitFilter?' selected':''}>${esc(u.num||u.id)}${u.name?' · '+esc(u.name):''}</option>`).join('')}</select></div></div>
     <div class="t-sub" style="margin-bottom:8px">История показаний по всем помещениям и периодам. В ячейке: предыдущее→текущее · расход · сумма к начислению.</div>
     <div style="overflow-x:auto"><table><thead><tr><th>Период</th><th>Помещение</th><th>Электро (кВт·ч)</th><th>Вода (м³)</th><th>Отопление (м²)</th><th>Итого ₽</th></tr></thead><tbody>
     ${rows||'<tr><td colspan="6" class="empty">Показаний пока нет</td></tr>'}
     ${recs.length?`<tr style="border-top:2px solid var(--line2)"><td class="t-strong" colspan="2">Итого</td><td class="t-strong">${money(totE)}</td><td class="t-strong">${money(totW)}</td><td class="t-strong">${money(totH)}</td><td class="t-strong">${money(totE+totW+totH)}</td></tr>`:''}
     </tbody></table></div>
   </div>
-  <div class="modal-f"><div class="spacer"></div><button class="btn ghost" onclick="exportReadingsJournal('${bid}')">⤓ Экспорт CSV</button><button class="btn" onclick="closeM()">Закрыть</button></div>`);
+  <div class="modal-f"><div class="spacer"></div><button class="btn ghost" onclick="exportReadingsJournal('${bid}','${unitFilter}')">⤓ Экспорт CSV</button><button class="btn" onclick="closeM()">Закрыть</button></div>`);
 }
-function exportReadingsJournal(bid){ const b=buildingOf(bid); if(!b) return;
-  const recs=(DB.utilities||[]).filter(u=>unitOf(u.unit)?.building===bid && u.readings)
+function exportReadingsJournal(bid,unitFilter){ const b=buildingOf(bid); if(!b) return; unitFilter=unitFilter||'';
+  const recs=(DB.utilities||[]).filter(u=>unitOf(u.unit)?.building===bid && u.readings && (!unitFilter || u.unit===unitFilter))
     .sort((a,b)=>String(b.period).localeCompare(String(a.period)) || String(unitNum(a.unit)).localeCompare(String(unitNum(b.unit)),undefined,{numeric:true}));
   const out=[['Период','Помещение','Ресурс','Предыдущее','Текущее','Коэффициент','Расход','Сумма ₽']];
   recs.forEach(r=>{ [['electricity','Электро'],['water','Вода'],['heating','Отопление']].forEach(([k,l])=>{ const d=r.readings&&r.readings[k]; if(!d)return;
@@ -1953,6 +1955,14 @@ function utilEdit(id){ const u=DB.utilities.find(x=>x.id===id); if(!u||!canEdit(
     <div class="row2"><div class="field"><label>Отопление, ₽</label><input id="ue-ht" type="number" value="${u.heating||0}"></div>
       <div class="field"><label>Статус</label><select id="ue-status">${EX_STATUS.map(([k,l])=>`<option value="${k}"${u.status===k?' selected':''}>${l}</option>`).join('')}</select></div></div>
     <div class="field"><label>Дата оплаты <span class="t-sub">(если оплачено)</span></label><input id="ue-date" type="date" value="${u.paidDate||''}"></div>
+    ${(()=>{ const rd=u.readings; if(!rd) return '<div class="t-sub" style="margin-top:4px">Показания счётчиков по этому начислению не вносились.</div>';
+      const line=(k,ic,unit)=>{ const d=rd[k]; if(!d) return '';
+        if(k==='heating') return `<tr><td>${ic} Отопление</td><td colspan="2" class="t-sub">площадь</td><td class="t-strong">${fmt(+d.area||0)} м²</td></tr>`;
+        const prev=+d.prev||0,cur=+d.current||0,coef=+d.coef||1,cons=Math.max(0,(cur-prev)*coef);
+        return `<tr><td>${ic} ${k==='electricity'?'Электро':'Вода'}</td><td>${fmt(prev)} → <b>${fmt(cur)}</b></td><td class="t-sub">${coef!==1?'×'+fmt(coef)+' · ':''}расход ${fmt(cons)}</td><td class="t-strong">${money(+u[k]||0)}</td></tr>`; };
+      const rows=[line('electricity','⚡','кВт·ч'),line('water','💧','м³'),line('heating','🔥','м²')].join('');
+      return `<div class="sec-h">Показания за период (предыдущее → текущее)</div><div style="overflow-x:auto"><table><thead><tr><th>Ресурс</th><th>Пред. → Тек.</th><th>Расход</th><th>Сумма</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+    })()}
   </div>
   <div class="modal-f"><button class="btn ghost sm" onclick="delUtil('${id}')">🗑 Удалить</button><div class="spacer"></div><button class="btn ghost" onclick="closeM()">Отмена</button><button class="btn" onclick="saveUtilEdit('${id}')">Сохранить</button></div>`);
 }
